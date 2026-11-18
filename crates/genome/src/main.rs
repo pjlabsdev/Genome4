@@ -116,6 +116,11 @@ enum IndexCommand {
         /// Namen der Reads, bei denen kein Seed genau am wahren Ort liegt, in diese Datei schreiben
         #[arg(long)]
         fehlende: Option<PathBuf>,
+        /// Je Read den primären Bereich als Tabelle schreiben: Name, Contig, Position (1-basiert,
+        /// linkes Ende auf dem Vorwärtsstrang), Strang, MAPQ, Score, gemeldeter Score,
+        /// Read-Anfang, Read-Ende, sub, sub_n, Anteil in sehr häufigen Seeds
+        #[arg(long)]
+        tabelle: Option<PathBuf>,
     },
 }
 
@@ -126,8 +131,18 @@ fn index_ketten(
     truth_in_name: bool,
     max_occ: u64,
     missing_path: Option<&std::path::Path>,
+    table_path: Option<&std::path::Path>,
 ) -> Result<serde_json::Value> {
     use std::io::Write;
+    let mut table = match table_path {
+        Some(p) => Some(std::io::BufWriter::new(
+            std::fs::File::create(p)
+                .with_context(|| format!("{} nicht schreibbar", p.display()))?,
+        )),
+        None => None,
+    };
+    let final_opt = gc_align::FinalizeOptions::default();
+    let mut mapq_hist = [0u64; 61];
     let mut missing = match missing_path {
         Some(p) => Some(std::io::BufWriter::new(
             std::fs::File::create(p)
@@ -156,7 +171,9 @@ fn index_ketten(
     let (mut region_wrong, mut region_missed) = (0u64, 0u64);
     while reader.read_record(&mut record)? {
         let read = encode_read(&record.seq);
-        let seeds = gc_align::collect_seeds(fm, &read, &seed_opt);
+        let intervals = gc_align::collect_intervals(fm, &read, &seed_opt);
+        let frac_rep = gc_align::repeat_fraction(&intervals, seed_opt.max_occ, read.len());
+        let seeds = gc_align::locate_seeds(fm, &intervals, &seed_opt);
         let chains = gc_align::chain_seeds(&seeds, l, &chain_opt);
         let filtered = gc_align::filter_chains(chains.clone(), &filter_opt);
         regions.clear();
@@ -164,6 +181,40 @@ fn index_ketten(
             gc_align::chain_to_regions(fm, &read, c, &region_opt, &mut regions);
         }
         regions_total += regions.len() as u64;
+        // Bereinigen, primär bestimmen, MAPQ. Die Zählungen weiter unten sehen die bereinigte Liste.
+        gc_align::sort_dedup(&mut regions, &final_opt);
+        gc_align::mark_primary(&mut regions, reads, &region_opt.scoring, &final_opt);
+        if let Some(r) = regions.first() {
+            let q = gc_align::mapq(r, frac_rep, &region_opt.scoring, &final_opt);
+            mapq_hist[q as usize] += 1;
+            if let Some(out) = table.as_mut() {
+                let cg = &fm.reference().contigs[r.contig as usize];
+                let (strand, left) = if r.rb >= l {
+                    ('-', 2 * l - r.re)
+                } else {
+                    ('+', r.rb)
+                };
+                writeln!(
+                    out,
+                    "{}\t{}\t{}\t{strand}\t{q}\t{}\t{}\t{}\t{}\t{}\t{}\t{frac_rep:.4}",
+                    String::from_utf8_lossy(&record.name),
+                    cg.name,
+                    left - cg.offset + 1,
+                    r.score,
+                    r.truesc,
+                    r.qb,
+                    r.qe,
+                    r.sub,
+                    r.sub_n
+                )?;
+            }
+        } else if let Some(out) = table.as_mut() {
+            writeln!(
+                out,
+                "{}\t*\t0\t*\t0\t0\t0\t0\t0",
+                String::from_utf8_lossy(&record.name)
+            )?;
+        }
         chains_filtered += filtered.len() as u64;
         reads += 1;
         seeds_total += seeds.len() as u64;
@@ -266,6 +317,9 @@ fn index_ketten(
     if let Some(mut out) = missing {
         out.flush()?;
     }
+    if let Some(mut out) = table {
+        out.flush()?;
+    }
     let seconds = started.elapsed().as_secs_f64();
     let mut result = json!({
         "reads": reads,
@@ -278,6 +332,10 @@ fn index_ketten(
         "reads_je_sekunde": if seconds > 0.0 { reads as f64 / seconds } else { 0.0 },
         "kerne": 1,
         "max_orte": max_occ,
+        "mapq_0": mapq_hist[0],
+        "mapq_1_bis_29": mapq_hist[1..30].iter().sum::<u64>(),
+        "mapq_30_bis_59": mapq_hist[30..60].iter().sum::<u64>(),
+        "mapq_60": mapq_hist[60],
     });
     if truth_in_name {
         result["wahrheit"] = json!({
@@ -716,6 +774,7 @@ fn main() -> Result<()> {
                 wahrheit_im_namen,
                 max_orte,
                 fehlende,
+                tabelle,
             } => {
                 let fm = load_index(&index)?;
                 let result = index_ketten(
@@ -724,6 +783,7 @@ fn main() -> Result<()> {
                     wahrheit_im_namen,
                     max_orte,
                     fehlende.as_deref(),
+                    tabelle.as_deref(),
                 )?;
                 println!(
                     "{}",

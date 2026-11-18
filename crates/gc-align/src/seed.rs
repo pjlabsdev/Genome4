@@ -77,12 +77,31 @@ pub fn collect_intervals(index: &FmIndex, read: &[u8], opt: &SeedOptions) -> Vec
     all
 }
 
-/// Sammelt die Seeds eines Reads (Codes 0..3, sonst N) und ortet sie. Die Reihenfolge ist die
-/// der Treffer (Anfang, Ende im Read), darin nach Zeile im Index. Fundstellen, die über eine
-/// Contig- oder Stranggrenze reichen oder eine N-Strecke berühren, fallen weg.
-pub fn collect_seeds(index: &FmIndex, read: &[u8], opt: &SeedOptions) -> Vec<Seed> {
+/// Anteil des Reads, der von Treffern mit mehr als `max_occ` Fundstellen überdeckt ist
+/// (bwa: `frac_rep`). Die Treffer müssen nach Anfang geordnet sein.
+pub fn repeat_fraction(intervals: &[Smem], max_occ: u64, read_len: usize) -> f32 {
+    let (mut b, mut e, mut l_rep) = (0u32, 0u32, 0u32);
+    for m in intervals.iter().filter(|m| m.interval.size > max_occ) {
+        if m.start > e {
+            l_rep += e - b;
+            b = m.start;
+            e = m.end;
+        } else {
+            e = e.max(m.end);
+        }
+    }
+    l_rep += e - b;
+    if read_len == 0 {
+        0.0
+    } else {
+        l_rep as f32 / read_len as f32
+    }
+}
+
+/// Ortet die Fundstellen der Treffer, siehe [`collect_seeds`].
+pub fn locate_seeds(index: &FmIndex, intervals: &[Smem], opt: &SeedOptions) -> Vec<Seed> {
     let mut seeds = Vec::new();
-    for m in collect_intervals(index, read, opt) {
+    for m in intervals {
         let iv = m.interval;
         let step = if iv.size > opt.max_occ {
             iv.size / opt.max_occ
@@ -107,6 +126,13 @@ pub fn collect_seeds(index: &FmIndex, read: &[u8], opt: &SeedOptions) -> Vec<See
         }
     }
     seeds
+}
+
+/// Sammelt die Seeds eines Reads (Codes 0..3, sonst N) und ortet sie. Die Reihenfolge ist die
+/// der Treffer (Anfang, Ende im Read), darin nach Zeile im Index. Fundstellen, die über eine
+/// Contig- oder Stranggrenze reichen oder eine N-Strecke berühren, fallen weg.
+pub fn collect_seeds(index: &FmIndex, read: &[u8], opt: &SeedOptions) -> Vec<Seed> {
+    locate_seeds(index, &collect_intervals(index, read, opt), opt)
 }
 
 #[cfg(test)]

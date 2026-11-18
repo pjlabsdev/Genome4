@@ -14,7 +14,7 @@ genome index build <referenz.fa[.gz]> <index.gcfm> [Optionen]
 genome index locate <index.gcfm> <SEQUENZ> [--limit N]
 genome index count <index.gcfm> <sequenzen.txt>
 genome index smem <index.gcfm> --sequenz <SEQUENZ> | --fastq <reads.fq[.gz]> [Optionen]
-genome index ketten <index.gcfm> --fastq <reads.fq[.gz]> [--wahrheit-im-namen] [--max-orte N] [--fehlende DATEI]
+genome index ketten <index.gcfm> --fastq <reads.fq[.gz]> [--wahrheit-im-namen] [--max-orte N] [--fehlende DATEI] [--tabelle DATEI]
 ```
 
 Optionen von `build`:
@@ -59,6 +59,8 @@ FASTA, unkomprimiert oder gzip. Groß- und Kleinbuchstaben gelten gleich. Alles 
 - `ketten`: JSON, Schema `genome.index-ketten.v1`, Zusammenfassung über alle Reads: `reads`,
   `seeds`, `ketten`, `ketten_nach_filter`, `bereiche`, `reads_ohne_kette`, `sekunden`, `reads_je_sekunde`, `max_orte`; mit
   `--wahrheit-im-namen` zusätzlich `wahrheit` (siehe [Seeds und Ketten](../verfahren/seeds-und-ketten.md)).
+  `--tabelle` schreibt je Read den primären Bereich: Name, Contig, Position, Strang, MAPQ, Score,
+  gemeldeter Score, Read-Anfang, Read-Ende, `sub`, `sub_n`, Anteil in sehr häufigen Seeds.
   Ein Prüfbefehl für die Entwicklung; er entfällt, wenn `fq2bam` steht.
 - `count`: je Zeile `Sequenz<TAB>rohe Trefferzahl` (beide Stränge).
 

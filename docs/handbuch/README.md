@@ -45,6 +45,7 @@ Auf keiner Seite steht eine Genauigkeits- oder Tempoaussage ohne Messung.
 - [Seeds sammeln, orten und zu Ketten verbinden](verfahren/seeds-und-ketten.md)
 - [Seed verlängern: Smith-Waterman mit Band](verfahren/seed-verlaengern.md)
 - [Ketten filtern und zu Alignment-Bereichen verlängern](verfahren/ketten-zu-bereichen.md)
+- [Bereiche bereinigen, primär bestimmen, MAPQ](verfahren/bereiche-bewerten.md)
 
 ### Formate
 - [Ergebnis-Hülle `genome.<werkzeug>.vN`](formate/ergebnis-huelle.md)

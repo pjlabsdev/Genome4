@@ -1,0 +1,34 @@
+{
+  "schema": "genome.index-ketten.v1",
+  "tool": "genome",
+  "version": "0.1.0",
+  "result": {
+    "bereiche": 2212596,
+    "kerne": 1,
+    "ketten": 4848788,
+    "ketten_nach_filter": 2206967,
+    "mapq_0": 8033,
+    "mapq_1_bis_29": 2550,
+    "mapq_30_bis_59": 3027,
+    "mapq_60": 186390,
+    "max_orte": 500,
+    "reads": 200000,
+    "reads_je_sekunde": 2706.95478387523,
+    "reads_ohne_kette": 0,
+    "seeds": 7844037,
+    "sekunden": 73.883760893,
+    "wahrheit": {
+      "bester_bereich_am_wahren_ort_eindeutig": 192470,
+      "bester_bereich_am_wahren_ort_gleichstand": 6864,
+      "bester_bereich_eindeutig_und_genau_am_wahren_ort": 192464,
+      "bester_bereich_woanders": 666,
+      "davon_score_unter_dem_des_wahren_orts": 32,
+      "irgendein_seed_genau_am_wahren_ort": 199926,
+      "irgendeine_kette_am_wahren_ort": 199909,
+      "reads": 200000,
+      "schwerste_kette_am_wahren_ort_eindeutig": 192211,
+      "schwerste_kette_am_wahren_ort_gleichstand": 6442,
+      "toleranz_basen": 100
+    }
+  }
+}
