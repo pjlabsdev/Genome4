@@ -140,6 +140,11 @@ fn index_ketten(
         ..gc_align::SeedOptions::default()
     };
     let chain_opt = gc_align::ChainOptions::default();
+    let filter_opt = gc_align::FilterOptions::default();
+    let region_opt = gc_align::RegionOptions::default();
+    let (mut regions_total, mut region_right, mut region_tied, mut region_exact) =
+        (0u64, 0u64, 0u64, 0u64);
+    let mut regions = Vec::new();
     let l = fm.reference().len();
     let mut reader = fastq::open(path)?;
     let mut record = Record::default();
@@ -147,10 +152,19 @@ fn index_ketten(
     let (mut reads, mut seeds_total, mut chains_total, mut without) = (0u64, 0u64, 0u64, 0u64);
     let (mut best_right, mut best_tied, mut any_right, mut with_truth) = (0u64, 0u64, 0u64, 0u64);
     let mut seed_right = 0u64;
+    let mut chains_filtered = 0u64;
+    let (mut region_wrong, mut region_missed) = (0u64, 0u64);
     while reader.read_record(&mut record)? {
         let read = encode_read(&record.seq);
         let seeds = gc_align::collect_seeds(fm, &read, &seed_opt);
         let chains = gc_align::chain_seeds(&seeds, l, &chain_opt);
+        let filtered = gc_align::filter_chains(chains.clone(), &filter_opt);
+        regions.clear();
+        for c in &filtered {
+            gc_align::chain_to_regions(fm, &read, c, &region_opt, &mut regions);
+        }
+        regions_total += regions.len() as u64;
+        chains_filtered += filtered.len() as u64;
         reads += 1;
         seeds_total += seeds.len() as u64;
         chains_total += chains.len() as u64;
@@ -193,6 +207,40 @@ fn index_ketten(
         best_right += u64::from(right_on_top && top_chains.len() == 1);
         best_tied += u64::from(right_on_top && top_chains.len() > 1);
         any_right += u64::from(chains.iter().any(at_truth));
+        // Bereiche: liegt der mit dem höchsten Score am wahren Ort?
+        let region_start = |r: &gc_align::Region| -> (bool, i64) {
+            let start_text = r.rb as i64 - i64::from(r.qb);
+            if r.rb >= l {
+                (true, 2 * l as i64 - start_text - read.len() as i64)
+            } else {
+                (false, start_text)
+            }
+        };
+        let region_off = |r: &gc_align::Region| -> Option<i64> {
+            let cg = &fm.reference().contigs[r.contig as usize];
+            let (rev, start) = region_start(r);
+            (cg.name == contig && rev == reverse).then(|| start - (cg.offset + pos - 1) as i64)
+        };
+        let top_score = regions.iter().map(|r| r.score).max().unwrap_or(-1);
+        let top_regions: Vec<_> = regions.iter().filter(|r| r.score == top_score).collect();
+        let hit = top_regions
+            .iter()
+            .any(|r| region_off(r).is_some_and(|d| d.abs() <= chain_opt.band_width));
+        // Gleichstand zählt nur, wenn die gleich guten Bereiche an verschiedenen Orten liegen.
+        let places: std::collections::BTreeSet<(u32, u64)> =
+            top_regions.iter().map(|r| (r.contig, r.rb)).collect();
+        if !hit {
+            region_wrong += 1;
+            // Untere Schranke für den Score am wahren Ort: der ganze Read ohne Lücken.
+            let errors: i32 = parts.next().and_then(|e| e.parse().ok()).unwrap_or(0);
+            let sc = &region_opt.scoring;
+            let truth_score = (read.len() as i32 - errors) * sc.matching - errors * sc.mismatch;
+            region_missed += u64::from(top_score < truth_score);
+        }
+        region_right += u64::from(hit && places.len() == 1);
+        region_tied += u64::from(hit && places.len() > 1);
+        region_exact +=
+            u64::from(places.len() == 1 && top_regions.iter().any(|r| region_off(r) == Some(0)));
         // Unabhängig vom Verketten: liegt wenigstens ein Seed genau auf der wahren Diagonale?
         let seed_at_truth = seeds.iter().any(|s| {
             let one = gc_align::Chain {
@@ -223,6 +271,8 @@ fn index_ketten(
         "reads": reads,
         "seeds": seeds_total,
         "ketten": chains_total,
+        "ketten_nach_filter": chains_filtered,
+        "bereiche": regions_total,
         "reads_ohne_kette": without,
         "sekunden": seconds,
         "reads_je_sekunde": if seconds > 0.0 { reads as f64 / seconds } else { 0.0 },
@@ -235,6 +285,11 @@ fn index_ketten(
             "schwerste_kette_am_wahren_ort_eindeutig": best_right,
             "schwerste_kette_am_wahren_ort_gleichstand": best_tied,
             "irgendeine_kette_am_wahren_ort": any_right,
+            "bester_bereich_am_wahren_ort_eindeutig": region_right,
+            "bester_bereich_am_wahren_ort_gleichstand": region_tied,
+            "bester_bereich_eindeutig_und_genau_am_wahren_ort": region_exact,
+            "bester_bereich_woanders": region_wrong,
+            "davon_score_unter_dem_des_wahren_orts": region_missed,
             "irgendein_seed_genau_am_wahren_ort": seed_right,
             "toleranz_basen": chain_opt.band_width,
         });

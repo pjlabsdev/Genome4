@@ -125,6 +125,102 @@ pub fn chain_seeds(seeds: &[Seed], l: u64, opt: &ChainOptions) -> Vec<Chain> {
     tree.into_values().collect()
 }
 
+/// Einstellungen des Kettenfilters. Die Vorgaben sind die von BWA-MEM.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterOptions {
+    /// Ketten unter diesem Gewicht entfallen (`-W`).
+    pub min_chain_weight: u32,
+    /// Zwei Ketten überlappen stark, wenn sie diesen Anteil der kürzeren im Read teilen.
+    pub mask_level: f32,
+    /// Eine stark überlappende Kette entfällt, wenn ihr Gewicht unter diesem Anteil der
+    /// schwereren liegt (`-D`) ...
+    pub drop_ratio: f32,
+    /// ... und der Abstand der Gewichte mindestens das Doppelte hiervon beträgt (`-k`).
+    pub min_seed_len: u32,
+    pub max_chain_gap: i64,
+}
+
+impl Default for FilterOptions {
+    fn default() -> Self {
+        Self {
+            min_chain_weight: 0,
+            mask_level: 0.5,
+            drop_ratio: 0.5,
+            min_seed_len: 19,
+            max_chain_gap: 10_000,
+        }
+    }
+}
+
+/// Filtert Ketten (BWA-MEM: `mem_chain_flt`). Ergebnis nach fallendem Gewicht geordnet.
+/// Eine Kette entfällt, wenn sie im Read stark mit einer schwereren überlappt und deutlich
+/// leichter ist. Von den Ketten, die eine behaltene stark überlappen, bleibt je behaltener Kette
+/// die erste trotzdem erhalten: Sie wird gebraucht, um später die Eindeutigkeit zu beurteilen.
+pub fn filter_chains(chains: Vec<Chain>, opt: &FilterOptions) -> Vec<Chain> {
+    let mut a: Vec<(u32, Chain)> = chains
+        .into_iter()
+        .map(|c| (c.weight(), c))
+        .filter(|(w, _)| *w >= opt.min_chain_weight)
+        .collect();
+    if a.is_empty() {
+        return Vec::new();
+    }
+    a.sort_by_key(|x| std::cmp::Reverse(x.0));
+    let beg = |c: &Chain| i64::from(c.seeds[0].qbeg);
+    let end = |c: &Chain| {
+        let s = c.seeds[c.seeds.len() - 1];
+        i64::from(s.qbeg + s.len)
+    };
+    // 0 = entfällt, 1 = nur als erster Überlapper behalten, 2 = behalten mit Überlappung, 3 = frei
+    let mut kept = vec![0u8; a.len()];
+    let mut first: Vec<Option<usize>> = vec![None; a.len()];
+    let mut chosen = vec![0usize];
+    kept[0] = 3;
+    for i in 1..a.len() {
+        let mut large_overlap = false;
+        let mut dropped = false;
+        for &j in &chosen {
+            let b_max = beg(&a[j].1).max(beg(&a[i].1));
+            let e_min = end(&a[j].1).min(end(&a[i].1));
+            if e_min > b_max {
+                let li = end(&a[i].1) - beg(&a[i].1);
+                let lj = end(&a[j].1) - beg(&a[j].1);
+                let min_l = li.min(lj);
+                if (e_min - b_max) as f32 >= min_l as f32 * opt.mask_level
+                    && min_l < opt.max_chain_gap
+                {
+                    large_overlap = true;
+                    if first[j].is_none() {
+                        first[j] = Some(i);
+                    }
+                    if (a[i].0 as f32) < a[j].0 as f32 * opt.drop_ratio
+                        && a[j].0 - a[i].0 >= opt.min_seed_len << 1
+                    {
+                        dropped = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if !dropped {
+            chosen.push(i);
+            kept[i] = if large_overlap { 2 } else { 3 };
+        }
+    }
+    for &j in &chosen {
+        if let Some(i) = first[j]
+            && kept[i] == 0
+        {
+            kept[i] = 1;
+        }
+    }
+    a.into_iter()
+        .zip(kept)
+        .filter(|(_, k)| *k != 0)
+        .map(|((_, c), _)| c)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +243,35 @@ mod tests {
         assert_eq!(chains[0].seeds.len(), 3);
         // Read: 0..30, 31..71, 78..103 = 95; Referenz: 1000..1030, 1031..1071, 1080..1105 = 95
         assert_eq!(chains[0].weight(), 95);
+    }
+
+    #[test]
+    fn filter_drops_light_overlapping_chains_but_keeps_the_first() {
+        let chain = |rbeg: u64, qbeg: u32, len: u32| Chain {
+            contig: 0,
+            seeds: vec![seed(rbeg, qbeg, len)],
+        };
+        let chains = vec![
+            chain(5000, 10, 20), // leicht, überlappt die schwere ganz: erster Überlapper, bleibt
+            chain(1000, 0, 100), // schwer
+            chain(7000, 20, 25), // leicht, überlappt: entfällt
+            chain(9000, 120, 22), // leicht, daneben: bleibt
+            chain(3000, 0, 80),  // fast so schwer, überlappt: bleibt
+        ];
+        let kept = filter_chains(chains, &FilterOptions::default());
+        let pos: Vec<u64> = kept.iter().map(Chain::pos).collect();
+        assert_eq!(pos, vec![1000, 3000, 9000]);
+        // Ohne die fast so schwere Kette: Die Kette mit Gewicht 25 ist der erste Überlapper der
+        // schweren und bleibt deshalb, obwohl sie deutlich leichter ist; die mit 20 entfällt.
+        let chains = vec![
+            chain(5000, 10, 20),
+            chain(1000, 0, 100),
+            chain(7000, 20, 25),
+        ];
+        let kept = filter_chains(chains, &FilterOptions::default());
+        let pos: Vec<u64> = kept.iter().map(Chain::pos).collect();
+        assert_eq!(pos, vec![1000, 7000]);
+        assert!(filter_chains(Vec::new(), &FilterOptions::default()).is_empty());
     }
 
     #[test]

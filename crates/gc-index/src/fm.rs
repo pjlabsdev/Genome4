@@ -494,7 +494,7 @@ impl FmIndex {
 
     /// Base an Textposition `p` (Vorwärtsstrang, dann reverses Komplement), aus der Referenz gelesen.
     #[inline]
-    fn text_base(&self, p: u64) -> u8 {
+    pub fn text_base(&self, p: u64) -> u8 {
         let l = self.reference.len();
         if p < l {
             self.reference.forward.get(p)
@@ -593,6 +593,28 @@ impl FmIndex {
             }
         }
         Ok(report)
+    }
+
+    /// Bereich des Contigs im Indextext auf dem Strang, in dem `text_pos` liegt: `[von, bis)`.
+    /// `None`, wenn die Position hinter dem Text liegt.
+    pub fn contig_text_range(&self, text_pos: u64) -> Option<(u32, u64, u64)> {
+        let l = self.reference.len();
+        if text_pos >= 2 * l {
+            return None;
+        }
+        let forward = if text_pos < l {
+            text_pos
+        } else {
+            2 * l - 1 - text_pos
+        };
+        let contig = self.reference.contig_at(forward)?;
+        let c = &self.reference.contigs[contig];
+        let (beg, end) = if text_pos < l {
+            (c.offset, c.offset + c.len)
+        } else {
+            (2 * l - c.offset - c.len, 2 * l - c.offset)
+        };
+        Some((contig as u32, beg, end))
     }
 
     /// Wandelt eine Textposition in einen Treffer im Genom um. `None`, wenn die Fundstelle über

@@ -57,7 +57,7 @@ FASTA, unkomprimiert oder gzip. Groß- und Kleinbuchstaben gelten gleich. Alles 
   `seeds`, `seed_basen`, `fundstellen_roh`, `reads_ohne_seed`, `sekunden`, `reads_je_sekunde`,
   `kerne`, `nachgeprueft`, `abweichungen`.
 - `ketten`: JSON, Schema `genome.index-ketten.v1`, Zusammenfassung über alle Reads: `reads`,
-  `seeds`, `ketten`, `reads_ohne_kette`, `sekunden`, `reads_je_sekunde`, `max_orte`; mit
+  `seeds`, `ketten`, `ketten_nach_filter`, `bereiche`, `reads_ohne_kette`, `sekunden`, `reads_je_sekunde`, `max_orte`; mit
   `--wahrheit-im-namen` zusätzlich `wahrheit` (siehe [Seeds und Ketten](../verfahren/seeds-und-ketten.md)).
   Ein Prüfbefehl für die Entwicklung; er entfällt, wenn `fq2bam` steht.
 - `count`: je Zeile `Sequenz<TAB>rohe Trefferzahl` (beide Stränge).
