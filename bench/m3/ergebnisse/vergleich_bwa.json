@@ -1,0 +1,205 @@
+{
+ "ergebnis": {
+  "reads": 200000,
+  "gleich_ort_strang": 199993,
+  "gleich_auch_mapq": 199990,
+  "gleich_auch_score": 199993,
+  "anderer_ort_beide_mapq0": 7,
+  "anderer_ort_sonst": 0,
+  "nur_wir_ohne": 0,
+  "nur_bwa_ohne": 0,
+  "mapq_abweichung_bei_gleichem_ort": 3,
+  "score_abweichung_bei_gleichem_ort": 0,
+  "gleich_auch_cigar": 199993,
+  "gleich_auch_nm": 199993,
+  "gleich_auch_md": 199993,
+  "reads_mit_luecke_bei_bwa": 26,
+  "davon_cigar_gleich": 26,
+  "bwa_sekunden": 65.2,
+  "mapq_differenzen_wir_minus_bwa": {
+   "-2": 1,
+   "1": 1,
+   "7": 1
+  }
+ },
+ "beispiele": [
+  {
+   "read": "chr20:26605185:+:4",
+   "art": "mapq",
+   "bwa": 0,
+   "wir": 1,
+   "bwa_as": 132,
+   "bwa_xs": 128
+  },
+  {
+   "read": "chr20:26985818:-:2",
+   "art": "ort_mapq0",
+   "bwa": [
+    "chr20",
+    28425742,
+    "-",
+    0,
+    140,
+    "150M"
+   ],
+   "wir": [
+    "chr20",
+    28423191,
+    "-",
+    0,
+    140,
+    140,
+    0,
+    150
+   ]
+  },
+  {
+   "read": "chr20:28440707:-:2",
+   "art": "ort_mapq0",
+   "bwa": [
+    "chr20",
+    27135424,
+    "-",
+    0,
+    140,
+    "150M"
+   ],
+   "wir": [
+    "chr20",
+    27133047,
+    "-",
+    0,
+    140,
+    140,
+    0,
+    150
+   ]
+  },
+  {
+   "read": "chr20:28319284:-:4",
+   "art": "ort_mapq0",
+   "bwa": [
+    "chr20",
+    27302877,
+    "-",
+    0,
+    130,
+    "150M"
+   ],
+   "wir": [
+    "chr20",
+    27300157,
+    "-",
+    0,
+    130,
+    130,
+    0,
+    150
+   ]
+  },
+  {
+   "read": "chr20:28129187:-:2",
+   "art": "mapq",
+   "bwa": 41,
+   "wir": 48,
+   "bwa_as": 140,
+   "bwa_xs": 115
+  },
+  {
+   "read": "chr20:26904862:-:2",
+   "art": "ort_mapq0",
+   "bwa": [
+    "chr20",
+    27016201,
+    "-",
+    0,
+    140,
+    "150M"
+   ],
+   "wir": [
+    "chr20",
+    26804237,
+    "-",
+    0,
+    140,
+    140,
+    0,
+    150
+   ]
+  },
+  {
+   "read": "chr20:28392091:+:0",
+   "art": "ort_mapq0",
+   "bwa": [
+    "chr20",
+    28382240,
+    "+",
+    0,
+    150,
+    "150M"
+   ],
+   "wir": [
+    "chr20",
+    28384788,
+    "+",
+    0,
+    150,
+    150,
+    0,
+    150
+   ]
+  },
+  {
+   "read": "chr20:28534118:-:2",
+   "art": "ort_mapq0",
+   "bwa": [
+    "chr20",
+    28556805,
+    "-",
+    0,
+    143,
+    "150M"
+   ],
+   "wir": [
+    "chr20",
+    28554928,
+    "-",
+    0,
+    143,
+    140,
+    0,
+    150
+   ]
+  },
+  {
+   "read": "chr20:27697676:+:2",
+   "art": "ort_mapq0",
+   "bwa": [
+    "chr20",
+    27783500,
+    "+",
+    0,
+    140,
+    "150M"
+   ],
+   "wir": [
+    "chr20",
+    27739825,
+    "+",
+    0,
+    140,
+    140,
+    0,
+    150
+   ]
+  },
+  {
+   "read": "chr20:26596727:-:1",
+   "art": "mapq",
+   "bwa": 23,
+   "wir": 21,
+   "bwa_as": 145,
+   "bwa_xs": 134
+  }
+ ]
+}

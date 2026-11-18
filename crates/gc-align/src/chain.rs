@@ -4,8 +4,8 @@
 //! Reihenfolge und ungefähr auf derselben Diagonale liegen. Sie beschreibt einen Kandidaten für
 //! den Ort des Reads; das Alignment füllt später die Lücken zwischen den Seeds.
 
+use crate::kbtree::KbTree;
 use crate::seed::Seed;
-use std::collections::BTreeMap;
 
 /// Einstellungen des Verkettens. Die Vorgaben sind die von BWA-MEM.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,16 +105,16 @@ impl Chain {
 /// der Kette verglichen, deren Anfang in der Referenz am nächsten vor ihm liegt; passt er nicht,
 /// beginnt er eine neue Kette. Ergebnis nach Position im Indextext geordnet.
 pub fn chain_seeds(seeds: &[Seed], l: u64, opt: &ChainOptions) -> Vec<Chain> {
-    // Schlüssel: Position des ersten Seeds, dazu eine laufende Nummer für gleiche Positionen.
-    let mut tree: BTreeMap<(u64, u32), Chain> = BTreeMap::new();
-    for (n, p) in seeds.iter().enumerate() {
+    // Schlüssel: Position des ersten Seeds. Gleiche Schlüssel sind häufig; der Baum verhält
+    // sich dabei wie der von bwa (siehe `kbtree`).
+    let mut tree: KbTree<Chain> = KbTree::new();
+    for p in seeds {
         let merged = tree
-            .range_mut(..=(p.rbeg, u32::MAX))
-            .next_back()
-            .is_some_and(|(_, c)| c.test_and_merge(p, l, opt));
+            .lower_mut(p.rbeg)
+            .is_some_and(|c| c.test_and_merge(p, l, opt));
         if !merged {
             tree.insert(
-                (p.rbeg, n as u32),
+                p.rbeg,
                 Chain {
                     contig: p.contig,
                     seeds: vec![*p],
@@ -122,7 +122,7 @@ pub fn chain_seeds(seeds: &[Seed], l: u64, opt: &ChainOptions) -> Vec<Chain> {
             );
         }
     }
-    tree.into_values().collect()
+    tree.into_values()
 }
 
 /// Einstellungen des Kettenfilters. Die Vorgaben sind die von BWA-MEM.
@@ -165,7 +165,8 @@ pub fn filter_chains(chains: Vec<Chain>, opt: &FilterOptions) -> Vec<Chain> {
     if a.is_empty() {
         return Vec::new();
     }
-    a.sort_by_key(|x| std::cmp::Reverse(x.0));
+    // Reihenfolge bei gleichem Gewicht wie in bwa, sonst bleibt eine andere Kette "die erste".
+    crate::ksort::introsort(&mut a, |x, y| x.0 > y.0);
     let beg = |c: &Chain| i64::from(c.seeds[0].qbeg);
     let end = |c: &Chain| {
         let s = c.seeds[c.seeds.len() - 1];

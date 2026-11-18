@@ -1,0 +1,48 @@
+{
+  "schema": "genome.index-ketten.v1",
+  "tool": "genome",
+  "version": "0.1.0",
+  "result": {
+    "bereiche": 2210113,
+    "kerne": 1,
+    "ketten": 4848919,
+    "ketten_nach_filter": 2207040,
+    "mapq_0": 8033,
+    "mapq_1_bis_29": 2547,
+    "mapq_30_bis_59": 3030,
+    "mapq_60": 186390,
+    "max_orte": 500,
+    "reads": 200000,
+    "reads_je_sekunde": 2554.4075976004706,
+    "reads_ohne_kette": 0,
+    "seeds": 7844037,
+    "sekunden": 78.29604022,
+    "wahrheit": {
+      "bester_bereich_am_wahren_ort_eindeutig": 192470,
+      "bester_bereich_am_wahren_ort_gleichstand": 6864,
+      "bester_bereich_eindeutig_und_genau_am_wahren_ort": 192463,
+      "bester_bereich_woanders": 666,
+      "davon_score_gleich_dem_des_wahren_orts": 96,
+      "davon_score_ueber_dem_des_wahren_orts": 538,
+      "davon_score_unter_dem_des_wahren_orts": 32,
+      "irgendein_seed_genau_am_wahren_ort": 199926,
+      "irgendeine_kette_am_wahren_ort": 199911,
+      "reads": 200000,
+      "schwerste_kette_am_wahren_ort_eindeutig": 192207,
+      "schwerste_kette_am_wahren_ort_gleichstand": 6450,
+      "toleranz_basen": 100,
+      "wahrer_ort_verloren_bei_besserem_score": {
+        "bereich_am_wahren_ort_mit_weniger_punkten": 0,
+        "kein_seed_genau_am_wahren_ort": 3,
+        "keine_kette_am_wahren_ort": 0,
+        "kette_am_wahren_ort_gefiltert": 29
+      },
+      "wahrer_ort_verloren_bei_gleichem_score": {
+        "bereich_am_wahren_ort_mit_weniger_punkten": 0,
+        "kein_seed_genau_am_wahren_ort": 27,
+        "keine_kette_am_wahren_ort": 0,
+        "kette_am_wahren_ort_gefiltert": 69
+      }
+    }
+  }
+}

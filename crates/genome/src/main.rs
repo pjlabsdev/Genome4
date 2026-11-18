@@ -116,6 +116,11 @@ enum IndexCommand {
         /// Namen der Reads, bei denen kein Seed genau am wahren Ort liegt, in diese Datei schreiben
         #[arg(long)]
         fehlende: Option<PathBuf>,
+        /// Je Read den primären Bereich als Tabelle schreiben: Name, Contig, Position (1-basiert,
+        /// linkes Ende auf dem Vorwärtsstrang), Strang, MAPQ, Score, gemeldeter Score,
+        /// Read-Anfang, Read-Ende, sub, sub_n, Anteil in sehr häufigen Seeds
+        #[arg(long)]
+        tabelle: Option<PathBuf>,
     },
 }
 
@@ -126,8 +131,18 @@ fn index_ketten(
     truth_in_name: bool,
     max_occ: u64,
     missing_path: Option<&std::path::Path>,
+    table_path: Option<&std::path::Path>,
 ) -> Result<serde_json::Value> {
     use std::io::Write;
+    let mut table = match table_path {
+        Some(p) => Some(std::io::BufWriter::new(
+            std::fs::File::create(p)
+                .with_context(|| format!("{} nicht schreibbar", p.display()))?,
+        )),
+        None => None,
+    };
+    let final_opt = gc_align::FinalizeOptions::default();
+    let mut mapq_hist = [0u64; 61];
     let mut missing = match missing_path {
         Some(p) => Some(std::io::BufWriter::new(
             std::fs::File::create(p)
@@ -154,9 +169,15 @@ fn index_ketten(
     let mut seed_right = 0u64;
     let mut chains_filtered = 0u64;
     let (mut region_wrong, mut region_missed) = (0u64, 0u64);
+    let (mut region_equal, mut region_better) = (0u64, 0u64);
+    // Wo ging der wahre Ort verloren? Zeile 0: gleich gut, Zeile 1: besser gewesen.
+    // Spalten: kein Seed, keine Kette, Kette gefiltert, Bereich mit zu wenig Punkten.
+    let mut lost_at = [[0u64; 4]; 2];
     while reader.read_record(&mut record)? {
         let read = encode_read(&record.seq);
-        let seeds = gc_align::collect_seeds(fm, &read, &seed_opt);
+        let intervals = gc_align::collect_intervals(fm, &read, &seed_opt);
+        let frac_rep = gc_align::repeat_fraction(&intervals, seed_opt.max_occ, read.len());
+        let seeds = gc_align::locate_seeds(fm, &intervals, &seed_opt);
         let chains = gc_align::chain_seeds(&seeds, l, &chain_opt);
         let filtered = gc_align::filter_chains(chains.clone(), &filter_opt);
         regions.clear();
@@ -164,6 +185,42 @@ fn index_ketten(
             gc_align::chain_to_regions(fm, &read, c, &region_opt, &mut regions);
         }
         regions_total += regions.len() as u64;
+        // Bereinigen, primär bestimmen, MAPQ. Die Zählungen weiter unten sehen die bereinigte Liste.
+        gc_align::sort_dedup(&mut regions, fm, &read, &region_opt.scoring, &final_opt);
+        gc_align::mark_primary(&mut regions, reads, &region_opt.scoring, &final_opt);
+        if let Some(r) = regions.first() {
+            let q = gc_align::mapq(r, frac_rep, &region_opt.scoring, &final_opt);
+            mapq_hist[q as usize] += 1;
+            if let Some(out) = table.as_mut() {
+                let cg = &fm.reference().contigs[r.contig as usize];
+                // Ort, CIGAR, NM und MD kommen aus dem fertigen Alignment, der Rest aus dem Bereich.
+                let aln = gc_align::region_to_alignment(fm, &read, r, &region_opt.scoring)
+                    .context("Bereich ohne gültiges Alignment")?;
+                writeln!(
+                    out,
+                    "{}\t{}\t{}\t{}\t{q}\t{}\t{}\t{}\t{}\t{}\t{}\t{frac_rep:.4}\t{}\t{}\t{}",
+                    String::from_utf8_lossy(&record.name),
+                    cg.name,
+                    aln.pos + 1,
+                    if aln.is_reverse { '-' } else { '+' },
+                    r.score,
+                    r.truesc,
+                    r.qb,
+                    r.qe,
+                    r.sub,
+                    r.sub_n,
+                    gc_align::cigar_string(&aln.cigar),
+                    aln.nm,
+                    aln.md
+                )?;
+            }
+        } else if let Some(out) = table.as_mut() {
+            writeln!(
+                out,
+                "{}\t*\t0\t*\t0\t0\t0\t0\t0",
+                String::from_utf8_lossy(&record.name)
+            )?;
+        }
         chains_filtered += filtered.len() as u64;
         reads += 1;
         seeds_total += seeds.len() as u64;
@@ -229,12 +286,44 @@ fn index_ketten(
         // Gleichstand zählt nur, wenn die gleich guten Bereiche an verschiedenen Orten liegen.
         let places: std::collections::BTreeSet<(u32, u64)> =
             top_regions.iter().map(|r| (r.contig, r.rb)).collect();
+        let mut lost_row = None;
         if !hit {
             region_wrong += 1;
-            // Untere Schranke für den Score am wahren Ort: der ganze Read ohne Lücken.
-            let errors: i32 = parts.next().and_then(|e| e.parse().ok()).unwrap_or(0);
+            // Score am wahren Ort ohne Lücken: der beste zusammenhängende Abschnitt auf der wahren
+            // Diagonale (lokal, wie der Score eines Bereichs). Die erzeugten Reads enthalten nur
+            // Austausche, also ist das dort das richtige Alignment. Mit Lücken könnte ein Score am
+            // wahren Ort höchstens noch größer sein, der Wert bleibt deshalb eine untere Schranke.
             let sc = &region_opt.scoring;
-            let truth_score = (read.len() as i32 - errors) * sc.matching - errors * sc.mismatch;
+            let cg = fm
+                .reference()
+                .contigs
+                .iter()
+                .find(|c| c.name == contig)
+                .with_context(|| format!("Contig {contig} aus dem Read-Namen fehlt im Index"))?;
+            let fwd = cg.offset + pos - 1;
+            let text_start = if reverse {
+                2 * l - fwd - read.len() as u64
+            } else {
+                fwd
+            };
+            let (mut run, mut truth_score) = (0i32, 0i32);
+            for (i, &b) in read.iter().enumerate() {
+                let t = fm.text_base(text_start + i as u64);
+                run += if b > 3 {
+                    -sc.ambiguous
+                } else if b == t {
+                    sc.matching
+                } else {
+                    -sc.mismatch
+                };
+                run = run.max(0);
+                truth_score = truth_score.max(run);
+            }
+            region_equal += u64::from(top_score == truth_score);
+            region_better += u64::from(top_score > truth_score);
+            if top_score <= truth_score {
+                lost_row = Some(usize::from(top_score < truth_score));
+            }
             region_missed += u64::from(top_score < truth_score);
         }
         region_right += u64::from(hit && places.len() == 1);
@@ -259,11 +348,26 @@ fn index_ketten(
                 && forward_start == (cg.offset + pos - 1) as i64
         });
         seed_right += u64::from(seed_at_truth);
+        if let Some(row) = lost_row {
+            let col = if !seed_at_truth {
+                0
+            } else if !chains.iter().any(at_truth) {
+                1
+            } else if !filtered.iter().any(at_truth) {
+                2
+            } else {
+                3
+            };
+            lost_at[row][col] += 1;
+        }
         if let (false, Some(out)) = (seed_at_truth, missing.as_mut()) {
             writeln!(out, "{name}\t{}", String::from_utf8_lossy(&record.seq))?;
         }
     }
     if let Some(mut out) = missing {
+        out.flush()?;
+    }
+    if let Some(mut out) = table {
         out.flush()?;
     }
     let seconds = started.elapsed().as_secs_f64();
@@ -278,7 +382,19 @@ fn index_ketten(
         "reads_je_sekunde": if seconds > 0.0 { reads as f64 / seconds } else { 0.0 },
         "kerne": 1,
         "max_orte": max_occ,
+        "mapq_0": mapq_hist[0],
+        "mapq_1_bis_29": mapq_hist[1..30].iter().sum::<u64>(),
+        "mapq_30_bis_59": mapq_hist[30..60].iter().sum::<u64>(),
+        "mapq_60": mapq_hist[60],
     });
+    let verloren = |a: &[u64; 4]| {
+        json!({
+            "kein_seed_genau_am_wahren_ort": a[0],
+            "keine_kette_am_wahren_ort": a[1],
+            "kette_am_wahren_ort_gefiltert": a[2],
+            "bereich_am_wahren_ort_mit_weniger_punkten": a[3],
+        })
+    };
     if truth_in_name {
         result["wahrheit"] = json!({
             "reads": with_truth,
@@ -290,6 +406,10 @@ fn index_ketten(
             "bester_bereich_eindeutig_und_genau_am_wahren_ort": region_exact,
             "bester_bereich_woanders": region_wrong,
             "davon_score_unter_dem_des_wahren_orts": region_missed,
+            "davon_score_gleich_dem_des_wahren_orts": region_equal,
+            "davon_score_ueber_dem_des_wahren_orts": region_better,
+            "wahrer_ort_verloren_bei_gleichem_score": verloren(&lost_at[0]),
+            "wahrer_ort_verloren_bei_besserem_score": verloren(&lost_at[1]),
             "irgendein_seed_genau_am_wahren_ort": seed_right,
             "toleranz_basen": chain_opt.band_width,
         });
@@ -716,6 +836,7 @@ fn main() -> Result<()> {
                 wahrheit_im_namen,
                 max_orte,
                 fehlende,
+                tabelle,
             } => {
                 let fm = load_index(&index)?;
                 let result = index_ketten(
@@ -724,6 +845,7 @@ fn main() -> Result<()> {
                     wahrheit_im_namen,
                     max_orte,
                     fehlende.as_deref(),
+                    tabelle.as_deref(),
                 )?;
                 println!(
                     "{}",

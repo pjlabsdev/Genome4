@@ -47,6 +47,12 @@ pub struct Region {
     pub seedcov: i32,
     /// Länge des Seeds, von dem die Verlängerung ausging.
     pub seedlen0: i32,
+    /// Score des besten anderen Bereichs, der diesen im Read stark überlappt (0 = keiner).
+    pub sub: i32,
+    /// Zahl der überlappenden Bereiche, die fast so gut sind wie dieser.
+    pub sub_n: i32,
+    /// Index des Bereichs, dem dieser untergeordnet ist; -1 bei einem primären Bereich.
+    pub secondary: i32,
 }
 
 /// Längste Lücke, die sich bei `qlen` Read-Basen noch lohnen kann, begrenzt auf das doppelte Band.
@@ -121,13 +127,13 @@ pub fn chain_to_regions(
     let mut order: Vec<usize> = (0..chain.seeds.len()).collect();
     order.sort_by_key(|&i| (chain.seeds[i].len, i));
     let mut skipped = vec![false; order.len()];
-    let first_region = out.len();
 
     for k in (0..order.len()).rev() {
         let s: Seed = chain.seeds[order[k]];
         let (s_qbeg, s_len) = (s.qbeg as i32, s.len as i32);
-        // Liegt der Seed schon in einem früheren Bereich dieser Kette und nahe an dessen Diagonale?
-        let near = out[first_region..].iter().any(|p| {
+        // Liegt der Seed schon in einem früheren Bereich und nahe an dessen Diagonale? Geprüft
+        // werden wie in bwa alle bisherigen Bereiche des Reads, auch die aus anderen Ketten.
+        let near = out.iter().any(|p| {
             if s.rbeg < p.rb
                 || s.rbeg + u64::from(s.len) > p.re
                 || s_qbeg < p.qb
@@ -183,6 +189,9 @@ pub fn chain_to_regions(
             w: sc.band_width,
             seedcov: 0,
             seedlen0: s_len,
+            sub: 0,
+            sub_n: 0,
+            secondary: -1,
         };
         let mut aw = [sc.band_width; 2];
         // Nach links: Read und Referenz vor dem Seed, beide umgekehrt.
