@@ -48,6 +48,7 @@ Auf keiner Seite steht eine Genauigkeits- oder Tempoaussage ohne Messung.
 - [Bereiche bereinigen, primär bestimmen, MAPQ](verfahren/bereiche-bewerten.md)
 - [Globales Alignment, CIGAR und Zusammenfügen von Bereichen](verfahren/globales-alignment.md)
 - [Reihenfolge bei Gleichstand: warum Genome 4.0 wie bwa sortiert](verfahren/reihenfolge-wie-bwa.md)
+- [Ausgabe als SAM (einzelne Reads)](verfahren/sam-ausgabe.md)
 
 ### Formate
 - [Ergebnis-Hülle `genome.<werkzeug>.vN`](formate/ergebnis-huelle.md)

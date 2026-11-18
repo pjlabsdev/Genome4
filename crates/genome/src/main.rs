@@ -122,6 +122,46 @@ enum IndexCommand {
         #[arg(long)]
         tabelle: Option<PathBuf>,
     },
+    /// Reads einer FASTQ-Datei einzeln ausrichten und als SAM auf die Standardausgabe schreiben
+    /// (ohne Paare, ein Kern). Ein Prüfbefehl für die Entwicklung, Vorstufe von `fq2bam`.
+    Sam {
+        index: PathBuf,
+        #[arg(long)]
+        fastq: PathBuf,
+    },
+}
+
+/// Richtet alle Reads einzeln aus und schreibt SAM.
+fn index_sam(fm: &gc_index::FmIndex, path: &std::path::Path) -> Result<()> {
+    use std::io::Write;
+    let opt = gc_align::AlignOptions::default();
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::with_capacity(1 << 20, stdout.lock());
+    let command_line = std::env::args().collect::<Vec<_>>().join(" ");
+    out.write_all(gc_align::sam_header(fm, env!("CARGO_PKG_VERSION"), &command_line).as_bytes())?;
+    let mut reader = fastq::open(path)?;
+    let mut record = Record::default();
+    let mut line = String::new();
+    let mut read_id = 0u64;
+    while reader.read_record(&mut record)? {
+        let read = encode_read(&record.seq);
+        let (regions, frac_rep) = gc_align::align_read(fm, &read, read_id, &opt);
+        line.clear();
+        gc_align::write_sam(
+            &mut line,
+            fm,
+            &String::from_utf8_lossy(&record.name),
+            &read,
+            &record.qual,
+            &regions,
+            frac_rep,
+            &opt,
+        );
+        out.write_all(line.as_bytes())?;
+        read_id += 1;
+    }
+    out.flush()?;
+    Ok(())
 }
 
 /// Verkettet die Seeds aller Reads und fasst zusammen.
@@ -851,6 +891,10 @@ fn main() -> Result<()> {
                     "{}",
                     Envelope::new("genome.index-ketten.v1", result).to_json()?
                 );
+            }
+            IndexCommand::Sam { index, fastq } => {
+                let fm = load_index(&index)?;
+                index_sam(&fm, &fastq)?;
             }
             IndexCommand::Smem {
                 index,
