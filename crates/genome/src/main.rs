@@ -186,7 +186,7 @@ fn index_ketten(
         }
         regions_total += regions.len() as u64;
         // Bereinigen, primär bestimmen, MAPQ. Die Zählungen weiter unten sehen die bereinigte Liste.
-        gc_align::sort_dedup(&mut regions, &final_opt);
+        gc_align::sort_dedup(&mut regions, fm, &read, &region_opt.scoring, &final_opt);
         gc_align::mark_primary(&mut regions, reads, &region_opt.scoring, &final_opt);
         if let Some(r) = regions.first() {
             let q = gc_align::mapq(r, frac_rep, &region_opt.scoring, &final_opt);

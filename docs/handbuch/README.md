@@ -46,6 +46,8 @@ Auf keiner Seite steht eine Genauigkeits- oder Tempoaussage ohne Messung.
 - [Seed verlängern: Smith-Waterman mit Band](verfahren/seed-verlaengern.md)
 - [Ketten filtern und zu Alignment-Bereichen verlängern](verfahren/ketten-zu-bereichen.md)
 - [Bereiche bereinigen, primär bestimmen, MAPQ](verfahren/bereiche-bewerten.md)
+- [Globales Alignment, CIGAR und Zusammenfügen von Bereichen](verfahren/globales-alignment.md)
+- [Reihenfolge bei Gleichstand: warum Genome 4.0 wie bwa sortiert](verfahren/reihenfolge-wie-bwa.md)
 
 ### Formate
 - [Ergebnis-Hülle `genome.<werkzeug>.vN`](formate/ergebnis-huelle.md)

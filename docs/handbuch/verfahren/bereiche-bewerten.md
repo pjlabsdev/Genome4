@@ -1,11 +1,13 @@
 # Bereiche bereinigen, primär bestimmen, MAPQ
 
 Stand: gebaut und geprüft (`gc-align`, `finalize.rs`). Messung und Vergleich mit bwa:
-[M3 Vergleich mit bwa](../../bench/M3-vergleich-bwa.md). Noch nicht gebaut: Zusammenfügen zweier
-Bereiche über eine große Lücke (`mem_patch_reg`), CIGAR, Paarung, Ausgabe.
+[M3 Vergleich mit bwa](../../bench/M3-vergleich-bwa.md). Noch nicht gebaut: CIGAR je Read,
+Paarung, Ausgabe.
 
 ## Doppelte entfernen
-Wie `mem_sort_dedup_patch` in bwa, ohne das Zusammenfügen. Verschiedene Seeds derselben Stelle
+Wie `mem_sort_dedup_patch` in bwa, einschließlich des Zusammenfügens zweier Bereiche über eine
+Lücke ([Globales Alignment](globales-alignment.md)). Sortiert wird in der Reihenfolge von bwa
+([Reihenfolge bei Gleichstand](reihenfolge-wie-bwa.md)). Verschiedene Seeds derselben Stelle
 führen oft zum selben Bereich. Überlappen sich zwei Bereiche in der Referenz und im Read jeweils
 zu mehr als 95 % des kürzeren, bleibt der mit dem höheren Score. Danach wird nach fallendem
 Score, dann nach Lage geordnet; genau gleiche Bereiche entfallen.

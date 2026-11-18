@@ -48,11 +48,16 @@ verwendete Bandbreite und die Seed-Basen, die er überdeckt.
 | chr20, 200.000 erzeugte Reads: bester Bereich am wahren Ort | 99,67 %, siehe Messung |
 
 ## Grenzen
-- Kein Vergleich mit bwa auf dieser Ebene. Die Sortierung in bwa ist bei gleichem Gewicht oder
-  gleicher Seed-Länge nicht stabil festgelegt; in solchen Fällen kann die Reihenfolge und damit
-  das Ergebnis von bwa abweichen.
-- Die Schritte nach `mem_chain2aln` (doppelte Bereiche entfernen und zusammenführen, primär und
-  sekundär markieren, MAPQ) fehlen noch. Bis dahin gibt es je Read mehrere, teils gleiche Bereiche.
+- Die Reihenfolge bei gleichem Gewicht ist die von bwa, siehe
+  [Reihenfolge bei Gleichstand](reihenfolge-wie-bwa.md). Der Vergleich mit bwa steht in der
+  [Messung](../../bench/M3-vergleich-bwa.md).
+- Nicht gebaut ist `mem_flt_chained_seeds`: bwa prüft bei langen Reads (ab etwa 800 Basen) jeden
+  Seed einer Kette mit einem kurzen Smith-Waterman und verwirft schwache. Bei Reads von 150
+  Basen läuft dieser Schritt in bwa nicht; für lange Reads fehlt er hier noch.
+- Ein Seed, der in einem Bereich einer anderen Kette liegt, wird wie in bwa nicht verlängert.
+  Das kann das bessere Alignment kosten: Beim Read `chr20:63035123:+:3` meldet bwa (und jetzt
+  auch Genome 4.0) ein Alignment mit einer Deletion von 36 Basen und 98 Punkten, obwohl der Read
+  am wahren Ort ohne Lücke 135 Punkte hat. Ein Ansatz für eine spätere, gemessene Verbesserung.
 
 ## Literatur
 Li 2013, siehe [Literatur](../literatur.md).

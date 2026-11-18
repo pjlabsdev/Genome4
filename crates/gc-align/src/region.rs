@@ -127,13 +127,13 @@ pub fn chain_to_regions(
     let mut order: Vec<usize> = (0..chain.seeds.len()).collect();
     order.sort_by_key(|&i| (chain.seeds[i].len, i));
     let mut skipped = vec![false; order.len()];
-    let first_region = out.len();
 
     for k in (0..order.len()).rev() {
         let s: Seed = chain.seeds[order[k]];
         let (s_qbeg, s_len) = (s.qbeg as i32, s.len as i32);
-        // Liegt der Seed schon in einem früheren Bereich dieser Kette und nahe an dessen Diagonale?
-        let near = out[first_region..].iter().any(|p| {
+        // Liegt der Seed schon in einem früheren Bereich und nahe an dessen Diagonale? Geprüft
+        // werden wie in bwa alle bisherigen Bereiche des Reads, auch die aus anderen Ketten.
+        let near = out.iter().any(|p| {
             if s.rbeg < p.rb
                 || s.rbeg + u64::from(s.len) > p.re
                 || s_qbeg < p.qb

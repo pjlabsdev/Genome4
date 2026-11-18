@@ -13,10 +13,11 @@ import pybwa
 import pysam
 
 prefix, fastq, ours_path, out_path = sys.argv[1:5]
-ours = {}
+# Nach Reihenfolge zuordnen, nicht nach Namen: Namen können doppelt vorkommen.
+ours = []
 for line in open(ours_path):
     name, contig, pos, strand, mapq, score, truesc, qb, qe = line.rstrip("\n").split("\t")[:9]
-    ours[name] = (contig, int(pos), strand, int(mapq), int(score), int(truesc), int(qb), int(qe))
+    ours.append((contig, int(pos), strand, int(mapq), int(score), int(truesc), int(qb), int(qe), name))
 
 queries = list(pysam.FastxFile(fastq))
 t = time.time()
@@ -28,11 +29,13 @@ stats = dict(reads=0, gleich_ort_strang=0, gleich_auch_mapq=0, gleich_auch_score
              anderer_ort_beide_mapq0=0, anderer_ort_sonst=0, nur_wir_ohne=0, nur_bwa_ohne=0,
              mapq_abweichung_bei_gleichem_ort=0, score_abweichung_bei_gleichem_ort=0)
 mapq_diffs, examples = {}, []
-for q, recs in zip(queries, results):
+assert len(ours) == len(queries), "Tabelle und FASTQ haben verschieden viele Reads"
+for q, recs, o in zip(queries, results, ours):
+    assert o[8] == q.name, f"Reihenfolge weicht ab bei {q.name}"
+    o = o[:8]
     stats["reads"] += 1
     prim = [r for r in recs if not r.is_secondary and not r.is_supplementary]
     b = prim[0] if prim else None
-    o = ours.get(q.name)
     b_un = b is None or b.is_unmapped
     o_un = o is None or o[0] == "*"
     if b_un or o_un:
@@ -49,6 +52,9 @@ for q, recs in zip(queries, results):
             stats["mapq_abweichung_bei_gleichem_ort"] += 1
             d = o[3] - b.mapping_quality
             mapq_diffs[d] = mapq_diffs.get(d, 0) + 1
+            if len(examples) < 40:
+                examples.append(dict(read=q.name, art="mapq", bwa=b.mapping_quality, wir=o[3],
+                                     bwa_as=b.get_tag("AS"), bwa_xs=b.get_tag("XS")))
         if b.get_tag("AS") == o[4]:
             stats["gleich_auch_score"] += 1
         else:
@@ -57,6 +63,9 @@ for q, recs in zip(queries, results):
                 examples.append(dict(read=q.name, art="score", bwa_as=b.get_tag("AS"), wir=o[4], cigar=b.cigarstring))
     elif b.mapping_quality == 0 and o[3] == 0:
         stats["anderer_ort_beide_mapq0"] += 1
+        if len(examples) < 40:
+            examples.append(dict(read=q.name, art="ort_mapq0", bwa=[b.reference_name, b.reference_start + 1, b_strand,
+                                 b.mapping_quality, b.get_tag("AS"), b.cigarstring], wir=list(o)))
     else:
         stats["anderer_ort_sonst"] += 1
         if len(examples) < 40:
