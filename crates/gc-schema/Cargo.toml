@@ -3,6 +3,7 @@ name = "gc-schema"
 description = "Genome 4.0: versionierte JSON-Ausgaben und Manifest"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
