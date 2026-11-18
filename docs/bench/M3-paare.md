@@ -105,7 +105,8 @@ Bei den 1.031 Paaren mit Read 2 aus einem anderen Stück bleibt Read 1 an seinem
 - Kein Paar im Satz hat einen geteilten Read; dieser Zweig ist nur durch den Quelltext belegt.
 - Flag-Bits 2, 64, 128 nicht gegen bwa geprüft (siehe oben), nur durch eigene Tests.
 - Verglichen mit dem in pybwa eingebauten bwa 0.7.18, nicht mit dem Programm bwa 0.7.19.
-- Tempo: 155 s für 100.000 Paare auf einem Kern, davon etwa die Hälfte Partnersuche. Das lokale
+- Tempo: 155 s für 100.000 Paare auf einem Kern, davon etwa die Hälfte Partnersuche
+  (mehrere Kerne: [M3 Kerne und BAM](M3-kerne-bam.md)). Das lokale
   Alignment rechnet noch ohne Vektorbefehle.
 
 Rohdaten: `bench/m3/ergebnisse/paare_vergleich.json`, `paare_stufen.json`,

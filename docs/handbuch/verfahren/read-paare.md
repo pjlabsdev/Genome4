@@ -2,7 +2,8 @@
 
 Stand: gebaut und geprüft (`gc-align`, `pair.rs` und `local.rs`; Prüfbefehl
 `genome index sam --fastq R1 --fastq2 R2`). Messung: [M3 Paare gegen bwa](../../bench/M3-paare.md).
-Noch nicht gebaut: BAM, mehrere Kerne, Lesegruppen (`@RG`), ALT-Contigs.
+Mehrere Kerne: [Ausrichten auf mehreren Kernen](mehrere-kerne.md). Noch nicht gebaut:
+Lesegruppen (`@RG`), ALT-Contigs.
 
 ## Worum es geht
 Beim Sequenzieren wird ein DNA-Stück von beiden Enden gelesen. Read 1 und Read 2 liegen im Genom
@@ -154,7 +155,7 @@ sind (`--block-basen`). Zwei Folgen:
   benutzt. Welche das sind, kann von bwa abweichen; dann unterscheiden sich in langen
   Wiederholungen (Zentromer) einzelne Bereiche und damit die Wahl zwischen gleich guten Orten.
   Die Ursache ist eingegrenzt, aber nicht bewiesen, siehe Messung.
-- Ein Kern, kein BAM.
+- Das lokale Alignment der Partnersuche rechnet noch ohne Vektorbefehle.
 
 ## Literatur
 Li 2013; Farrar 2007; SAM-Spezifikation, siehe [Literatur](../literatur.md).

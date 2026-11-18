@@ -255,11 +255,64 @@ pub(crate) fn regions_to_recs(
     recs
 }
 
-/// Schreibt Satz `which` aus `list` als SAM-Zeile (bwa `mem_aln2sam`). `mate` ist der Satz des
-/// Partners bei Paaren.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn write_rec(
-    out: &mut String,
+/// Wert einer Zusatzangabe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TagValue {
+    Int(i64),
+    Text(String),
+}
+
+/// Eine fertige Ausgabezeile, unabhängig davon, ob sie als SAM-Text oder als BAM-Satz
+/// geschrieben wird.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Line {
+    pub name: String,
+    pub flag: u32,
+    /// `None`: ohne Contig und Position.
+    pub contig: Option<u32>,
+    /// Ab 0 gezählt; gilt nur mit `contig`.
+    pub pos: u64,
+    pub mapq: u8,
+    /// Buchstabe (`M`, `I`, `D`, `S`, `H`) und Länge; leer heißt `*`.
+    pub cigar: Vec<(u8, u32)>,
+    pub mate_contig: Option<u32>,
+    pub mate_pos: u64,
+    pub tlen: i64,
+    /// Basen als Codes 0..3, 4 = N, schon in Richtung des Vorwärtsstrangs.
+    pub seq: Vec<u8>,
+    /// Qualitäten als ASCII wie in FASTQ; leer heißt `*`.
+    pub qual: Vec<u8>,
+    pub tags: Vec<([u8; 2], TagValue)>,
+}
+
+fn cigar_letters(cigar: &[(Op, u32)], hard: bool) -> Vec<(u8, u32)> {
+    cigar
+        .iter()
+        .map(|&(op, n)| {
+            let c = if op == Op::SoftClip && hard {
+                'H'
+            } else {
+                op.letter()
+            };
+            (c as u8, n)
+        })
+        .collect()
+}
+
+fn cigar_text(cigar: &[(u8, u32)]) -> String {
+    if cigar.is_empty() {
+        return "*".to_string();
+    }
+    let mut s = String::new();
+    for &(c, n) in cigar {
+        let _ = write!(s, "{n}{}", c as char);
+    }
+    s
+}
+
+/// Baut Zeile `which` aus `list` (bwa `mem_aln2sam`). `mate` ist der Satz des Partners bei
+/// Paaren.
+pub(crate) fn make_line(
     index: &FmIndex,
     name: &str,
     read: &[u8],
@@ -267,7 +320,7 @@ pub(crate) fn write_rec(
     list: &[Rec],
     which: usize,
     mate: Option<&Rec>,
-) {
+) -> Line {
     let mut p = list[which].clone();
     let mut m = mate.cloned();
     if let Some(m) = m.as_mut() {
@@ -296,45 +349,38 @@ pub(crate) fn write_rec(
         p.flag |= 0x10;
     }
     let contigs = &index.reference().contigs;
-    let _ = write!(out, "{name}\t{}\t", p.flag);
     // Ergänzende Alignments bekommen harte Schnitte: die abgeschnittenen Basen stehen schon in
     // der ersten Zeile.
     let hard = which > 0;
-    match p.contig {
-        Some(c) => {
-            let _ = write!(
-                out,
-                "{}\t{}\t{}\t",
-                contigs[c as usize].name,
-                p.pos + 1,
-                p.mapq
-            );
-            push_cigar(out, &p.cigar, hard);
+    let mut line = Line {
+        name: name.to_string(),
+        flag: p.flag,
+        contig: p.contig,
+        pos: p.pos,
+        mapq: if p.contig.is_some() { p.mapq } else { 0 },
+        cigar: if p.contig.is_some() {
+            cigar_letters(&p.cigar, hard)
+        } else {
+            Vec::new()
+        },
+        mate_contig: None,
+        mate_pos: 0,
+        tlen: 0,
+        seq: Vec::new(),
+        qual: Vec::new(),
+        tags: Vec::new(),
+    };
+    if let Some((m, c)) = m.as_ref().and_then(|m| m.contig.map(|c| (m, c))) {
+        line.mate_contig = Some(c);
+        line.mate_pos = m.pos;
+        if p.contig == Some(c) && !m.cigar.is_empty() && !p.cigar.is_empty() {
+            // Abstand der äußeren Enden: bei einem Read auf dem Gegenstrang zählt sein
+            // rechtes Ende.
+            let p0 = p.pos as i64 + if p.is_rev { p.ref_len() - 1 } else { 0 };
+            let p1 = m.pos as i64 + if m.is_rev { m.ref_len() - 1 } else { 0 };
+            line.tlen = -(p0 - p1 + (p0 - p1).signum());
         }
-        None => out.push_str("*\t0\t0\t*"),
     }
-    out.push('\t');
-    match m.as_ref().and_then(|m| m.contig.map(|c| (m, c))) {
-        Some((m, c)) => {
-            if p.contig == Some(c) {
-                out.push('=');
-            } else {
-                out.push_str(&contigs[c as usize].name);
-            }
-            let _ = write!(out, "\t{}\t", m.pos + 1);
-            if p.contig == Some(c) && !m.cigar.is_empty() && !p.cigar.is_empty() {
-                // Abstand der äußeren Enden: bei einem Read auf dem Gegenstrang zählt sein
-                // rechtes Ende.
-                let p0 = p.pos as i64 + if p.is_rev { p.ref_len() - 1 } else { 0 };
-                let p1 = m.pos as i64 + if m.is_rev { m.ref_len() - 1 } else { 0 };
-                let _ = write!(out, "{}", -(p0 - p1 + (p0 - p1).signum()));
-            } else {
-                out.push('0');
-            }
-        }
-        None => out.push_str("*\t0\t0"),
-    }
-    out.push('\t');
     // Anteil des Reads, der in dieser Zeile steht, in Leserichtung des Reads.
     let clip = |end: Option<&(Op, u32)>| -> usize {
         match end {
@@ -348,54 +394,218 @@ pub(crate) fn write_rec(
     } else {
         (first, read.len() - last)
     };
-    let letters = |codes: &mut dyn Iterator<Item = u8>, out: &mut String, table: &[u8; 5]| {
-        out.extend(codes.map(|c| table[usize::from(c.min(4))] as char));
-    };
     if p.is_rev {
-        letters(&mut read[qb..qe].iter().rev().copied(), out, b"TGCAN");
+        line.seq = read[qb..qe]
+            .iter()
+            .rev()
+            .map(|&c| if c < 4 { 3 - c } else { 4 })
+            .collect();
+        if !qual.is_empty() {
+            line.qual = qual[qb..qe].iter().rev().copied().collect();
+        }
     } else {
-        letters(&mut read[qb..qe].iter().copied(), out, b"ACGTN");
+        line.seq = read[qb..qe].iter().map(|&c| c.min(4)).collect();
+        if !qual.is_empty() {
+            line.qual = qual[qb..qe].to_vec();
+        }
     }
-    out.push('\t');
-    if qual.is_empty() {
-        out.push('*');
-    } else if p.is_rev {
-        out.extend(qual[qb..qe].iter().rev().map(|&b| b as char));
-    } else {
-        out.extend(qual[qb..qe].iter().map(|&b| b as char));
-    }
+    let tags = &mut line.tags;
     if !p.cigar.is_empty() {
-        let _ = write!(out, "\tNM:i:{}\tMD:Z:{}", p.nm, p.md);
+        tags.push((*b"NM", TagValue::Int(i64::from(p.nm))));
+        tags.push((*b"MD", TagValue::Text(p.md.clone())));
     }
     if let Some(m) = &m {
         if !m.cigar.is_empty() {
-            out.push_str("\tMC:Z:");
             // Wie in bwa richtet sich der Schnitt-Buchstabe nach der eigenen Zeile.
-            push_cigar(out, &m.cigar, hard);
+            tags.push((
+                *b"MC",
+                TagValue::Text(cigar_text(&cigar_letters(&m.cigar, hard))),
+            ));
         }
-        let _ = write!(out, "\tMQ:i:{}", m.mapq);
+        tags.push((*b"MQ", TagValue::Int(i64::from(m.mapq))));
     }
-    let _ = write!(out, "\tAS:i:{}", p.score);
+    tags.push((*b"AS", TagValue::Int(i64::from(p.score))));
     if p.sub >= 0 {
-        let _ = write!(out, "\tXS:i:{}", p.sub);
+        tags.push((*b"XS", TagValue::Int(i64::from(p.sub))));
     }
     if list.len() > 1 {
-        out.push_str("\tSA:Z:");
+        let mut sa = String::new();
         for (i, o) in list.iter().enumerate() {
             if i == which {
                 continue;
             }
             let Some(c) = o.contig else { continue };
             let strand = if o.is_rev { '-' } else { '+' };
-            let _ = write!(out, "{},{},{strand},", contigs[c as usize].name, o.pos + 1);
-            push_cigar(out, &o.cigar, false);
-            let _ = write!(out, ",{},{};", o.mapq, o.nm);
+            let _ = write!(sa, "{},{},{strand},", contigs[c as usize].name, o.pos + 1);
+            push_cigar(&mut sa, &o.cigar, false);
+            let _ = write!(sa, ",{},{};", o.mapq, o.nm);
         }
+        tags.push((*b"SA", TagValue::Text(sa)));
     }
     if !p.xa.is_empty() {
-        let _ = write!(out, "\tXA:Z:{}", p.xa);
+        tags.push((*b"XA", TagValue::Text(p.xa.clone())));
     }
-    out.push('\n');
+    line
+}
+
+/// BAM-Behälter für ein Stück `[beg, end)` der Referenz (SAM-Spezifikation, Abschnitt 5.3).
+fn reg2bin(beg: i64, end: i64) -> u16 {
+    let end = end - 1;
+    for (shift, offset) in [(14, 4681), (17, 585), (20, 73), (23, 9), (26, 1)] {
+        if beg >> shift == end >> shift {
+            return (offset + (beg >> shift)) as u16;
+        }
+    }
+    0
+}
+
+impl Line {
+    /// Als BAM-Satz (mit Längenfeld vorn), angehängt an `out`. Ganze Zahlen in den
+    /// Zusatzangaben bekommen den kleinsten passenden Typ, wie bei samtools.
+    pub fn write_bam(&self, out: &mut Vec<u8>) {
+        let start = out.len();
+        out.extend_from_slice(&[0; 4]);
+        let ref_id = self.contig.map_or(-1, |c| c as i32);
+        let pos = if self.contig.is_some() {
+            self.pos as i32
+        } else {
+            -1
+        };
+        let ref_len: i64 = self
+            .cigar
+            .iter()
+            .filter(|(c, _)| matches!(c, b'M' | b'D'))
+            .map(|&(_, n)| i64::from(n))
+            .sum();
+        let bin = reg2bin(i64::from(pos), i64::from(pos) + ref_len.max(1));
+        out.extend_from_slice(&ref_id.to_le_bytes());
+        out.extend_from_slice(&pos.to_le_bytes());
+        out.push((self.name.len() + 1) as u8);
+        out.push(self.mapq);
+        out.extend_from_slice(&bin.to_le_bytes());
+        out.extend_from_slice(&(self.cigar.len() as u16).to_le_bytes());
+        out.extend_from_slice(&(self.flag as u16).to_le_bytes());
+        out.extend_from_slice(&(self.seq.len() as u32).to_le_bytes());
+        let mate_id = self.mate_contig.map_or(-1, |c| c as i32);
+        let mate_pos = if self.mate_contig.is_some() {
+            self.mate_pos as i32
+        } else {
+            -1
+        };
+        out.extend_from_slice(&mate_id.to_le_bytes());
+        out.extend_from_slice(&mate_pos.to_le_bytes());
+        out.extend_from_slice(&(self.tlen as i32).to_le_bytes());
+        out.extend_from_slice(self.name.as_bytes());
+        out.push(0);
+        for &(c, n) in &self.cigar {
+            let op: u32 = match c {
+                b'M' => 0,
+                b'I' => 1,
+                b'D' => 2,
+                b'S' => 4,
+                _ => 5, // H
+            };
+            out.extend_from_slice(&(n << 4 | op).to_le_bytes());
+        }
+        // Basen: zwei je Byte, Codes A=1, C=2, G=4, T=8, N=15.
+        const CODE: [u8; 5] = [1, 2, 4, 8, 15];
+        for pair in self.seq.chunks(2) {
+            let hi = CODE[usize::from(pair[0])];
+            let lo = pair.get(1).map_or(0, |&b| CODE[usize::from(b)]);
+            out.push(hi << 4 | lo);
+        }
+        if self.qual.is_empty() {
+            out.extend(std::iter::repeat_n(0xFF, self.seq.len()));
+        } else {
+            out.extend(self.qual.iter().map(|&q| q.saturating_sub(33)));
+        }
+        for (tag, value) in &self.tags {
+            out.extend_from_slice(tag);
+            match value {
+                TagValue::Text(v) => {
+                    out.push(b'Z');
+                    out.extend_from_slice(v.as_bytes());
+                    out.push(0);
+                }
+                &TagValue::Int(v) => {
+                    if v < 0 {
+                        if v >= i64::from(i8::MIN) {
+                            out.push(b'c');
+                            out.push(v as i8 as u8);
+                        } else if v >= i64::from(i16::MIN) {
+                            out.push(b's');
+                            out.extend_from_slice(&(v as i16).to_le_bytes());
+                        } else {
+                            out.push(b'i');
+                            out.extend_from_slice(&(v as i32).to_le_bytes());
+                        }
+                    } else if v <= i64::from(u8::MAX) {
+                        out.push(b'C');
+                        out.push(v as u8);
+                    } else if v <= i64::from(u16::MAX) {
+                        out.push(b'S');
+                        out.extend_from_slice(&(v as u16).to_le_bytes());
+                    } else {
+                        out.push(b'I');
+                        out.extend_from_slice(&(v as u32).to_le_bytes());
+                    }
+                }
+            }
+        }
+        let size = (out.len() - start - 4) as u32;
+        out[start..start + 4].copy_from_slice(&size.to_le_bytes());
+    }
+
+    /// Als SAM-Textzeile.
+    pub fn write_sam(&self, out: &mut String, index: &FmIndex) {
+        let contigs = &index.reference().contigs;
+        let _ = write!(out, "{}\t{}\t", self.name, self.flag);
+        match self.contig {
+            Some(c) => {
+                let _ = write!(
+                    out,
+                    "{}\t{}\t{}\t{}",
+                    contigs[c as usize].name,
+                    self.pos + 1,
+                    self.mapq,
+                    cigar_text(&self.cigar)
+                );
+            }
+            None => out.push_str("*\t0\t0\t*"),
+        }
+        out.push('\t');
+        match self.mate_contig {
+            Some(c) => {
+                if self.contig == Some(c) {
+                    out.push('=');
+                } else {
+                    out.push_str(&contigs[c as usize].name);
+                }
+                let _ = write!(out, "\t{}\t{}", self.mate_pos + 1, self.tlen);
+            }
+            None => out.push_str("*\t0\t0"),
+        }
+        out.push('\t');
+        out.extend(self.seq.iter().map(|&c| b"ACGTN"[usize::from(c)] as char));
+        out.push('\t');
+        if self.qual.is_empty() {
+            out.push('*');
+        } else {
+            out.extend(self.qual.iter().map(|&b| b as char));
+        }
+        for (tag, value) in &self.tags {
+            let (a, b) = (tag[0] as char, tag[1] as char);
+            match value {
+                TagValue::Int(v) => {
+                    let _ = write!(out, "\t{a}{b}:i:{v}");
+                }
+                TagValue::Text(v) => {
+                    let _ = write!(out, "\t{a}{b}:Z:{v}");
+                }
+            }
+        }
+        out.push('\n');
+    }
 }
 
 /// Schreibt die SAM-Zeilen eines einzelnen Reads nach `out`. `regions` kommt aus
@@ -411,10 +621,25 @@ pub fn write_sam(
     frac_rep: f32,
     opt: &AlignOptions,
 ) {
-    let recs = regions_to_recs(index, read, regions, frac_rep, 0, opt);
-    for which in 0..recs.len() {
-        write_rec(out, index, name, read, qual, &recs, which, None);
+    for line in read_lines(index, name, read, qual, regions, frac_rep, opt) {
+        line.write_sam(out, index);
     }
+}
+
+/// Die Ausgabezeilen eines einzelnen Reads.
+pub fn read_lines(
+    index: &FmIndex,
+    name: &str,
+    read: &[u8],
+    qual: &[u8],
+    regions: &[Region],
+    frac_rep: f32,
+    opt: &AlignOptions,
+) -> Vec<Line> {
+    let recs = regions_to_recs(index, read, regions, frac_rep, 0, opt);
+    (0..recs.len())
+        .map(|which| make_line(index, name, read, qual, &recs, which, None))
+        .collect()
 }
 
 #[cfg(test)]
