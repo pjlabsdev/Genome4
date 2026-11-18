@@ -13,10 +13,10 @@
     "mapq_60": 186390,
     "max_orte": 500,
     "reads": 200000,
-    "reads_je_sekunde": 2761.9130011910192,
+    "reads_je_sekunde": 2707.181982634287,
     "reads_ohne_kette": 0,
     "seeds": 7844037,
-    "sekunden": 72.41357708,
+    "sekunden": 73.877560239,
     "wahrheit": {
       "bester_bereich_am_wahren_ort_eindeutig": 192470,
       "bester_bereich_am_wahren_ort_gleichstand": 6864,
@@ -30,7 +30,19 @@
       "reads": 200000,
       "schwerste_kette_am_wahren_ort_eindeutig": 192211,
       "schwerste_kette_am_wahren_ort_gleichstand": 6442,
-      "toleranz_basen": 100
+      "toleranz_basen": 100,
+      "wahrer_ort_verloren_bei_besserem_score": {
+        "bereich_am_wahren_ort_mit_weniger_punkten": 0,
+        "kein_seed_genau_am_wahren_ort": 3,
+        "keine_kette_am_wahren_ort": 0,
+        "kette_am_wahren_ort_gefiltert": 29
+      },
+      "wahrer_ort_verloren_bei_gleichem_score": {
+        "bereich_am_wahren_ort_mit_weniger_punkten": 0,
+        "kein_seed_genau_am_wahren_ort": 27,
+        "keine_kette_am_wahren_ort": 0,
+        "kette_am_wahren_ort_gefiltert": 69
+      }
     }
   }
 }

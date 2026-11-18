@@ -41,8 +41,21 @@ Lücken) und schloss daraus zu viel; die Zahl 32 hat sich mit der genaueren Mess
   unserer Liste. Das ist ein verpasster Gleichstand. Er verfälscht nicht den Ort (beide sind
   gleich berechtigt), kann aber die MAPQ zu hoch ausfallen lassen.
 - Bei mindestens 32 Reads (0,016 %) wurde der wahre Ort verpasst, obwohl er besser gepasst hätte.
-  Das passt zur Größenordnung der 74 Reads ohne Seed am wahren Ort aus [M3 Ketten](M3-ketten.md);
-  einzeln zugeordnet sind die 32 nicht.
+  Das passt zur Größenordnung der 74 Reads ohne Seed am wahren Ort aus [M3 Ketten](M3-ketten.md).
+- Wo der wahre Ort bei diesen 96 + 32 Reads verloren geht, ist gemessen:
+
+  | Stufe | gleicher Score (96) | wahrer Ort besser (32) |
+  |---|---:|---:|
+  | kein Seed genau am wahren Ort | 27 | 3 |
+  | Seed da, aber keine Kette am wahren Ort | 0 | 0 |
+  | Kette am wahren Ort vom Filter verworfen | 69 | 29 |
+  | Bereich am wahren Ort mit weniger Punkten | 0 | 0 |
+
+  98 der 128 Reads verliert also der Kettenfilter (bwa `mem_chain_flt`): die Kette am wahren Ort
+  ist leichter als eine überlappende und fällt weg, bevor verlängert wird. Das ist das Verhalten
+  des nachgebauten Verfahrens, kein Fehler im Nachbau: beim [Vergleich mit bwa](M3-vergleich-bwa.md)
+  liegen 199.992 von 200.000 Reads am selben Ort. Verlängern und Bewerten verlieren keinen einzigen
+  Read. Hier liegt ein messbarer Ansatz, es später besser zu machen als bwa.
 - Gleichstand heißt hier nur gleicher Score an verschiedenen Orten. MAPQ gibt es noch nicht.
 - Wie bwa 0.7.19 bei denselben Reads abschneidet, ist noch nicht gemessen. Erst dieser Vergleich
   zeigt, ob 0,33 % und 0,016 % dem Verfahren entsprechen oder auf Abweichungen hinweisen.

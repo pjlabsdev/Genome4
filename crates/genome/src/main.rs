@@ -170,6 +170,9 @@ fn index_ketten(
     let mut chains_filtered = 0u64;
     let (mut region_wrong, mut region_missed) = (0u64, 0u64);
     let (mut region_equal, mut region_better) = (0u64, 0u64);
+    // Wo ging der wahre Ort verloren? Zeile 0: gleich gut, Zeile 1: besser gewesen.
+    // Spalten: kein Seed, keine Kette, Kette gefiltert, Bereich mit zu wenig Punkten.
+    let mut lost_at = [[0u64; 4]; 2];
     while reader.read_record(&mut record)? {
         let read = encode_read(&record.seq);
         let intervals = gc_align::collect_intervals(fm, &read, &seed_opt);
@@ -281,6 +284,7 @@ fn index_ketten(
         // Gleichstand zählt nur, wenn die gleich guten Bereiche an verschiedenen Orten liegen.
         let places: std::collections::BTreeSet<(u32, u64)> =
             top_regions.iter().map(|r| (r.contig, r.rb)).collect();
+        let mut lost_row = None;
         if !hit {
             region_wrong += 1;
             // Score am wahren Ort ohne Lücken: der beste zusammenhängende Abschnitt auf der wahren
@@ -315,6 +319,9 @@ fn index_ketten(
             }
             region_equal += u64::from(top_score == truth_score);
             region_better += u64::from(top_score > truth_score);
+            if top_score <= truth_score {
+                lost_row = Some(usize::from(top_score < truth_score));
+            }
             region_missed += u64::from(top_score < truth_score);
         }
         region_right += u64::from(hit && places.len() == 1);
@@ -339,6 +346,18 @@ fn index_ketten(
                 && forward_start == (cg.offset + pos - 1) as i64
         });
         seed_right += u64::from(seed_at_truth);
+        if let Some(row) = lost_row {
+            let col = if !seed_at_truth {
+                0
+            } else if !chains.iter().any(at_truth) {
+                1
+            } else if !filtered.iter().any(at_truth) {
+                2
+            } else {
+                3
+            };
+            lost_at[row][col] += 1;
+        }
         if let (false, Some(out)) = (seed_at_truth, missing.as_mut()) {
             writeln!(out, "{name}\t{}", String::from_utf8_lossy(&record.seq))?;
         }
@@ -366,6 +385,14 @@ fn index_ketten(
         "mapq_30_bis_59": mapq_hist[30..60].iter().sum::<u64>(),
         "mapq_60": mapq_hist[60],
     });
+    let verloren = |a: &[u64; 4]| {
+        json!({
+            "kein_seed_genau_am_wahren_ort": a[0],
+            "keine_kette_am_wahren_ort": a[1],
+            "kette_am_wahren_ort_gefiltert": a[2],
+            "bereich_am_wahren_ort_mit_weniger_punkten": a[3],
+        })
+    };
     if truth_in_name {
         result["wahrheit"] = json!({
             "reads": with_truth,
@@ -379,6 +406,8 @@ fn index_ketten(
             "davon_score_unter_dem_des_wahren_orts": region_missed,
             "davon_score_gleich_dem_des_wahren_orts": region_equal,
             "davon_score_ueber_dem_des_wahren_orts": region_better,
+            "wahrer_ort_verloren_bei_gleichem_score": verloren(&lost_at[0]),
+            "wahrer_ort_verloren_bei_besserem_score": verloren(&lost_at[1]),
             "irgendein_seed_genau_am_wahren_ort": seed_right,
             "toleranz_basen": chain_opt.band_width,
         });
