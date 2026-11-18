@@ -418,6 +418,12 @@ impl FmIndex {
             | u64::from(b[4]) << 32
     }
 
+    /// Erste Zeile, deren Suffix mit Base `c` beginnt.
+    #[inline]
+    pub fn first_row(&self, c: u8) -> u64 {
+        self.c_before[c as usize]
+    }
+
     /// Anzahl der Base `c` in den BWT-Zeilen `0..i`.
     #[inline]
     pub fn occ(&self, c: u8, i: u64) -> u64 {

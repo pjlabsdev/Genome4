@@ -41,6 +41,7 @@ Auf keiner Seite steht eine Genauigkeits- oder Tempoaussage ohne Messung.
 - [Suffix-Array nach SA-IS](verfahren/suffix-array-sais.md)
 - [FM-Index](verfahren/fm-index.md)
 - [Blockweiser Index-Bau für das ganze Genom](verfahren/blockweiser-bau.md)
+- [Seed-Suche: längste exakte Treffer (SMEM)](verfahren/seed-suche.md)
 
 ### Formate
 - [Ergebnis-Hülle `genome.<werkzeug>.vN`](formate/ergebnis-huelle.md)

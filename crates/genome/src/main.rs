@@ -80,6 +80,34 @@ enum IndexCommand {
         #[arg(long, default_value_t = 1000)]
         limit: u64,
     },
+    /// Seeds eines Reads: längste exakte Treffer (SMEM) mit Lage im Read, Häufigkeit und Orten.
+    /// Mit `--fastq` stattdessen eine Zusammenfassung über alle Reads der Datei.
+    Smem {
+        index: PathBuf,
+        /// Einzelne Sequenz (A, C, G, T, N)
+        #[arg(long)]
+        sequenz: Option<String>,
+        /// FASTQ-Datei, Ausgabe ist dann nur die Zusammenfassung
+        #[arg(long)]
+        fastq: Option<PathBuf>,
+        /// Kürzester gemeldeter Treffer (BWA-MEM: 19)
+        #[arg(long, default_value_t = 19)]
+        min_laenge: u32,
+        /// Höchstens so viele Orte je Treffer ausgeben
+        #[arg(long, default_value_t = 20)]
+        orte: u64,
+        /// Mit `--fastq`: jeden Treffer mit der einfachen Suche nachprüfen (Bereich gleich,
+        /// links und rechts nicht verlängerbar, kein Treffer in einem anderen enthalten)
+        #[arg(long)]
+        pruefen: bool,
+    },
+}
+
+/// Read-Basen als Codes 0..3, alles andere als 4 (N).
+fn encode_read(seq: &[u8]) -> Vec<u8> {
+    seq.iter()
+        .map(|&b| gc_index::reference::encode(b).unwrap_or(4))
+        .collect()
 }
 
 fn load_index(path: &std::path::Path) -> Result<gc_index::FmIndex> {
@@ -486,6 +514,106 @@ fn main() -> Result<()> {
                 println!(
                     "{}",
                     Envelope::new("genome.index-locate.v1", result).to_json()?
+                );
+            }
+            IndexCommand::Smem {
+                index,
+                sequenz,
+                fastq,
+                min_laenge,
+                orte,
+                pruefen,
+            } => {
+                let fm = load_index(&index)?;
+                let result = match (sequenz, fastq) {
+                    (Some(seq), None) => {
+                        let read = encode_read(seq.as_bytes());
+                        let seeds: Vec<_> = fm
+                            .smems(&read, min_laenge)
+                            .iter()
+                            .map(|m| {
+                                let iv = m.interval;
+                                let places: Vec<_> = (iv.k..iv.k + iv.size.min(orte))
+                                    .filter_map(|row| {
+                                        fm.hit_at(fm.locate(row), u64::from(m.len()))
+                                    })
+                                    .map(|h| {
+                                        json!({
+                                            "contig": fm.reference().contigs[h.contig as usize].name,
+                                            "pos": h.pos + 1,
+                                            "strang": if h.reverse { "-" } else { "+" },
+                                        })
+                                    })
+                                    .collect();
+                                json!({
+                                    "read_von": m.start + 1,
+                                    "read_bis": m.end,
+                                    "laenge": m.len(),
+                                    "fundstellen_roh": iv.size,
+                                    "orte": places,
+                                })
+                            })
+                            .collect();
+                        json!({ "min_laenge": min_laenge, "read_laenge": read.len(), "seeds": seeds })
+                    }
+                    (None, Some(path)) => {
+                        let mut reader = fastq::open(&path)?;
+                        let mut record = Record::default();
+                        let started = std::time::Instant::now();
+                        let (mut reads, mut bases, mut seeds, mut covered, mut without) =
+                            (0u64, 0u64, 0u64, 0u64, 0u64);
+                        let mut rows = 0u64;
+                        let (mut checked, mut deviations) = (0u64, 0u64);
+                        while reader.read_record(&mut record)? {
+                            let read = encode_read(&record.seq);
+                            let found = fm.smems(&read, min_laenge);
+                            reads += 1;
+                            bases += read.len() as u64;
+                            seeds += found.len() as u64;
+                            without += u64::from(found.is_empty());
+                            covered += found.iter().map(|m| u64::from(m.len())).sum::<u64>();
+                            rows += found.iter().map(|m| m.interval.size).sum::<u64>();
+                            if pruefen {
+                                for (i, m) in found.iter().enumerate() {
+                                    let (a, b) = (m.start as usize, m.end as usize);
+                                    let iv = m.interval;
+                                    let mut bad = fm.interval(&read[a..b])
+                                        != (iv.k, iv.k + iv.size)
+                                        || iv.size == 0;
+                                    bad |=
+                                        a > 0 && read[a - 1] <= 3 && fm.count(&read[a - 1..b]) > 0;
+                                    bad |= b < read.len()
+                                        && read[b] <= 3
+                                        && fm.count(&read[a..=b]) > 0;
+                                    bad |= i > 0
+                                        && (found[i - 1].start >= m.start
+                                            || found[i - 1].end >= m.end);
+                                    deviations += u64::from(bad);
+                                }
+                                checked += found.len() as u64;
+                            }
+                        }
+                        let seconds = started.elapsed().as_secs_f64();
+                        json!({
+                            "min_laenge": min_laenge,
+                            "reads": reads,
+                            "basen": bases,
+                            "seeds": seeds,
+                            "seed_basen": covered,
+                            "fundstellen_roh": rows,
+                            "reads_ohne_seed": without,
+                            "sekunden": seconds,
+                            "reads_je_sekunde": if seconds > 0.0 { reads as f64 / seconds } else { 0.0 },
+                            "kerne": 1,
+                            "nachgeprueft": checked,
+                            "abweichungen": deviations,
+                        })
+                    }
+                    _ => anyhow::bail!("genau eines von --sequenz und --fastq angeben"),
+                };
+                println!(
+                    "{}",
+                    Envelope::new("genome.index-smem.v1", result).to_json()?
                 );
             }
         },

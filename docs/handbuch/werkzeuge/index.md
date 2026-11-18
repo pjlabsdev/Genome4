@@ -13,6 +13,7 @@ Ersetzt `bwa index`.
 genome index build <referenz.fa[.gz]> <index.gcfm> [Optionen]
 genome index locate <index.gcfm> <SEQUENZ> [--limit N]
 genome index count <index.gcfm> <sequenzen.txt>
+genome index smem <index.gcfm> --sequenz <SEQUENZ> | --fastq <reads.fq[.gz]> [Optionen]
 ```
 
 Optionen von `build`:
@@ -28,6 +29,16 @@ Optionen von `build`:
 | `--vollpruefung` | aus | die fertige BWT vollständig gegen die Referenz prüfen |
 | `--log-stufe` | `info` | Ausführlichkeit des Protokolls |
 
+Optionen von `smem` (Seeds eines Reads, siehe [Seed-Suche](../verfahren/seed-suche.md)):
+
+| Option | Standard | Bedeutung |
+|---|---|---|
+| `--sequenz SEQ` | | ein Read; Ausgabe sind seine Seeds mit Orten |
+| `--fastq DATEI` | | alle Reads der Datei; Ausgabe ist nur die Zusammenfassung |
+| `--min-laenge N` | 19 | kürzester gemeldeter Treffer |
+| `--orte N` | 20 | mit `--sequenz`: höchstens so viele Orte je Treffer |
+| `--pruefen` | aus | mit `--fastq`: jeden Treffer mit der einfachen Suche nachprüfen |
+
 ## Eingaben
 FASTA, unkomprimiert oder gzip. Groß- und Kleinbuchstaben gelten gleich. Alles außer A, C, G, T
 (N und Mehrdeutigkeits-Codes) wird als N-Strecke vermerkt.
@@ -40,6 +51,10 @@ FASTA, unkomprimiert oder gzip. Groß- und Kleinbuchstaben gelten gleich. Alles 
   `bits_je_base`, `selbstpruefung`, `vollpruefung`, `seconds`, `lauf` (Lauf-ID).
 - `locate`: JSON, Schema `genome.index-locate.v1`: `fundstellen_roh` und `treffer` mit `contig`,
   `pos` (1-basiert, linkes Ende auf dem Vorwärtsstrang), `strang`.
+- `smem`: JSON, Schema `genome.index-smem.v1`. Mit `--sequenz`: `seeds` mit `read_von`, `read_bis`
+  (1-basiert, einschließlich), `laenge`, `fundstellen_roh`, `orte`. Mit `--fastq`: `reads`, `basen`,
+  `seeds`, `seed_basen`, `fundstellen_roh`, `reads_ohne_seed`, `sekunden`, `reads_je_sekunde`,
+  `kerne`, `nachgeprueft`, `abweichungen`.
 - `count`: je Zeile `Sequenz<TAB>rohe Trefferzahl` (beide Stränge).
 
 Rohe Fundstellen und gefilterte Treffer unterscheiden sich: siehe [Glossar](../glossar.md).
