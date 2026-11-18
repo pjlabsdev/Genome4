@@ -122,12 +122,22 @@ enum IndexCommand {
         #[arg(long)]
         tabelle: Option<PathBuf>,
     },
-    /// Reads einer FASTQ-Datei einzeln ausrichten und als SAM auf die Standardausgabe schreiben
-    /// (ohne Paare, ein Kern). Ein Prüfbefehl für die Entwicklung, Vorstufe von `fq2bam`.
+    /// Reads ausrichten und als SAM auf die Standardausgabe schreiben (ein Kern): einzeln aus
+    /// einer FASTQ-Datei oder als Paare aus zwei. Ein Prüfbefehl für die Entwicklung, Vorstufe
+    /// von `fq2bam`.
     Sam {
         index: PathBuf,
         #[arg(long)]
         fastq: PathBuf,
+        /// Zweite Datei mit den Partnern: Die Reads werden als Paare ausgerichtet.
+        #[arg(long)]
+        fastq2: Option<PathBuf>,
+        /// Paare: Die Insertgröße wird je Block von so vielen Basen geschätzt (wie bwa `-K`).
+        #[arg(long, default_value_t = 10_000_000)]
+        block_basen: u64,
+        /// Protokoll zusätzlich als JSONL in diese Datei (sonst nur lesbar auf der Fehlerausgabe).
+        #[arg(long)]
+        log: Option<PathBuf>,
     },
 }
 
@@ -159,6 +169,96 @@ fn index_sam(fm: &gc_index::FmIndex, path: &std::path::Path) -> Result<()> {
         );
         out.write_all(line.as_bytes())?;
         read_id += 1;
+    }
+    out.flush()?;
+    Ok(())
+}
+
+/// Richtet Read-Paare aus und schreibt SAM. Die Insertgröße wird je Block geschätzt.
+fn index_sam_pairs(
+    fm: &gc_index::FmIndex,
+    first: &std::path::Path,
+    second: &std::path::Path,
+    block_bases: u64,
+) -> Result<()> {
+    use std::io::Write;
+    let opt = gc_align::AlignOptions::default();
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::with_capacity(1 << 20, stdout.lock());
+    let command_line = std::env::args().collect::<Vec<_>>().join(" ");
+    out.write_all(gc_align::sam_header(fm, env!("CARGO_PKG_VERSION"), &command_line).as_bytes())?;
+    let mut reader = fastq::PairedReader::new(fastq::open(first)?, fastq::open(second)?);
+    let mut pair_id = 0u64;
+    let mut block_nr = 0u64;
+    let mut line = String::new();
+    loop {
+        // Einen Block lesen: Paare, bis die Zahl der Basen erreicht ist.
+        let mut records: Vec<Record> = Vec::new();
+        let mut bases = 0u64;
+        while bases < block_bases {
+            let (mut a, mut b) = (Record::default(), Record::default());
+            if !reader.read_pair(&mut a, &mut b)? {
+                break;
+            }
+            bases += (a.seq.len() + b.seq.len()) as u64;
+            records.push(a);
+            records.push(b);
+        }
+        if records.is_empty() {
+            break;
+        }
+        let reads: Vec<Vec<u8>> = records.iter().map(|r| encode_read(&r.seq)).collect();
+        let mut regions = Vec::with_capacity(reads.len());
+        let mut frac_rep = Vec::with_capacity(reads.len());
+        for read in &reads {
+            let (r, f) = gc_align::find_regions(fm, read, &opt);
+            regions.push(r);
+            frac_rep.push(f);
+        }
+        let pes = gc_align::estimate_insert(fm, &regions, &opt);
+        let used: Vec<&str> = (0..4)
+            .filter(|&d| !pes[d].failed)
+            .map(|d| gc_align::DIRECTIONS[d])
+            .collect();
+        gc_log::decision(
+            "ALIGN.INSERTGROESSE",
+            &if used.is_empty() {
+                "keine Richtung".to_string()
+            } else {
+                used.join(", ")
+            },
+            "aus den eindeutig liegenden Paaren dieses Blocks geschätzt",
+            json!({
+                "block": block_nr,
+                "paare": records.len() / 2,
+                "richtungen": (0..4).map(|d| json!({
+                    "richtung": gc_align::DIRECTIONS[d],
+                    "paare": pes[d].n,
+                    "benutzt": !pes[d].failed,
+                    "perzentile_25_50_75": pes[d].percentiles,
+                    "mittel": pes[d].avg,
+                    "streuung": pes[d].std,
+                    "richtiges_paar_von": pes[d].low,
+                    "richtiges_paar_bis": pes[d].high,
+                })).collect::<Vec<_>>(),
+            }),
+        );
+        let mut regions = regions.into_iter();
+        for (i, pair) in records.as_chunks::<2>().0.iter().enumerate() {
+            let name = String::from_utf8_lossy(pair[0].pair_key()).into_owned();
+            let mut s = [0, 1].map(|k| gc_align::PairedRead {
+                name: &name,
+                read: &reads[2 * i + k],
+                qual: &pair[k].qual,
+                regions: regions.next().unwrap_or_default(),
+                frac_rep: frac_rep[2 * i + k],
+            });
+            line.clear();
+            gc_align::write_sam_pair(&mut line, fm, &pes, pair_id, &mut s, &opt);
+            out.write_all(line.as_bytes())?;
+            pair_id += 1;
+        }
+        block_nr += 1;
     }
     out.flush()?;
     Ok(())
@@ -226,7 +326,13 @@ fn index_ketten(
         }
         regions_total += regions.len() as u64;
         // Bereinigen, primär bestimmen, MAPQ. Die Zählungen weiter unten sehen die bereinigte Liste.
-        gc_align::sort_dedup(&mut regions, fm, &read, &region_opt.scoring, &final_opt);
+        gc_align::sort_dedup(
+            &mut regions,
+            fm,
+            Some(&read),
+            &region_opt.scoring,
+            &final_opt,
+        );
         gc_align::mark_primary(&mut regions, reads, &region_opt.scoring, &final_opt);
         if let Some(r) = regions.first() {
             let q = gc_align::mapq(r, frac_rep, &region_opt.scoring, &final_opt);
@@ -892,9 +998,32 @@ fn main() -> Result<()> {
                     Envelope::new("genome.index-ketten.v1", result).to_json()?
                 );
             }
-            IndexCommand::Sam { index, fastq } => {
+            IndexCommand::Sam {
+                index,
+                fastq,
+                fastq2,
+                block_basen,
+                log,
+            } => {
+                gc_log::init(gc_log::Config {
+                    tool: "index.sam".to_string(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    level: gc_log::Level::Info,
+                    jsonl: log,
+                    stderr: true,
+                })?;
+                gc_log::install_panic_hook();
+                gc_log::run_header(json!({
+                    "index": index.display().to_string(),
+                    "fastq": fastq.display().to_string(),
+                    "fastq2": fastq2.as_ref().map(|p| p.display().to_string()),
+                    "block_basen": block_basen,
+                }));
                 let fm = load_index(&index)?;
-                index_sam(&fm, &fastq)?;
+                match fastq2 {
+                    Some(second) => index_sam_pairs(&fm, &fastq, &second, block_basen)?,
+                    None => index_sam(&fm, &fastq)?,
+                }
             }
             IndexCommand::Smem {
                 index,

@@ -106,7 +106,7 @@ pub fn region_to_alignment(
         nm: g.nm,
         md: g.md,
         score: r.score,
-        sub: r.sub,
+        sub: r.sub.max(r.csub),
         secondary: r.secondary >= 0,
     })
 }
@@ -154,7 +154,7 @@ mod tests {
             chain_to_regions(index, read, c, &ro, &mut regions);
         }
         let fo = FinalizeOptions::default();
-        sort_dedup(&mut regions, index, read, &ro.scoring, &fo);
+        sort_dedup(&mut regions, index, Some(read), &ro.scoring, &fo);
         mark_primary(&mut regions, 0, &ro.scoring, &fo);
         region_to_alignment(index, read, &regions[0], &ro.scoring).expect("Alignment")
     }

@@ -53,6 +53,11 @@ pub struct Region {
     pub sub_n: i32,
     /// Index des Bereichs, dem dieser untergeordnet ist; -1 bei einem primären Bereich.
     pub secondary: i32,
+    /// Zweitbester Score aus der Suche nach dem Partner (bwa `csub`), sonst 0.
+    pub csub: i32,
+    /// Der Bereich wurde nicht über Seeds gefunden, sondern bei der Suche nach dem Partner
+    /// eines Paares ([`crate::pair::mate_rescue`]).
+    pub rescued: bool,
 }
 
 /// Längste Lücke, die sich bei `qlen` Read-Basen noch lohnen kann, begrenzt auf das doppelte Band.
@@ -192,6 +197,8 @@ pub fn chain_to_regions(
             sub: 0,
             sub_n: 0,
             secondary: -1,
+            csub: 0,
+            rescued: false,
         };
         let mut aw = [sc.band_width; 2];
         // Nach links: Read und Referenz vor dem Seed, beide umgekehrt.

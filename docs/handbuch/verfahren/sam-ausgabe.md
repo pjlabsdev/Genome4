@@ -1,8 +1,8 @@
 # Ausgabe als SAM (einzelne Reads)
 
 Stand: gebaut und geprüft (`gc-align`, `sam.rs`; Prüfbefehl `genome index sam`). Messung:
-[M3 SAM gegen bwa](../../bench/M3-sam.md). Noch nicht gebaut: Paare, BAM, mehrere Kerne,
-Lesegruppen (`@RG`), ALT-Contigs.
+[M3 SAM gegen bwa](../../bench/M3-sam.md). Paare: [Read-Paare](read-paare.md). Noch nicht gebaut:
+BAM, mehrere Kerne, Lesegruppen (`@RG`), ALT-Contigs.
 
 ## Was je Read geschrieben wird
 Wie `mem_reg2sam` und `mem_aln2sam` in bwa.
@@ -57,7 +57,7 @@ Kopf: je Contig eine `@SQ`-Zeile, dazu `@PG` mit Version und Aufruf.
 ## Grenzen
 - Die Testsätze enthalten keine geteilten Reads. Ergänzende Zeilen und `SA` sind nur durch den
   eigenen Test belegt, nicht durch den Vergleich mit bwa.
-- Ein Kern, kein BAM, keine Paare.
+- Ein Kern, kein BAM.
 
 ## Literatur
 Li 2013; Li et al. 2009; SAM-Spezifikation, siehe [Literatur](../literatur.md).

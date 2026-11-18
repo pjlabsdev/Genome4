@@ -6,7 +6,8 @@
 use crate::align::{Alignment, region_to_alignment};
 use crate::chain::{ChainOptions, FilterOptions, chain_seeds, filter_chains};
 use crate::finalize::{FinalizeOptions, mapq, mark_primary, sort_dedup};
-use crate::global::Op;
+use crate::global::{Cigar, Op};
+use crate::pair::PairOptions;
 use crate::region::{Region, RegionOptions, chain_to_regions};
 use crate::seed::{SeedOptions, collect_intervals, locate_seeds, repeat_fraction};
 use gc_index::FmIndex;
@@ -21,6 +22,7 @@ pub struct AlignOptions {
     pub region: RegionOptions,
     pub finalize: FinalizeOptions,
     pub sam: SamOptions,
+    pub pair: PairOptions,
 }
 
 /// Einstellungen der Ausgabe.
@@ -59,6 +61,15 @@ pub fn align_read(
     read_id: u64,
     opt: &AlignOptions,
 ) -> (Vec<Region>, f32) {
+    let (mut regions, frac_rep) = find_regions(index, read, opt);
+    mark_primary(&mut regions, read_id, &opt.region.scoring, &opt.finalize);
+    (regions, frac_rep)
+}
+
+/// Wie [`align_read`], aber ohne die Rangfolge festzulegen: Die Bereiche sind bereinigt und
+/// nach Score, dann Lage geordnet (bwa `mem_align1_core`). So gehen sie bei Paaren in die
+/// Schätzung der Insertgröße und in die Partnersuche.
+pub fn find_regions(index: &FmIndex, read: &[u8], opt: &AlignOptions) -> (Vec<Region>, f32) {
     let l = index.reference().len();
     let intervals = collect_intervals(index, read, &opt.seed);
     let frac_rep = repeat_fraction(&intervals, opt.seed.max_occ, read.len());
@@ -69,8 +80,7 @@ pub fn align_read(
         chain_to_regions(index, read, c, &opt.region, &mut regions);
     }
     let sc = &opt.region.scoring;
-    sort_dedup(&mut regions, index, read, sc, &opt.finalize);
-    mark_primary(&mut regions, read_id, sc, &opt.finalize);
+    sort_dedup(&mut regions, index, Some(read), sc, &opt.finalize);
     (regions, frac_rep)
 }
 
@@ -87,15 +97,75 @@ pub fn sam_header(index: &FmIndex, program_version: &str, command_line: &str) ->
     s
 }
 
-struct Line {
-    aln: Alignment,
-    mapq: u8,
-    supplementary: bool,
-    xa: String,
+/// Ein Ausgabesatz, wie er in eine SAM-Zeile geht (bwa `mem_aln_t`).
+#[derive(Debug, Clone)]
+pub(crate) struct Rec {
+    /// `None`: nicht ausgerichtet.
+    pub contig: Option<u32>,
+    pub pos: u64,
+    pub is_rev: bool,
+    /// Leer: kein Alignment (auch bei einem Read, der nur den Ort seines Partners trägt).
+    pub cigar: Cigar,
+    pub nm: u32,
+    pub md: String,
+    pub score: i32,
+    /// -1: kein `XS`.
+    pub sub: i32,
+    pub mapq: u8,
+    pub flag: u32,
+    pub xa: String,
 }
 
-fn push_cigar(out: &mut String, aln: &Alignment, hard: bool) {
-    for &(op, n) in &aln.cigar {
+impl Rec {
+    pub(crate) fn unmapped() -> Rec {
+        Rec {
+            contig: None,
+            pos: 0,
+            is_rev: false,
+            cigar: Cigar::new(),
+            nm: 0,
+            md: String::new(),
+            score: 0,
+            sub: 0,
+            mapq: 0,
+            flag: 0x4,
+            xa: String::new(),
+        }
+    }
+
+    pub(crate) fn mapped(a: Alignment, mapq: u8) -> Rec {
+        Rec {
+            contig: Some(a.contig),
+            pos: a.pos,
+            is_rev: a.is_reverse,
+            cigar: a.cigar,
+            nm: a.nm,
+            md: a.md,
+            score: a.score,
+            sub: a.sub,
+            mapq,
+            flag: if a.secondary { 0x100 } else { 0 },
+            xa: String::new(),
+        }
+    }
+
+    /// Länge auf der Referenz.
+    fn ref_len(&self) -> i64 {
+        self.cigar
+            .iter()
+            .filter(|(op, _)| matches!(op, Op::Match | Op::Del))
+            .map(|&(_, n)| i64::from(n))
+            .sum()
+    }
+}
+
+/// CIGAR schreiben; `*`, wenn es keinen gibt. In ergänzenden Zeilen (`hard`) stehen harte
+/// statt weicher Schnitte.
+fn push_cigar(out: &mut String, cigar: &[(Op, u32)], hard: bool) {
+    if cigar.is_empty() {
+        out.push('*');
+    }
+    for &(op, n) in cigar {
         let c = if op == Op::SoftClip && hard {
             'H'
         } else {
@@ -105,23 +175,18 @@ fn push_cigar(out: &mut String, aln: &Alignment, hard: bool) {
     }
 }
 
-/// Schreibt die SAM-Zeilen eines Reads nach `out`. `regions` kommt aus [`align_read`]. `qual`
-/// leer heißt: keine Qualitätswerte (`*`).
-#[allow(clippy::too_many_arguments)]
-pub fn write_sam(
-    out: &mut String,
+/// `XA` je Bereich: die untergeordneten Bereiche, die fast so gut sind wie ihr übergeordneter
+/// (bwa `mem_gen_alt`). `parents[i]` ist der Bereich, dem `i` untergeordnet ist, oder negativ.
+pub(crate) fn gen_xa(
     index: &FmIndex,
-    name: &str,
     read: &[u8],
-    qual: &[u8],
     regions: &[Region],
-    frac_rep: f32,
+    parents: &[i32],
     opt: &AlignOptions,
-) {
+) -> Vec<String> {
     let sc = &opt.region.scoring;
-    // XA: untergeordnete Bereiche, die fast so gut sind wie ihr übergeordneter.
     let parent = |i: usize| -> Option<usize> {
-        let k = regions[i].secondary;
+        let k = parents[i];
         (k >= 0
             && f64::from(regions[i].score)
                 >= f64::from(regions[k as usize].score) * f64::from(opt.sam.xa_drop_ratio))
@@ -145,13 +210,27 @@ pub fn write_sam(
         let contig = &index.reference().contigs[a.contig as usize].name;
         let strand = if a.is_reverse { '-' } else { '+' };
         let _ = write!(xa[k], "{contig},{strand}{},", a.pos + 1);
-        push_cigar(&mut xa[k], &a, false);
+        push_cigar(&mut xa[k], &a.cigar, false);
         let _ = write!(xa[k], ",{};", a.nm);
     }
+    xa
+}
 
-    // Was gemeldet wird: der beste Bereich und jeder weitere, der einen anderen Teil des Reads
-    // abdeckt (ergänzendes Alignment).
-    let mut lines: Vec<Line> = Vec::new();
+/// Die Sätze eines Reads (bwa `mem_reg2sam`): der beste Bereich und jeder weitere, der einen
+/// anderen Teil des Reads abdeckt (ergänzendes Alignment). Ohne brauchbaren Bereich ein Satz
+/// "nicht ausgerichtet". `extra_flag` kommt in jeden Satz.
+pub(crate) fn regions_to_recs(
+    index: &FmIndex,
+    read: &[u8],
+    regions: &[Region],
+    frac_rep: f32,
+    extra_flag: u32,
+    opt: &AlignOptions,
+) -> Vec<Rec> {
+    let sc = &opt.region.scoring;
+    let parents: Vec<i32> = regions.iter().map(|r| r.secondary).collect();
+    let mut xa = gen_xa(index, read, regions, &parents, opt);
+    let mut recs: Vec<Rec> = Vec::new();
     for (k, r) in regions.iter().enumerate() {
         if r.score < opt.sam.min_score || r.secondary >= 0 {
             continue;
@@ -159,104 +238,182 @@ pub fn write_sam(
         let Some(aln) = region_to_alignment(index, read, r, sc) else {
             continue;
         };
-        let mut q = mapq(r, frac_rep, sc, &opt.finalize);
-        let supplementary = !lines.is_empty();
-        if supplementary {
-            q = q.min(lines[0].mapq);
+        let mut rec = Rec::mapped(aln, mapq(r, frac_rep, sc, &opt.finalize));
+        rec.flag |= extra_flag;
+        if let Some(first) = recs.first() {
+            rec.flag |= 0x800;
+            rec.mapq = rec.mapq.min(first.mapq);
         }
-        lines.push(Line {
-            aln,
-            mapq: q,
-            supplementary,
-            xa: std::mem::take(&mut xa[k]),
-        });
+        rec.xa = std::mem::take(&mut xa[k]);
+        recs.push(rec);
     }
+    if recs.is_empty() {
+        let mut rec = Rec::unmapped();
+        rec.flag |= extra_flag;
+        recs.push(rec);
+    }
+    recs
+}
 
+/// Schreibt Satz `which` aus `list` als SAM-Zeile (bwa `mem_aln2sam`). `mate` ist der Satz des
+/// Partners bei Paaren.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn write_rec(
+    out: &mut String,
+    index: &FmIndex,
+    name: &str,
+    read: &[u8],
+    qual: &[u8],
+    list: &[Rec],
+    which: usize,
+    mate: Option<&Rec>,
+) {
+    let mut p = list[which].clone();
+    let mut m = mate.cloned();
+    if let Some(m) = m.as_mut() {
+        p.flag |= 0x1;
+        if m.contig.is_none() {
+            p.flag |= 0x8;
+        }
+        // Ein Read ohne Ort steht beim Ort seines Partners, und umgekehrt.
+        if p.contig.is_none() && m.contig.is_some() {
+            p.contig = m.contig;
+            p.pos = m.pos;
+            p.is_rev = m.is_rev;
+            p.cigar.clear();
+        }
+        if m.contig.is_none() && p.contig.is_some() {
+            m.contig = p.contig;
+            m.pos = p.pos;
+            m.is_rev = p.is_rev;
+            m.cigar.clear();
+        }
+        if m.is_rev {
+            p.flag |= 0x20;
+        }
+    }
+    if p.is_rev {
+        p.flag |= 0x10;
+    }
+    let contigs = &index.reference().contigs;
+    let _ = write!(out, "{name}\t{}\t", p.flag);
+    // Ergänzende Alignments bekommen harte Schnitte: die abgeschnittenen Basen stehen schon in
+    // der ersten Zeile.
+    let hard = which > 0;
+    match p.contig {
+        Some(c) => {
+            let _ = write!(
+                out,
+                "{}\t{}\t{}\t",
+                contigs[c as usize].name,
+                p.pos + 1,
+                p.mapq
+            );
+            push_cigar(out, &p.cigar, hard);
+        }
+        None => out.push_str("*\t0\t0\t*"),
+    }
+    out.push('\t');
+    match m.as_ref().and_then(|m| m.contig.map(|c| (m, c))) {
+        Some((m, c)) => {
+            if p.contig == Some(c) {
+                out.push('=');
+            } else {
+                out.push_str(&contigs[c as usize].name);
+            }
+            let _ = write!(out, "\t{}\t", m.pos + 1);
+            if p.contig == Some(c) && !m.cigar.is_empty() && !p.cigar.is_empty() {
+                // Abstand der äußeren Enden: bei einem Read auf dem Gegenstrang zählt sein
+                // rechtes Ende.
+                let p0 = p.pos as i64 + if p.is_rev { p.ref_len() - 1 } else { 0 };
+                let p1 = m.pos as i64 + if m.is_rev { m.ref_len() - 1 } else { 0 };
+                let _ = write!(out, "{}", -(p0 - p1 + (p0 - p1).signum()));
+            } else {
+                out.push('0');
+            }
+        }
+        None => out.push_str("*\t0\t0"),
+    }
+    out.push('\t');
+    // Anteil des Reads, der in dieser Zeile steht, in Leserichtung des Reads.
+    let clip = |end: Option<&(Op, u32)>| -> usize {
+        match end {
+            Some(&(Op::SoftClip, n)) if hard => n as usize,
+            _ => 0,
+        }
+    };
+    let (first, last) = (clip(p.cigar.first()), clip(p.cigar.last()));
+    let (qb, qe) = if p.is_rev {
+        (last, read.len() - first)
+    } else {
+        (first, read.len() - last)
+    };
     let letters = |codes: &mut dyn Iterator<Item = u8>, out: &mut String, table: &[u8; 5]| {
         out.extend(codes.map(|c| table[usize::from(c.min(4))] as char));
     };
-    if lines.is_empty() {
-        let _ = write!(out, "{name}\t4\t*\t0\t0\t*\t*\t0\t0\t");
-        letters(&mut read.iter().copied(), out, b"ACGTN");
-        out.push('\t');
-        if qual.is_empty() {
-            out.push('*');
-        } else {
-            out.push_str(&String::from_utf8_lossy(qual));
-        }
-        out.push_str("\tAS:i:0\tXS:i:0\n");
-        return;
+    if p.is_rev {
+        letters(&mut read[qb..qe].iter().rev().copied(), out, b"TGCAN");
+    } else {
+        letters(&mut read[qb..qe].iter().copied(), out, b"ACGTN");
     }
-    for (which, line) in lines.iter().enumerate() {
-        let a = &line.aln;
-        let mut flag = 0u32;
-        if a.is_reverse {
-            flag |= 0x10;
+    out.push('\t');
+    if qual.is_empty() {
+        out.push('*');
+    } else if p.is_rev {
+        out.extend(qual[qb..qe].iter().rev().map(|&b| b as char));
+    } else {
+        out.extend(qual[qb..qe].iter().map(|&b| b as char));
+    }
+    if !p.cigar.is_empty() {
+        let _ = write!(out, "\tNM:i:{}\tMD:Z:{}", p.nm, p.md);
+    }
+    if let Some(m) = &m {
+        if !m.cigar.is_empty() {
+            out.push_str("\tMC:Z:");
+            // Wie in bwa richtet sich der Schnitt-Buchstabe nach der eigenen Zeile.
+            push_cigar(out, &m.cigar, hard);
         }
-        if line.supplementary {
-            flag |= 0x800;
-        }
-        let contig = &index.reference().contigs[a.contig as usize].name;
-        let _ = write!(
-            out,
-            "{name}\t{flag}\t{contig}\t{}\t{}\t",
-            a.pos + 1,
-            line.mapq
-        );
-        // Ergänzende Alignments bekommen harte Schnitte: die abgeschnittenen Basen stehen
-        // schon in der ersten Zeile.
-        let hard = which > 0;
-        push_cigar(out, a, hard);
-        out.push_str("\t*\t0\t0\t");
-        // Anteil des Reads, der in dieser Zeile steht, in Leserichtung des Reads.
-        let clip = |end: Option<&(Op, u32)>| -> usize {
-            match end {
-                Some(&(Op::SoftClip, n)) if hard => n as usize,
-                _ => 0,
+        let _ = write!(out, "\tMQ:i:{}", m.mapq);
+    }
+    let _ = write!(out, "\tAS:i:{}", p.score);
+    if p.sub >= 0 {
+        let _ = write!(out, "\tXS:i:{}", p.sub);
+    }
+    if list.len() > 1 {
+        out.push_str("\tSA:Z:");
+        for (i, o) in list.iter().enumerate() {
+            if i == which {
+                continue;
             }
-        };
-        let (first, last) = (clip(a.cigar.first()), clip(a.cigar.last()));
-        let (qb, qe) = if a.is_reverse {
-            (last, read.len() - first)
-        } else {
-            (first, read.len() - last)
-        };
-        if a.is_reverse {
-            letters(&mut read[qb..qe].iter().rev().copied(), out, b"TGCAN");
-        } else {
-            letters(&mut read[qb..qe].iter().copied(), out, b"ACGTN");
+            let Some(c) = o.contig else { continue };
+            let strand = if o.is_rev { '-' } else { '+' };
+            let _ = write!(out, "{},{},{strand},", contigs[c as usize].name, o.pos + 1);
+            push_cigar(out, &o.cigar, false);
+            let _ = write!(out, ",{},{};", o.mapq, o.nm);
         }
-        out.push('\t');
-        if qual.is_empty() {
-            out.push('*');
-        } else if a.is_reverse {
-            out.extend(qual[qb..qe].iter().rev().map(|&b| b as char));
-        } else {
-            out.extend(qual[qb..qe].iter().map(|&b| b as char));
-        }
-        let _ = write!(
-            out,
-            "\tNM:i:{}\tMD:Z:{}\tAS:i:{}\tXS:i:{}",
-            a.nm, a.md, a.score, a.sub
-        );
-        if lines.len() > 1 {
-            out.push_str("\tSA:Z:");
-            for (i, other) in lines.iter().enumerate() {
-                if i == which {
-                    continue;
-                }
-                let o = &other.aln;
-                let contig = &index.reference().contigs[o.contig as usize].name;
-                let strand = if o.is_reverse { '-' } else { '+' };
-                let _ = write!(out, "{contig},{},{strand},", o.pos + 1);
-                push_cigar(out, o, false);
-                let _ = write!(out, ",{},{};", other.mapq, o.nm);
-            }
-        }
-        if !line.xa.is_empty() {
-            let _ = write!(out, "\tXA:Z:{}", line.xa);
-        }
-        out.push('\n');
+    }
+    if !p.xa.is_empty() {
+        let _ = write!(out, "\tXA:Z:{}", p.xa);
+    }
+    out.push('\n');
+}
+
+/// Schreibt die SAM-Zeilen eines einzelnen Reads nach `out`. `regions` kommt aus
+/// [`align_read`]. `qual` leer heißt: keine Qualitätswerte (`*`).
+#[allow(clippy::too_many_arguments)]
+pub fn write_sam(
+    out: &mut String,
+    index: &FmIndex,
+    name: &str,
+    read: &[u8],
+    qual: &[u8],
+    regions: &[Region],
+    frac_rep: f32,
+    opt: &AlignOptions,
+) {
+    let recs = regions_to_recs(index, read, regions, frac_rep, 0, opt);
+    for which in 0..recs.len() {
+        write_rec(out, index, name, read, qual, &recs, which, None);
     }
 }
 

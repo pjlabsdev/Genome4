@@ -25,6 +25,7 @@ Kennungen sind fest: sie ändern ihre Bedeutung nicht. Neue kommen hinzu.
 |---|---|---|---|
 | `INDEX.BAU.PARAMETER` | info | Variante, Verfahren, Größe der Referenz, Contigs, N-Strecken | |
 | `INDEX.VERFAHREN` | info | Entscheidung zwischen direktem und blockweisem Bau, mit Grund | |
+| `ALIGN.INSERTGROESSE` | info | Paare: je Block die geschätzte Insertgröße für die vier Richtungen (Zahl der Paare, Perzentile, Mittel, Streuung, Grenzen für "richtiges Paar") und welche Richtungen benutzt werden | |
 | `INDEX.STICHPROBE.RUNDE` | debug | eine Verfeinerungsrunde der Stichproben-Ränge | |
 | `INDEX.PRUEFUNG.STAND` | debug | Fortschritt der Selbstprüfung | |
 | `INDEX.CONTIG_FEHLT` | error | ein mit `--contig` gewähltes Contig steht nicht in der FASTA | Namen in der FASTA prüfen (z. B. `20` statt `chr20`) |
