@@ -169,6 +169,7 @@ fn index_ketten(
     let mut seed_right = 0u64;
     let mut chains_filtered = 0u64;
     let (mut region_wrong, mut region_missed) = (0u64, 0u64);
+    let (mut region_equal, mut region_better) = (0u64, 0u64);
     while reader.read_record(&mut record)? {
         let read = encode_read(&record.seq);
         let intervals = gc_align::collect_intervals(fm, &read, &seed_opt);
@@ -282,10 +283,38 @@ fn index_ketten(
             top_regions.iter().map(|r| (r.contig, r.rb)).collect();
         if !hit {
             region_wrong += 1;
-            // Untere Schranke für den Score am wahren Ort: der ganze Read ohne Lücken.
-            let errors: i32 = parts.next().and_then(|e| e.parse().ok()).unwrap_or(0);
+            // Score am wahren Ort ohne Lücken: der beste zusammenhängende Abschnitt auf der wahren
+            // Diagonale (lokal, wie der Score eines Bereichs). Die erzeugten Reads enthalten nur
+            // Austausche, also ist das dort das richtige Alignment. Mit Lücken könnte ein Score am
+            // wahren Ort höchstens noch größer sein, der Wert bleibt deshalb eine untere Schranke.
             let sc = &region_opt.scoring;
-            let truth_score = (read.len() as i32 - errors) * sc.matching - errors * sc.mismatch;
+            let cg = fm
+                .reference()
+                .contigs
+                .iter()
+                .find(|c| c.name == contig)
+                .with_context(|| format!("Contig {contig} aus dem Read-Namen fehlt im Index"))?;
+            let fwd = cg.offset + pos - 1;
+            let text_start = if reverse {
+                2 * l - fwd - read.len() as u64
+            } else {
+                fwd
+            };
+            let (mut run, mut truth_score) = (0i32, 0i32);
+            for (i, &b) in read.iter().enumerate() {
+                let t = fm.text_base(text_start + i as u64);
+                run += if b > 3 {
+                    -sc.ambiguous
+                } else if b == t {
+                    sc.matching
+                } else {
+                    -sc.mismatch
+                };
+                run = run.max(0);
+                truth_score = truth_score.max(run);
+            }
+            region_equal += u64::from(top_score == truth_score);
+            region_better += u64::from(top_score > truth_score);
             region_missed += u64::from(top_score < truth_score);
         }
         region_right += u64::from(hit && places.len() == 1);
@@ -348,6 +377,8 @@ fn index_ketten(
             "bester_bereich_eindeutig_und_genau_am_wahren_ort": region_exact,
             "bester_bereich_woanders": region_wrong,
             "davon_score_unter_dem_des_wahren_orts": region_missed,
+            "davon_score_gleich_dem_des_wahren_orts": region_equal,
+            "davon_score_ueber_dem_des_wahren_orts": region_better,
             "irgendein_seed_genau_am_wahren_ort": seed_right,
             "toleranz_basen": chain_opt.band_width,
         });
