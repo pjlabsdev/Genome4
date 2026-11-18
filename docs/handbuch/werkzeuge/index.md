@@ -14,6 +14,7 @@ genome index build <referenz.fa[.gz]> <index.gcfm> [Optionen]
 genome index locate <index.gcfm> <SEQUENZ> [--limit N]
 genome index count <index.gcfm> <sequenzen.txt>
 genome index smem <index.gcfm> --sequenz <SEQUENZ> | --fastq <reads.fq[.gz]> [Optionen]
+genome index sam <index.gcfm> --fastq <reads.fq[.gz]> > aus.sam
 genome index ketten <index.gcfm> --fastq <reads.fq[.gz]> [--wahrheit-im-namen] [--max-orte N] [--fehlende DATEI] [--tabelle DATEI]
 ```
 
@@ -63,6 +64,8 @@ FASTA, unkomprimiert oder gzip. Groß- und Kleinbuchstaben gelten gleich. Alles 
   gemeldeter Score, Read-Anfang, Read-Ende, `sub`, `sub_n`, Anteil in sehr häufigen Seeds,
   CIGAR, `NM`, `MD`. Die Position ist die des fertigen Alignments.
   Ein Prüfbefehl für die Entwicklung; er entfällt, wenn `fq2bam` steht.
+- `sam`: SAM auf der Standardausgabe, einzelne Reads, ein Kern; siehe
+  [Ausgabe als SAM](../verfahren/sam-ausgabe.md). Ein Prüfbefehl für die Entwicklung, Vorstufe von `fq2bam`.
 - `count`: je Zeile `Sequenz<TAB>rohe Trefferzahl` (beide Stränge).
 
 Rohe Fundstellen und gefilterte Treffer unterscheiden sich: siehe [Glossar](../glossar.md).
