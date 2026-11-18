@@ -591,8 +591,10 @@ impl FmIndex {
             r.read_exact(&mut buf[..take * 4])?;
             sa_samples.extend(
                 buf[..take * 4]
-                    .chunks_exact(4)
-                    .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])),
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|b| u32::from_le_bytes(*b)),
             );
             left -= take;
         }
@@ -687,8 +689,10 @@ fn read_u64s<R: Read>(r: &mut CrcReader<R>, expected: u64) -> io::Result<Vec<u64
         r.read_exact(&mut buf[..take * 8])?;
         out.extend(
             buf[..take * 8]
-                .chunks_exact(8)
-                .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])),
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|b| u64::from_le_bytes(*b)),
         );
         left -= take;
     }
