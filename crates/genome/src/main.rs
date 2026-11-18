@@ -29,6 +29,175 @@ enum Command {
         #[arg(short, long, default_value_t = 0)]
         threads: usize,
     },
+    /// FM-Index über ein Referenzgenom bauen, prüfen und abfragen (Meilenstein M2).
+    Index {
+        #[command(subcommand)]
+        command: IndexCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum IndexCommand {
+    /// Index aus FASTA bauen. Schreibt daneben das Lauf-Protokoll `<index>.log.jsonl`.
+    Build {
+        fasta: PathBuf,
+        index: PathBuf,
+        /// `kompakt` (wenig RAM) oder `schnell`
+        #[arg(long, default_value = "kompakt")]
+        variante: String,
+        /// Nur diese Contigs aufnehmen (mehrfach möglich); ohne Angabe alle.
+        #[arg(long = "contig")]
+        contigs: Vec<String>,
+        /// Selbstprüfung: Suffix-Array vollständig prüfen und so viele Zufallsabfragen
+        /// gegen die binäre Suche im vollen Suffix-Array vergleichen (0 = aus).
+        #[arg(long, default_value_t = 100_000)]
+        pruefen: u64,
+        /// Protokollstufe: error, warn, info, debug, trace
+        #[arg(long, default_value = "info")]
+        log_stufe: String,
+    },
+    /// Exakte Treffer zählen: eine Sequenz je Zeile aus der Datei, Ausgabe `Sequenz<TAB>Anzahl`
+    /// (beide Stränge, ohne Filter, wie die Breite des Suffix-Array-Bereichs).
+    Count { index: PathBuf, sequences: PathBuf },
+    /// Treffer einer Sequenz mit Contig, Position und Strang als JSON.
+    Locate {
+        index: PathBuf,
+        sequence: String,
+        #[arg(long, default_value_t = 1000)]
+        limit: u64,
+    },
+}
+
+fn load_index(path: &std::path::Path) -> Result<gc_index::FmIndex> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("Index {} nicht lesbar", path.display()))?;
+    gc_index::FmIndex::read(std::io::BufReader::with_capacity(1 << 20, file))
+        .with_context(|| format!("Index {}", path.display()))
+}
+
+fn encode_sequence(seq: &str) -> Result<Vec<u8>> {
+    seq.bytes()
+        .enumerate()
+        .map(|(i, b)| {
+            gc_index::reference::encode(b).with_context(|| {
+                format!(
+                    "Zeichen {} an Stelle {} ist keine der Basen A, C, G, T",
+                    b as char,
+                    i + 1
+                )
+            })
+        })
+        .collect()
+}
+
+fn index_build(
+    fasta: &std::path::Path,
+    out: &std::path::Path,
+    variante: &str,
+    wanted: &[String],
+    pruefen: u64,
+) -> Result<serde_json::Value> {
+    let variant = match variante {
+        "kompakt" => gc_index::Variant::Kompakt,
+        "schnell" => gc_index::Variant::Schnell,
+        other => anyhow::bail!("unbekannte Variante {other}: erlaubt sind kompakt und schnell"),
+    };
+    gc_log::input_file("referenz", fasta);
+
+    let mut st = gc_log::stage(
+        "index.fasta_lesen",
+        json!({ "pfad": fasta.display().to_string() }),
+    );
+    let mut reader = gc_io::fasta::open(fasta)?;
+    let mut record = gc_io::fasta::Record::default();
+    let mut reference = gc_index::Reference::new();
+    let mut seen = 0u64;
+    while reader.read_record(&mut record)? {
+        seen += 1;
+        if wanted.is_empty() || wanted.contains(&record.name) {
+            reference.push_contig(&record.name, &record.seq);
+        }
+        st.heartbeat(
+            5,
+            || json!({ "contigs_gelesen": seen, "basen_aufgenommen": reference.len() }),
+        );
+    }
+    for w in wanted {
+        if !reference.contigs.iter().any(|c| c.name == *w) {
+            gc_log::failure(gc_log::Failure {
+                code: "INDEX.CONTIG_FEHLT",
+                what: &format!("Contig {w} steht nicht in der Referenz"),
+                location: json!({ "datei": fasta.display().to_string(), "contigs_in_datei": seen }),
+                cause: "Name falsch geschrieben oder andere Referenz (z. B. 20 statt chr20)",
+                action: "Namen in der FASTA-Datei prüfen (Zeilen, die mit > beginnen)",
+            });
+            anyhow::bail!("Contig {w} nicht in {}", fasta.display());
+        }
+    }
+    st.finish(json!({ "contigs_in_datei": seen, "contigs_aufgenommen": reference.contigs.len(), "basen": reference.len() }));
+
+    let (index, report) = match gc_index::FmIndex::build(reference, variant, pruefen) {
+        Ok(v) => v,
+        Err(e) => {
+            let (cause, action) = match &e {
+                gc_index::BuildError::Empty => (
+                    "Die FASTA-Datei enthält keine Basen oder kein gewähltes Contig",
+                    "Datei und --contig prüfen",
+                ),
+                gc_index::BuildError::TooLong { .. } => (
+                    "Das ganze Humangenom braucht den blockweisen Bau, der in M2 noch folgt",
+                    "vorerst einzelne Chromosomen mit --contig wählen",
+                ),
+                _ => (
+                    "Fehler im Programm, nicht in den Eingabedaten",
+                    "Protokoll aufbewahren und melden",
+                ),
+            };
+            gc_log::failure(gc_log::Failure {
+                code: "INDEX.BAU_FEHLGESCHLAGEN",
+                what: &e.to_string(),
+                location: json!({ "datei": fasta.display().to_string() }),
+                cause,
+                action,
+            });
+            return Err(e.into());
+        }
+    };
+
+    let st = gc_log::stage(
+        "index.schreiben",
+        json!({ "pfad": out.display().to_string() }),
+    );
+    // Erst in eine Nachbardatei schreiben, dann umbenennen: ein Abbruch hinterlässt nie einen halben Index.
+    let mut tmp = out.as_os_str().to_owned();
+    tmp.push(".teil");
+    let tmp = PathBuf::from(tmp);
+    let file =
+        std::fs::File::create(&tmp).with_context(|| format!("{} nicht anlegbar", tmp.display()))?;
+    index.write(std::io::BufWriter::with_capacity(1 << 20, file))?;
+    std::fs::rename(&tmp, out).with_context(|| format!("{} → {}", tmp.display(), out.display()))?;
+    let bytes = std::fs::metadata(out)?.len();
+    st.finish(json!({ "bytes": bytes }));
+
+    Ok(json!({
+        "index": out.display().to_string(),
+        "variante": variant.name(),
+        "referenz_basen": index.reference().len(),
+        "contigs": index.reference().contigs.len(),
+        "n_strecken": index.reference().holes.len(),
+        "zeilen": index.rows(),
+        "basen_je_zaehlblock": index.occ_interval(),
+        "sa_abstand": index.sa_interval(),
+        "datei_bytes": bytes,
+        "bits_je_base": 8.0 * index.table_bytes() as f64 / index.reference().len() as f64,
+        "selbstpruefung": report.map(|r| json!({
+            "suffix_array": "vollständig geprüft",
+            "abfragen": r.queries,
+            "abfragen_mit_treffern": r.queries_with_hits,
+            "verglichene_fundstellen": r.occurrences_compared,
+            "abweichungen": 0,
+        })),
+    }))
 }
 
 fn stats_json(s: &Stats) -> serde_json::Value {
@@ -104,6 +273,93 @@ fn main() -> Result<()> {
                 Envelope::new("genome.bam-roundtrip.v1", result).to_json()?
             );
         }
+        Command::Index { command } => match command {
+            IndexCommand::Build {
+                fasta,
+                index,
+                variante,
+                contigs,
+                pruefen,
+                log_stufe,
+            } => {
+                let started = std::time::Instant::now();
+                let level = gc_log::Level::parse(&log_stufe)
+                    .with_context(|| format!("unbekannte Protokollstufe {log_stufe}"))?;
+                let mut log_path = index.as_os_str().to_owned();
+                log_path.push(".log.jsonl");
+                gc_log::init(gc_log::Config {
+                    tool: "index.build".to_string(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    level,
+                    jsonl: Some(PathBuf::from(log_path)),
+                    stderr: true,
+                })?;
+                gc_log::install_panic_hook();
+                gc_log::run_header(json!({
+                    "fasta": fasta.display().to_string(), "index": index.display().to_string(),
+                    "variante": variante, "contigs": contigs, "pruefen": pruefen, "log_stufe": log_stufe,
+                }));
+                match index_build(&fasta, &index, &variante, &contigs, pruefen) {
+                    Ok(mut result) => {
+                        result["seconds"] = json!(started.elapsed().as_secs_f64());
+                        result["lauf"] = json!(gc_log::run_id());
+                        gc_log::run_end(true, result.clone());
+                        println!(
+                            "{}",
+                            Envelope::new("genome.index-build.v1", result).to_json()?
+                        );
+                    }
+                    Err(e) => {
+                        gc_log::run_end(false, json!({ "fehler": format!("{e:#}") }));
+                        return Err(e);
+                    }
+                }
+            }
+            IndexCommand::Count { index, sequences } => {
+                use std::io::{BufRead, Write};
+                let fm = load_index(&index)?;
+                let input = std::io::BufReader::new(
+                    std::fs::File::open(&sequences)
+                        .with_context(|| format!("{} nicht lesbar", sequences.display()))?,
+                );
+                let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+                for (n, line) in input.lines().enumerate() {
+                    let line = line?;
+                    let seq = line.trim();
+                    if seq.is_empty() {
+                        continue;
+                    }
+                    let pattern = encode_sequence(seq)
+                        .with_context(|| format!("{}: Zeile {}", sequences.display(), n + 1))?;
+                    writeln!(out, "{seq}\t{}", fm.count(&pattern))?;
+                }
+                out.flush()?;
+            }
+            IndexCommand::Locate {
+                index,
+                sequence,
+                limit,
+            } => {
+                let fm = load_index(&index)?;
+                let pattern = encode_sequence(&sequence)?;
+                let hits: Vec<_> = fm
+                    .hits(&pattern, limit)
+                    .iter()
+                    .map(|h| {
+                        json!({
+                            "contig": fm.reference().contigs[h.contig as usize].name,
+                            "pos": h.pos + 1,
+                            "strang": if h.reverse { "-" } else { "+" },
+                        })
+                    })
+                    .collect();
+                let result = json!({ "fundstellen_roh": fm.count(&pattern), "treffer": hits });
+                println!(
+                    "{}",
+                    Envelope::new("genome.index-locate.v1", result).to_json()?
+                );
+            }
+        },
     }
     Ok(())
 }

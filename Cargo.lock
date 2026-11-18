@@ -222,12 +222,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "gc-index"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "gc-log",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "gc-io"
 version = "0.1.0"
 dependencies = [
  "flate2",
  "noodles",
  "thiserror",
+]
+
+[[package]]
+name = "gc-log"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
@@ -244,7 +261,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "gc-index",
  "gc-io",
+ "gc-log",
  "gc-schema",
  "serde_json",
 ]

@@ -13,7 +13,9 @@ Repositories mit DOI veröffentlicht (wie hla-wgs und brca12-wgs).
 
 | Crate | Aufgabe |
 |---|---|
-| `gc-io` | FASTQ, BAM, BGZF lesen und schreiben |
+| `gc-index` | Suffix-Array (SA-IS) und FM-Index über das Referenzgenom |
+| `gc-io` | FASTQ, FASTA, BAM, BGZF lesen und schreiben |
+| `gc-log` | Ereignisstrom und Lauf-Protokoll für alle Werkzeuge |
 | `gc-schema` | versionierte JSON-Ausgaben (`genome.<werkzeug>.vN`) |
 | `genome` | ein Programm: Werkzeuge, Arbeitsprozesse, später die Oberfläche |
 
@@ -29,6 +31,14 @@ Heute verfügbar (Meilenstein M1):
 ```bash
 genome fastq-check R1.fq.gz R2.fq.gz   # prüft Paare vollständig, Kennzahlen als JSON
 genome bam-roundtrip in.bam out.bam    # Rundreise-Test, parallele BGZF-Kompression
+```
+
+Meilenstein M2, Teil 1 (siehe [`docs/bench/M2-fm-index.md`](docs/bench/M2-fm-index.md)):
+
+```bash
+genome index build ref.fa ref.gcfm --contig chr20   # FM-Index mit Selbstprüfung und Lauf-Protokoll
+genome index locate ref.gcfm ACGTTGCA...            # Treffer mit Contig, Position, Strang
+genome index count ref.gcfm sequenzen.txt           # exakte Trefferzahl je Zeile
 ```
 
 ## Regeln

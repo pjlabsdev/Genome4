@@ -1,0 +1,26 @@
+{
+  "schema": "genome.index-build.v1",
+  "tool": "genome",
+  "version": "0.1.0",
+  "result": {
+    "basen_je_zaehlblock": 64,
+    "bits_je_base": 22.00000555519633,
+    "contigs": 1,
+    "datei_bytes": 177223097,
+    "index": "chr20.schnell.gcfm",
+    "lauf": "1a1eefe22e4-1f7a",
+    "n_strecken": 90,
+    "referenz_basen": 64444167,
+    "sa_abstand": 8,
+    "seconds": 37.094319739,
+    "selbstpruefung": {
+      "abfragen": 100000,
+      "abfragen_mit_treffern": 66218,
+      "abweichungen": 0,
+      "suffix_array": "vollständig geprüft",
+      "verglichene_fundstellen": 1803422
+    },
+    "variante": "schnell",
+    "zeilen": 128888335
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "referenz": "chr20.fa",
+  "contig": "chr20",
+  "abfragen": 1000000,
+  "abfragen_mit_treffern_bwa": 753451,
+  "abweichende_trefferzahlen": 65,
+  "beispiele": [
+    {
+      "abfrage": 10024,
+      "laenge": 53,
+      "bwa": 43,
+      "genome": 42
+    },
+    {
+      "abfrage": 10997,
+      "laenge": 47,
+      "bwa": 577,
+      "genome": 576
+    },
+    {
+      "abfrage": 22549,
+      "laenge": 33,
+      "bwa": 1952,
+      "genome": 1951
+    },
+    {
+      "abfrage": 52077,
+      "laenge": 25,
+      "bwa": 1550,
+      "genome": 1551
+    },
+    {
+      "abfrage": 80789,
+      "laenge": 52,
+      "bwa": 128,
+      "genome": 127
+    },
+    {
+      "abfrage": 89694,
+      "laenge": 42,
+      "bwa": 45,
+      "genome": 44
+    },
+    {
+      "abfrage": 109412,
+      "laenge": 69,
+      "bwa": 39,
+      "genome": 38
+    },
+    {
+      "abfrage": 122433,
+      "laenge": 24,
+      "bwa": 3702,
+      "genome": 3701
+    },
+    {
+      "abfrage": 128154,
+      "laenge": 31,
+      "bwa": 100,
+      "genome": 99
+    },
+    {
+      "abfrage": 138432,
+      "laenge": 32,
+      "bwa": 1954,
+      "genome": 1953
+    }
+  ],
+  "positionen_geprueft": 4988,
+  "positionen_abweichend": 0,
+  "bwa": "pybwa ?",
+  "sekunden_genome_count": 10.83,
+  "sekunden_bwa_aln": 9.91
+}
