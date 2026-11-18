@@ -13,3 +13,6 @@
 - Protokollierung über `gc-log` (Plan Abschnitt 15): jeder Lauf mit Laufkopf, Stufen, Entscheidungen
   und Abschluss; Fehler mit festem Code, Ort, Ursache und Handlungsempfehlung. Keine Sequenzen im Protokoll.
 - Jedes Werkzeug liefert seinen eigenen Bericht; der Gesamtbericht setzt nur zusammen (Plan Abschnitt 14).
+- Handbuch unter `docs/handbuch` gehört zum Code: jedes Werkzeug, Verfahren, Dateiformat und jeder
+  Protokollcode hat dort seine Seite, mit Quellen und Messung. Änderung am Programm und Handbuchseite
+  kommen im selben Commit; der Test `crates/genome/tests/handbuch.rs` prüft den Zusammenhang.

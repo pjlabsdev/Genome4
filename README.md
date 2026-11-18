@@ -7,6 +7,7 @@ Privates Repository. Einzelne Werkzeuge werden später als eigene öffentliche
 Repositories mit DOI veröffentlicht (wie hla-wgs und brca12-wgs).
 
 - Plan: [`docs/plan/Genome-4.0-Plan.md`](docs/plan/Genome-4.0-Plan.md)
+- Handbuch: [`docs/handbuch/README.md`](docs/handbuch/README.md)
 - Erster Schritt: FASTQ → BAM (`genome fq2bam`), Abschnitt 0 des Plans
 
 ## Aufbau
