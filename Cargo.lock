@@ -222,6 +222,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "gc-align"
+version = "0.1.0"
+dependencies = [
+ "gc-index",
+]
+
+[[package]]
 name = "gc-index"
 version = "0.1.0"
 dependencies = [
@@ -261,6 +268,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "gc-align",
  "gc-index",
  "gc-io",
  "gc-log",

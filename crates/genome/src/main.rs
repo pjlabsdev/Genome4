@@ -101,6 +101,145 @@ enum IndexCommand {
         #[arg(long)]
         pruefen: bool,
     },
+    /// Ketten aus Seeds für alle Reads einer FASTQ-Datei, als Zusammenfassung. Mit
+    /// `--wahrheit-im-namen` wird geprüft, ob die schwerste Kette am wahren Ort liegt; der Name
+    /// muss dann `contig:pos:strang:...` lauten (wie von `bench/m3/simulate_reads.py`).
+    Ketten {
+        index: PathBuf,
+        #[arg(long)]
+        fastq: PathBuf,
+        #[arg(long)]
+        wahrheit_im_namen: bool,
+        /// Je Treffer höchstens so viele Fundstellen orten (BWA-MEM: 500)
+        #[arg(long, default_value_t = 500)]
+        max_orte: u64,
+        /// Namen der Reads, bei denen kein Seed genau am wahren Ort liegt, in diese Datei schreiben
+        #[arg(long)]
+        fehlende: Option<PathBuf>,
+    },
+}
+
+/// Verkettet die Seeds aller Reads und fasst zusammen.
+fn index_ketten(
+    fm: &gc_index::FmIndex,
+    path: &std::path::Path,
+    truth_in_name: bool,
+    max_occ: u64,
+    missing_path: Option<&std::path::Path>,
+) -> Result<serde_json::Value> {
+    use std::io::Write;
+    let mut missing = match missing_path {
+        Some(p) => Some(std::io::BufWriter::new(
+            std::fs::File::create(p)
+                .with_context(|| format!("{} nicht schreibbar", p.display()))?,
+        )),
+        None => None,
+    };
+    let seed_opt = gc_align::SeedOptions {
+        max_occ,
+        ..gc_align::SeedOptions::default()
+    };
+    let chain_opt = gc_align::ChainOptions::default();
+    let l = fm.reference().len();
+    let mut reader = fastq::open(path)?;
+    let mut record = Record::default();
+    let started = std::time::Instant::now();
+    let (mut reads, mut seeds_total, mut chains_total, mut without) = (0u64, 0u64, 0u64, 0u64);
+    let (mut best_right, mut best_tied, mut any_right, mut with_truth) = (0u64, 0u64, 0u64, 0u64);
+    let mut seed_right = 0u64;
+    while reader.read_record(&mut record)? {
+        let read = encode_read(&record.seq);
+        let seeds = gc_align::collect_seeds(fm, &read, &seed_opt);
+        let chains = gc_align::chain_seeds(&seeds, l, &chain_opt);
+        reads += 1;
+        seeds_total += seeds.len() as u64;
+        chains_total += chains.len() as u64;
+        without += u64::from(chains.is_empty());
+        if !truth_in_name {
+            continue;
+        }
+        let name = String::from_utf8_lossy(&record.name).into_owned();
+        let mut parts = name.split(':');
+        let (Some(contig), Some(pos), Some(strand)) = (parts.next(), parts.next(), parts.next())
+        else {
+            anyhow::bail!("Read-Name {name} hat nicht die Form contig:pos:strang");
+        };
+        let pos: u64 = pos
+            .parse()
+            .with_context(|| format!("Position im Read-Namen {name}"))?;
+        let reverse = strand == "-";
+        with_truth += 1;
+        // Linkes Ende des Reads auf dem Vorwärtsstrang, wie es die Kette nahelegt.
+        let at_truth = |c: &gc_align::Chain| -> bool {
+            let s = c.seeds[0];
+            let start_text = s.rbeg as i64 - i64::from(s.qbeg);
+            let forward_start = if c.is_reverse(l) {
+                2 * l as i64 - start_text - read.len() as i64
+            } else {
+                start_text
+            };
+            let cg = &fm.reference().contigs[c.contig as usize];
+            cg.name == contig
+                && c.is_reverse(l) == reverse
+                && (forward_start - (cg.offset + pos - 1) as i64).abs() <= chain_opt.band_width
+        };
+        let top = chains
+            .iter()
+            .map(gc_align::Chain::weight)
+            .max()
+            .unwrap_or(0);
+        let top_chains: Vec<_> = chains.iter().filter(|c| c.weight() == top).collect();
+        let right_on_top = top_chains.iter().any(|c| at_truth(c));
+        best_right += u64::from(right_on_top && top_chains.len() == 1);
+        best_tied += u64::from(right_on_top && top_chains.len() > 1);
+        any_right += u64::from(chains.iter().any(at_truth));
+        // Unabhängig vom Verketten: liegt wenigstens ein Seed genau auf der wahren Diagonale?
+        let seed_at_truth = seeds.iter().any(|s| {
+            let one = gc_align::Chain {
+                contig: s.contig,
+                seeds: vec![*s],
+            };
+            let cg = &fm.reference().contigs[s.contig as usize];
+            let start_text = s.rbeg as i64 - i64::from(s.qbeg);
+            let forward_start = if one.is_reverse(l) {
+                2 * l as i64 - start_text - read.len() as i64
+            } else {
+                start_text
+            };
+            cg.name == contig
+                && one.is_reverse(l) == reverse
+                && forward_start == (cg.offset + pos - 1) as i64
+        });
+        seed_right += u64::from(seed_at_truth);
+        if let (false, Some(out)) = (seed_at_truth, missing.as_mut()) {
+            writeln!(out, "{name}\t{}", String::from_utf8_lossy(&record.seq))?;
+        }
+    }
+    if let Some(mut out) = missing {
+        out.flush()?;
+    }
+    let seconds = started.elapsed().as_secs_f64();
+    let mut result = json!({
+        "reads": reads,
+        "seeds": seeds_total,
+        "ketten": chains_total,
+        "reads_ohne_kette": without,
+        "sekunden": seconds,
+        "reads_je_sekunde": if seconds > 0.0 { reads as f64 / seconds } else { 0.0 },
+        "kerne": 1,
+        "max_orte": max_occ,
+    });
+    if truth_in_name {
+        result["wahrheit"] = json!({
+            "reads": with_truth,
+            "schwerste_kette_am_wahren_ort_eindeutig": best_right,
+            "schwerste_kette_am_wahren_ort_gleichstand": best_tied,
+            "irgendeine_kette_am_wahren_ort": any_right,
+            "irgendein_seed_genau_am_wahren_ort": seed_right,
+            "toleranz_basen": chain_opt.band_width,
+        });
+    }
+    Ok(result)
 }
 
 /// Read-Basen als Codes 0..3, alles andere als 4 (N).
@@ -514,6 +653,26 @@ fn main() -> Result<()> {
                 println!(
                     "{}",
                     Envelope::new("genome.index-locate.v1", result).to_json()?
+                );
+            }
+            IndexCommand::Ketten {
+                index,
+                fastq,
+                wahrheit_im_namen,
+                max_orte,
+                fehlende,
+            } => {
+                let fm = load_index(&index)?;
+                let result = index_ketten(
+                    &fm,
+                    &fastq,
+                    wahrheit_im_namen,
+                    max_orte,
+                    fehlende.as_deref(),
+                )?;
+                println!(
+                    "{}",
+                    Envelope::new("genome.index-ketten.v1", result).to_json()?
                 );
             }
             IndexCommand::Smem {
