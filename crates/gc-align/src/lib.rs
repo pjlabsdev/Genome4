@@ -5,8 +5,10 @@
 
 pub mod chain;
 pub mod extend;
+pub mod region;
 pub mod seed;
 
-pub use chain::{Chain, ChainOptions, chain_seeds};
+pub use chain::{Chain, ChainOptions, FilterOptions, chain_seeds, filter_chains};
 pub use extend::{Extension, Scoring, extend};
+pub use region::{Region, RegionOptions, chain_to_regions};
 pub use seed::{Seed, SeedOptions, collect_seeds};
