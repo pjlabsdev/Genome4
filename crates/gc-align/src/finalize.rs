@@ -2,7 +2,9 @@
 //! `mem_mark_primary_se`, `mem_approx_mapq_se`).
 
 use crate::extend::Scoring;
+use crate::global::gen_cigar;
 use crate::region::Region;
+use gc_index::FmIndex;
 
 /// Einstellungen. Die Vorgaben sind die von BWA-MEM.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,12 +35,18 @@ impl Default for FinalizeOptions {
 
 /// Entfernt doppelte Bereiche und ordnet nach fallendem Score, dann Lage. Von zwei Bereichen,
 /// die sich in Read und Referenz fast ganz überlappen, bleibt der mit dem höheren Score.
-///
-/// Noch nicht gebaut ist das Zusammenfügen zweier hintereinander liegender Bereiche über eine
-/// große Lücke (`mem_patch_reg`).
-pub fn sort_dedup(regions: &mut Vec<Region>, opt: &FinalizeOptions) {
+/// Zwei Bereiche, die hintereinander auf derselben Linie liegen und nur durch eine größere Lücke
+/// getrennt sind, werden zu einem zusammengefügt, wenn das gemeinsame Alignment gut genug ist
+/// ([`patch`]).
+pub fn sort_dedup(
+    regions: &mut Vec<Region>,
+    index: &FmIndex,
+    read: &[u8],
+    sc: &Scoring,
+    opt: &FinalizeOptions,
+) {
     if regions.len() > 1 {
-        regions.sort_by_key(|r| r.re);
+        crate::ksort::introsort(regions, |a, b| a.re < b.re);
         for i in 1..regions.len() {
             let p = regions[i];
             let prev = regions[i - 1];
@@ -48,6 +56,7 @@ pub fn sort_dedup(regions: &mut Vec<Region>, opt: &FinalizeOptions) {
             let mut j = i;
             while j > 0 {
                 j -= 1;
+                let p = regions[i];
                 let q = regions[j];
                 if p.contig != q.contig || p.rb >= q.re + opt.max_chain_gap {
                     break;
@@ -69,13 +78,76 @@ pub fn sort_dedup(regions: &mut Vec<Region>, opt: &FinalizeOptions) {
                         break;
                     }
                     regions[j].qe = regions[j].qb;
+                } else if let Some((score, w)) = (q.rb < p.rb)
+                    .then(|| patch(index, read, &q, &p, sc))
+                    .flatten()
+                {
+                    let p = &mut regions[i];
+                    p.seedcov = p.seedcov.max(q.seedcov);
+                    p.sub = p.sub.max(q.sub);
+                    p.qb = q.qb;
+                    p.rb = q.rb;
+                    p.score = score;
+                    p.truesc = score;
+                    p.w = w;
+                    regions[j].qe = regions[j].qb;
                 }
             }
         }
         regions.retain(|r| r.qe > r.qb);
-        regions.sort_by_key(|r| (std::cmp::Reverse(r.score), r.rb, r.qb));
+        crate::ksort::introsort(regions, |a, b| {
+            (std::cmp::Reverse(a.score), a.rb, a.qb) < (std::cmp::Reverse(b.score), b.rb, b.qb)
+        });
         regions.dedup_by_key(|r| (r.score, r.rb, r.qb));
     }
+}
+
+/// Größte erlaubte Abweichung der Steigung zwischen zwei Bereichen (bwa `PATCH_MAX_R_BW`).
+const PATCH_MAX_R_BW: f64 = 0.05;
+/// Das gemeinsame Alignment muss mindestens diesen Anteil des erwarteten Scores erreichen
+/// (bwa `PATCH_MIN_SC_RATIO`).
+const PATCH_MIN_SC_RATIO: f64 = 0.90;
+
+/// Prüft, ob `a` (links) und `b` (rechts) ein gemeinsames Alignment bilden (bwa `mem_patch_reg`).
+/// Liefert dann dessen Score und die benutzte Bandbreite.
+fn patch(index: &FmIndex, read: &[u8], a: &Region, b: &Region, sc: &Scoring) -> Option<(i32, i32)> {
+    let l = index.reference().len();
+    if a.rb < l && b.rb >= l {
+        return None;
+    }
+    if a.qb >= b.qb || a.qe >= b.qe || a.re >= b.re {
+        return None;
+    }
+    let dr = a.re as i64 - b.rb as i64;
+    let dq = i64::from(a.qe) - i64::from(b.qb);
+    let mut w = (dr - dq).abs();
+    let r = (dr as f64 / (b.re - a.rb) as f64 - dq as f64 / f64::from(b.qe - a.qb)).abs();
+    let band = i64::from(sc.band_width);
+    if a.re < b.rb || a.qe < b.qb {
+        if w > band << 1 || r >= PATCH_MAX_R_BW {
+            return None;
+        }
+    } else if w > band << 2 || r >= PATCH_MAX_R_BW * 2.0 {
+        return None;
+    }
+    w += i64::from(a.w) + i64::from(b.w);
+    let w = w.min(band << 2) as i32;
+    let g = gen_cigar(
+        index,
+        &read[a.qb as usize..b.qe as usize],
+        a.rb,
+        b.re,
+        sc,
+        w,
+    )?;
+    let sum = f64::from(b.score + a.score);
+    let q_s =
+        (f64::from(b.qe - a.qb) / f64::from((b.qe - b.qb) + (a.qe - a.qb)) * sum + 0.499) as i32;
+    let r_s = ((b.re - a.rb) as f64 / ((b.re - b.rb) + (a.re - a.rb)) as f64 * sum + 0.499) as i32;
+    if f64::from(g.score) / f64::from(q_s.max(r_s)) < PATCH_MIN_SC_RATIO {
+        return None;
+    }
+    Some((g.score, w))
 }
 
 /// Streuwert für die Reihenfolge gleich guter Bereiche (Thomas Wangs 64-Bit-Hash, wie in bwa).
@@ -111,7 +183,9 @@ pub fn mark_primary(regions: &mut [Region], read_id: u64, sc: &Scoring, opt: &Fi
             (hash_64(read_id.wrapping_add(i as u64)), r)
         })
         .collect();
-    keyed.sort_by_key(|(h, r)| (std::cmp::Reverse(r.score), *h));
+    crate::ksort::introsort(&mut keyed, |a, b| {
+        (std::cmp::Reverse(a.1.score), a.0) < (std::cmp::Reverse(b.1.score), b.0)
+    });
     for (slot, (_, r)) in regions.iter_mut().zip(keyed) {
         *slot = r;
     }
@@ -183,6 +257,28 @@ pub fn mapq(r: &Region, frac_rep: f32, sc: &Scoring, opt: &FinalizeOptions) -> u
 mod tests {
     use super::*;
 
+    fn xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    fn setup() -> (FmIndex, Vec<u8>) {
+        let mut rng = 0x00C0_FFEE_1234_5678_u64;
+        let s: Vec<u8> = (0..4000)
+            .map(|_| b"ACGT"[(xorshift(&mut rng) & 3) as usize])
+            .collect();
+        let mut r = gc_index::Reference::new();
+        r.push_contig("a", &s);
+        let index = FmIndex::build(r, gc_index::Variant::Kompakt, 0).unwrap().0;
+        let codes = s
+            .iter()
+            .map(|&b| gc_index::reference::encode(b).unwrap())
+            .collect();
+        (index, codes)
+    }
+
     fn region(rb: u64, qb: i32, len: i32, score: i32) -> Region {
         Region {
             rb,
@@ -208,12 +304,31 @@ mod tests {
             region(1000, 0, 100, 90),
             region(1000, 0, 100, 90), // genau gleich
             region(1001, 1, 99, 85),  // fast gleich, schlechter
-            region(5000, 0, 100, 70), // anderer Ort
+            region(3000, 0, 100, 70), // anderer Ort
             region(1000, 0, 40, 40), // kürzer, im ersten enthalten: bleibt (nur 40 % Überlappung des ersten ...)
         ];
-        sort_dedup(&mut v, &opt);
+        let (index, _) = setup();
+        sort_dedup(&mut v, &index, &[], &Scoring::default(), &opt);
         let got: Vec<(u64, i32)> = v.iter().map(|r| (r.rb, r.score)).collect();
-        assert_eq!(got, vec![(1000, 90), (5000, 70)]);
+        assert_eq!(got, vec![(1000, 90), (3000, 70)]);
+    }
+
+    #[test]
+    fn two_regions_across_a_small_gap_are_joined_and_across_a_large_one_are_not() {
+        let (index, codes) = setup();
+        let (sc, opt) = (Scoring::default(), FinalizeOptions::default());
+        // 3 Basen der Referenz fehlen im Read: 150 Treffer, eine Deletion der Länge 3.
+        let read: Vec<u8> = [&codes[500..570], &codes[573..653]].concat();
+        let mut v = vec![region(573, 70, 80, 80), region(500, 0, 70, 70)];
+        sort_dedup(&mut v, &index, &read, &sc, &opt);
+        assert_eq!(v.len(), 1);
+        assert_eq!((v[0].rb, v[0].re, v[0].qb, v[0].qe), (500, 653, 0, 150));
+        assert_eq!((v[0].score, v[0].truesc), (150 - 6 - 3, 150 - 6 - 3));
+        // 30 Basen fehlen: die Linien liegen zu weit auseinander, beide Bereiche bleiben.
+        let read: Vec<u8> = [&codes[500..570], &codes[600..680]].concat();
+        let mut v = vec![region(600, 70, 80, 80), region(500, 0, 70, 70)];
+        sort_dedup(&mut v, &index, &read, &sc, &opt);
+        assert_eq!(v.len(), 2);
     }
 
     #[test]

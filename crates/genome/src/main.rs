@@ -186,30 +186,32 @@ fn index_ketten(
         }
         regions_total += regions.len() as u64;
         // Bereinigen, primär bestimmen, MAPQ. Die Zählungen weiter unten sehen die bereinigte Liste.
-        gc_align::sort_dedup(&mut regions, &final_opt);
+        gc_align::sort_dedup(&mut regions, fm, &read, &region_opt.scoring, &final_opt);
         gc_align::mark_primary(&mut regions, reads, &region_opt.scoring, &final_opt);
         if let Some(r) = regions.first() {
             let q = gc_align::mapq(r, frac_rep, &region_opt.scoring, &final_opt);
             mapq_hist[q as usize] += 1;
             if let Some(out) = table.as_mut() {
                 let cg = &fm.reference().contigs[r.contig as usize];
-                let (strand, left) = if r.rb >= l {
-                    ('-', 2 * l - r.re)
-                } else {
-                    ('+', r.rb)
-                };
+                // Ort, CIGAR, NM und MD kommen aus dem fertigen Alignment, der Rest aus dem Bereich.
+                let aln = gc_align::region_to_alignment(fm, &read, r, &region_opt.scoring)
+                    .context("Bereich ohne gültiges Alignment")?;
                 writeln!(
                     out,
-                    "{}\t{}\t{}\t{strand}\t{q}\t{}\t{}\t{}\t{}\t{}\t{}\t{frac_rep:.4}",
+                    "{}\t{}\t{}\t{}\t{q}\t{}\t{}\t{}\t{}\t{}\t{}\t{frac_rep:.4}\t{}\t{}\t{}",
                     String::from_utf8_lossy(&record.name),
                     cg.name,
-                    left - cg.offset + 1,
+                    aln.pos + 1,
+                    if aln.is_reverse { '-' } else { '+' },
                     r.score,
                     r.truesc,
                     r.qb,
                     r.qe,
                     r.sub,
-                    r.sub_n
+                    r.sub_n,
+                    gc_align::cigar_string(&aln.cigar),
+                    aln.nm,
+                    aln.md
                 )?;
             }
         } else if let Some(out) = table.as_mut() {

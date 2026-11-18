@@ -19,3 +19,9 @@ noch einmal gegen die Originale geprüft.
 | Vasimuddin et al. 2019 | Vasimuddin M, Misra S, Li H, Aluru S. Efficient architecture-aware acceleration of BWA-MEM for multicore systems. IPDPS 2019. | BWA-MEM2 als Tempo-Vergleich |
 | Li et al. 2009 | Li H, Handsaker B, Wysoker A, et al. The Sequence Alignment/Map format and SAMtools. Bioinformatics 25:2078-2079, 2009. | SAM/BAM |
 | SAM-Spezifikation | The SAM/BAM Format Specification Working Group. Sequence Alignment/Map Format Specification. hts-specs. | BAM und BGZF im Einzelnen |
+
+## Quelltexte, an denen der Nachbau geprüft wird
+- **bwa** (Heng Li), `bwamem.c`, `ksw.c`, `ksort.h`, `kbtree.h`: MIT-Lizenz laut Dateikopf. Der
+  Nachbau in `gc-align` ist eigener Rust-Code; wo er dem Ablauf von bwa Schritt für Schritt
+  folgt, steht der Name der bwa-Funktion im Quelltext und auf der Verfahrensseite. Vor einer
+  Weitergabe von Genome 4.0 ist der MIT-Hinweis von bwa und klib beizulegen.
