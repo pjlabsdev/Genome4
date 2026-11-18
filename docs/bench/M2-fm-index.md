@@ -14,8 +14,8 @@ an einem Chromosom. Der Bau für das ganze Genom folgt als Teil 2 (siehe "Offen"
 
   | Variante | Zählstand | Suffix-Array-Stichprobe | Bits je Referenzbase | ganzes Genom (3,1 Mrd. Basen), gerechnet |
   |---|---|---|---|---|
-  | kompakt | alle 128 Basen | jede 32. Zeile | 12 | rund 4,7 GB |
-  | schnell | alle 64 Basen | jede 8. Zeile | 22 | rund 8,5 GB |
+  | kompakt | alle 128 Basen | jede 32. Zeile | 12,5 | rund 4,8 GB |
+  | schnell | alle 64 Basen | jede 8. Zeile | 24 | rund 9,3 GB |
 
   Die Zahlen enthalten beide Stränge und die gepackte Referenz. Die Größe für das ganze Genom ist
   hochgerechnet, nicht gemessen.
@@ -58,6 +58,10 @@ bwa kommt über das Python-Paket `pybwa` 2.3.2 (enthält den Original-C-Code von
 Arbeitsumgebung kein conda erreichbar ist. Ergebnisse und Lauf-Protokoll: `bench/m2/ergebnisse/`.
 
 ## Offen (Teil 2 von M2)
+
+Nachtrag: Der erste Punkt ist mit Formatversion 2 (40-Bit-Positionen, blockweiser Bau) erledigt,
+siehe [`M2-index-ganzes-genom.md`](M2-index-ganzes-genom.md). Die Tabelle oben zeigt bereits die
+Werte von Format 2; mit Format 1 (32-Bit-Positionen) waren es 12 und 22 Bits je Base.
 
 - **Ganzes Genom:** Die Positionen sind in dieser Formatversion 32 Bit breit; beide Stränge des
   Humangenoms (6,2 Mrd. Zeichen) passen nicht hinein. Außerdem bräuchte das volle Suffix-Array im
