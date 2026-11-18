@@ -6,7 +6,9 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+gc-index.workspace = true
 gc-io.workspace = true
+gc-log.workspace = true
 gc-schema.workspace = true
 clap.workspace = true
 anyhow.workspace = true

@@ -10,3 +10,6 @@
   mit vorher eingefrorener Version. Kein „besser“ ohne Messung.
 - Ausgaben als JSON mit Schema `genome.<werkzeug>.vN` über `gc-schema`.
 - Texte in Oberfläche und Berichten: keine Gedankenstriche (— / –).
+- Protokollierung über `gc-log` (Plan Abschnitt 15): jeder Lauf mit Laufkopf, Stufen, Entscheidungen
+  und Abschluss; Fehler mit festem Code, Ort, Ursache und Handlungsempfehlung. Keine Sequenzen im Protokoll.
+- Jedes Werkzeug liefert seinen eigenen Bericht; der Gesamtbericht setzt nur zusammen (Plan Abschnitt 14).

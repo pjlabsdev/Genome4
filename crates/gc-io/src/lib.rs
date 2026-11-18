@@ -5,5 +5,6 @@
 //! - [`bam`]: BAM mit paralleler BGZF-Kompression lesen und schreiben.
 
 pub mod bam;
+pub mod fasta;
 pub mod fastq;
 pub mod readname;

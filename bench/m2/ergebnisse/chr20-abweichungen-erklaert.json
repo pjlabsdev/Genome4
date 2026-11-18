@@ -1,0 +1,530 @@
+{
+ "abweichungen_roh": 65,
+ "davon_genome_gefiltert_gleich_wahrheit": 65,
+ "bwa_roh_ueber_wahrheit": 43,
+ "genome_roh_ueber_wahrheit": 24,
+ "bwa_roh_unter_wahrheit": 0,
+ "genome_roh_unter_wahrheit": 0,
+ "zeilen": [
+  {
+   "abfrage": 10024,
+   "laenge": 53,
+   "bwa_roh": 43,
+   "genome_roh": 42,
+   "genome_gefiltert": 42,
+   "wahrheit_fasta": 42
+  },
+  {
+   "abfrage": 10997,
+   "laenge": 47,
+   "bwa_roh": 577,
+   "genome_roh": 576,
+   "genome_gefiltert": 576,
+   "wahrheit_fasta": 576
+  },
+  {
+   "abfrage": 22549,
+   "laenge": 33,
+   "bwa_roh": 1952,
+   "genome_roh": 1951,
+   "genome_gefiltert": 1951,
+   "wahrheit_fasta": 1951
+  },
+  {
+   "abfrage": 52077,
+   "laenge": 25,
+   "bwa_roh": 1550,
+   "genome_roh": 1551,
+   "genome_gefiltert": 1550,
+   "wahrheit_fasta": 1550
+  },
+  {
+   "abfrage": 80789,
+   "laenge": 52,
+   "bwa_roh": 128,
+   "genome_roh": 127,
+   "genome_gefiltert": 127,
+   "wahrheit_fasta": 127
+  },
+  {
+   "abfrage": 89694,
+   "laenge": 42,
+   "bwa_roh": 45,
+   "genome_roh": 44,
+   "genome_gefiltert": 44,
+   "wahrheit_fasta": 44
+  },
+  {
+   "abfrage": 109412,
+   "laenge": 69,
+   "bwa_roh": 39,
+   "genome_roh": 38,
+   "genome_gefiltert": 38,
+   "wahrheit_fasta": 38
+  },
+  {
+   "abfrage": 122433,
+   "laenge": 24,
+   "bwa_roh": 3702,
+   "genome_roh": 3701,
+   "genome_gefiltert": 3701,
+   "wahrheit_fasta": 3701
+  },
+  {
+   "abfrage": 128154,
+   "laenge": 31,
+   "bwa_roh": 100,
+   "genome_roh": 99,
+   "genome_gefiltert": 99,
+   "wahrheit_fasta": 99
+  },
+  {
+   "abfrage": 138432,
+   "laenge": 32,
+   "bwa_roh": 1954,
+   "genome_roh": 1953,
+   "genome_gefiltert": 1953,
+   "wahrheit_fasta": 1953
+  },
+  {
+   "abfrage": 167820,
+   "laenge": 48,
+   "bwa_roh": 89,
+   "genome_roh": 88,
+   "genome_gefiltert": 88,
+   "wahrheit_fasta": 88
+  },
+  {
+   "abfrage": 176481,
+   "laenge": 55,
+   "bwa_roh": 558,
+   "genome_roh": 557,
+   "genome_gefiltert": 557,
+   "wahrheit_fasta": 557
+  },
+  {
+   "abfrage": 205835,
+   "laenge": 22,
+   "bwa_roh": 3,
+   "genome_roh": 4,
+   "genome_gefiltert": 3,
+   "wahrheit_fasta": 3
+  },
+  {
+   "abfrage": 208748,
+   "laenge": 20,
+   "bwa_roh": 96,
+   "genome_roh": 95,
+   "genome_gefiltert": 95,
+   "wahrheit_fasta": 95
+  },
+  {
+   "abfrage": 249758,
+   "laenge": 20,
+   "bwa_roh": 6601,
+   "genome_roh": 6600,
+   "genome_gefiltert": 6600,
+   "wahrheit_fasta": 6600
+  },
+  {
+   "abfrage": 261782,
+   "laenge": 61,
+   "bwa_roh": 562,
+   "genome_roh": 563,
+   "genome_gefiltert": 562,
+   "wahrheit_fasta": 562
+  },
+  {
+   "abfrage": 278601,
+   "laenge": 100,
+   "bwa_roh": 57,
+   "genome_roh": 56,
+   "genome_gefiltert": 56,
+   "wahrheit_fasta": 56
+  },
+  {
+   "abfrage": 294576,
+   "laenge": 24,
+   "bwa_roh": 1570,
+   "genome_roh": 1571,
+   "genome_gefiltert": 1570,
+   "wahrheit_fasta": 1570
+  },
+  {
+   "abfrage": 355578,
+   "laenge": 75,
+   "bwa_roh": 554,
+   "genome_roh": 555,
+   "genome_gefiltert": 554,
+   "wahrheit_fasta": 554
+  },
+  {
+   "abfrage": 376738,
+   "laenge": 23,
+   "bwa_roh": 3711,
+   "genome_roh": 3710,
+   "genome_gefiltert": 3710,
+   "wahrheit_fasta": 3710
+  },
+  {
+   "abfrage": 387243,
+   "laenge": 63,
+   "bwa_roh": 43,
+   "genome_roh": 42,
+   "genome_gefiltert": 42,
+   "wahrheit_fasta": 42
+  },
+  {
+   "abfrage": 392093,
+   "laenge": 24,
+   "bwa_roh": 1746,
+   "genome_roh": 1747,
+   "genome_gefiltert": 1745,
+   "wahrheit_fasta": 1745
+  },
+  {
+   "abfrage": 401616,
+   "laenge": 24,
+   "bwa_roh": 1736,
+   "genome_roh": 1737,
+   "genome_gefiltert": 1736,
+   "wahrheit_fasta": 1736
+  },
+  {
+   "abfrage": 449692,
+   "laenge": 74,
+   "bwa_roh": 552,
+   "genome_roh": 553,
+   "genome_gefiltert": 552,
+   "wahrheit_fasta": 552
+  },
+  {
+   "abfrage": 453482,
+   "laenge": 46,
+   "bwa_roh": 62,
+   "genome_roh": 61,
+   "genome_gefiltert": 61,
+   "wahrheit_fasta": 61
+  },
+  {
+   "abfrage": 461913,
+   "laenge": 28,
+   "bwa_roh": 581,
+   "genome_roh": 580,
+   "genome_gefiltert": 580,
+   "wahrheit_fasta": 580
+  },
+  {
+   "abfrage": 467625,
+   "laenge": 40,
+   "bwa_roh": 738,
+   "genome_roh": 739,
+   "genome_gefiltert": 738,
+   "wahrheit_fasta": 738
+  },
+  {
+   "abfrage": 471817,
+   "laenge": 21,
+   "bwa_roh": 1743,
+   "genome_roh": 1744,
+   "genome_gefiltert": 1743,
+   "wahrheit_fasta": 1743
+  },
+  {
+   "abfrage": 496678,
+   "laenge": 76,
+   "bwa_roh": 55,
+   "genome_roh": 54,
+   "genome_gefiltert": 54,
+   "wahrheit_fasta": 54
+  },
+  {
+   "abfrage": 500644,
+   "laenge": 36,
+   "bwa_roh": 1417,
+   "genome_roh": 1418,
+   "genome_gefiltert": 1417,
+   "wahrheit_fasta": 1417
+  },
+  {
+   "abfrage": 540756,
+   "laenge": 59,
+   "bwa_roh": 68,
+   "genome_roh": 67,
+   "genome_gefiltert": 67,
+   "wahrheit_fasta": 67
+  },
+  {
+   "abfrage": 566813,
+   "laenge": 60,
+   "bwa_roh": 71,
+   "genome_roh": 70,
+   "genome_gefiltert": 70,
+   "wahrheit_fasta": 70
+  },
+  {
+   "abfrage": 578230,
+   "laenge": 24,
+   "bwa_roh": 1736,
+   "genome_roh": 1737,
+   "genome_gefiltert": 1736,
+   "wahrheit_fasta": 1736
+  },
+  {
+   "abfrage": 584667,
+   "laenge": 21,
+   "bwa_roh": 0,
+   "genome_roh": 1,
+   "genome_gefiltert": 0,
+   "wahrheit_fasta": 0
+  },
+  {
+   "abfrage": 606349,
+   "laenge": 25,
+   "bwa_roh": 97,
+   "genome_roh": 96,
+   "genome_gefiltert": 96,
+   "wahrheit_fasta": 96
+  },
+  {
+   "abfrage": 623669,
+   "laenge": 26,
+   "bwa_roh": 626,
+   "genome_roh": 625,
+   "genome_gefiltert": 625,
+   "wahrheit_fasta": 625
+  },
+  {
+   "abfrage": 632926,
+   "laenge": 23,
+   "bwa_roh": 3711,
+   "genome_roh": 3710,
+   "genome_gefiltert": 3710,
+   "wahrheit_fasta": 3710
+  },
+  {
+   "abfrage": 634078,
+   "laenge": 22,
+   "bwa_roh": 6260,
+   "genome_roh": 6259,
+   "genome_gefiltert": 6259,
+   "wahrheit_fasta": 6259
+  },
+  {
+   "abfrage": 659254,
+   "laenge": 40,
+   "bwa_roh": 498,
+   "genome_roh": 499,
+   "genome_gefiltert": 498,
+   "wahrheit_fasta": 498
+  },
+  {
+   "abfrage": 667714,
+   "laenge": 23,
+   "bwa_roh": 3711,
+   "genome_roh": 3710,
+   "genome_gefiltert": 3710,
+   "wahrheit_fasta": 3710
+  },
+  {
+   "abfrage": 673070,
+   "laenge": 23,
+   "bwa_roh": 2040,
+   "genome_roh": 2039,
+   "genome_gefiltert": 2039,
+   "wahrheit_fasta": 2039
+  },
+  {
+   "abfrage": 690264,
+   "laenge": 89,
+   "bwa_roh": 15,
+   "genome_roh": 16,
+   "genome_gefiltert": 15,
+   "wahrheit_fasta": 15
+  },
+  {
+   "abfrage": 717524,
+   "laenge": 20,
+   "bwa_roh": 403,
+   "genome_roh": 402,
+   "genome_gefiltert": 402,
+   "wahrheit_fasta": 402
+  },
+  {
+   "abfrage": 731481,
+   "laenge": 24,
+   "bwa_roh": 21,
+   "genome_roh": 20,
+   "genome_gefiltert": 20,
+   "wahrheit_fasta": 20
+  },
+  {
+   "abfrage": 747479,
+   "laenge": 24,
+   "bwa_roh": 3,
+   "genome_roh": 4,
+   "genome_gefiltert": 3,
+   "wahrheit_fasta": 3
+  },
+  {
+   "abfrage": 760782,
+   "laenge": 53,
+   "bwa_roh": 43,
+   "genome_roh": 42,
+   "genome_gefiltert": 42,
+   "wahrheit_fasta": 42
+  },
+  {
+   "abfrage": 764893,
+   "laenge": 58,
+   "bwa_roh": 554,
+   "genome_roh": 553,
+   "genome_gefiltert": 553,
+   "wahrheit_fasta": 553
+  },
+  {
+   "abfrage": 770032,
+   "laenge": 50,
+   "bwa_roh": 573,
+   "genome_roh": 572,
+   "genome_gefiltert": 572,
+   "wahrheit_fasta": 572
+  },
+  {
+   "abfrage": 779925,
+   "laenge": 56,
+   "bwa_roh": 578,
+   "genome_roh": 579,
+   "genome_gefiltert": 578,
+   "wahrheit_fasta": 578
+  },
+  {
+   "abfrage": 787965,
+   "laenge": 34,
+   "bwa_roh": 1142,
+   "genome_roh": 1143,
+   "genome_gefiltert": 1142,
+   "wahrheit_fasta": 1142
+  },
+  {
+   "abfrage": 799984,
+   "laenge": 25,
+   "bwa_roh": 646,
+   "genome_roh": 645,
+   "genome_gefiltert": 645,
+   "wahrheit_fasta": 645
+  },
+  {
+   "abfrage": 819548,
+   "laenge": 20,
+   "bwa_roh": 1760,
+   "genome_roh": 1761,
+   "genome_gefiltert": 1759,
+   "wahrheit_fasta": 1759
+  },
+  {
+   "abfrage": 821186,
+   "laenge": 56,
+   "bwa_roh": 557,
+   "genome_roh": 556,
+   "genome_gefiltert": 556,
+   "wahrheit_fasta": 556
+  },
+  {
+   "abfrage": 826373,
+   "laenge": 67,
+   "bwa_roh": 2,
+   "genome_roh": 1,
+   "genome_gefiltert": 1,
+   "wahrheit_fasta": 1
+  },
+  {
+   "abfrage": 876413,
+   "laenge": 30,
+   "bwa_roh": 103,
+   "genome_roh": 102,
+   "genome_gefiltert": 102,
+   "wahrheit_fasta": 102
+  },
+  {
+   "abfrage": 892820,
+   "laenge": 33,
+   "bwa_roh": 98,
+   "genome_roh": 97,
+   "genome_gefiltert": 97,
+   "wahrheit_fasta": 97
+  },
+  {
+   "abfrage": 919018,
+   "laenge": 27,
+   "bwa_roh": 57,
+   "genome_roh": 56,
+   "genome_gefiltert": 56,
+   "wahrheit_fasta": 56
+  },
+  {
+   "abfrage": 942640,
+   "laenge": 25,
+   "bwa_roh": 1729,
+   "genome_roh": 1730,
+   "genome_gefiltert": 1729,
+   "wahrheit_fasta": 1729
+  },
+  {
+   "abfrage": 942934,
+   "laenge": 40,
+   "bwa_roh": 47,
+   "genome_roh": 46,
+   "genome_gefiltert": 46,
+   "wahrheit_fasta": 46
+  },
+  {
+   "abfrage": 943153,
+   "laenge": 20,
+   "bwa_roh": 6601,
+   "genome_roh": 6600,
+   "genome_gefiltert": 6600,
+   "wahrheit_fasta": 6600
+  },
+  {
+   "abfrage": 951924,
+   "laenge": 69,
+   "bwa_roh": 58,
+   "genome_roh": 57,
+   "genome_gefiltert": 57,
+   "wahrheit_fasta": 57
+  },
+  {
+   "abfrage": 957200,
+   "laenge": 78,
+   "bwa_roh": 74,
+   "genome_roh": 75,
+   "genome_gefiltert": 74,
+   "wahrheit_fasta": 74
+  },
+  {
+   "abfrage": 960842,
+   "laenge": 29,
+   "bwa_roh": 1710,
+   "genome_roh": 1711,
+   "genome_gefiltert": 1710,
+   "wahrheit_fasta": 1710
+  },
+  {
+   "abfrage": 964008,
+   "laenge": 78,
+   "bwa_roh": 551,
+   "genome_roh": 552,
+   "genome_gefiltert": 551,
+   "wahrheit_fasta": 551
+  },
+  {
+   "abfrage": 964934,
+   "laenge": 30,
+   "bwa_roh": 1180,
+   "genome_roh": 1181,
+   "genome_gefiltert": 1180,
+   "wahrheit_fasta": 1180
+  }
+ ]
+}
