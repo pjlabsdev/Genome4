@@ -1,0 +1,32 @@
+{
+  "schema": "genome.index-build.v1",
+  "tool": "genome",
+  "version": "0.1.0",
+  "result": {
+    "basen_je_zaehlblock": 128,
+    "bits_je_base": 12.50000006371127,
+    "contigs": 195,
+    "datei_bytes": 4843653489,
+    "index": "grch38.kompakt.gcfm",
+    "lauf": "1a1ef098508-2190",
+    "n_strecken": 1037,
+    "referenz_basen": 3099922541,
+    "sa_abstand": 32,
+    "seconds": 3518.383653485,
+    "selbstpruefung": {
+      "abfragen": 1000000,
+      "abfragen_mit_treffern": 687249,
+      "abweichungen": 0,
+      "art": "Stichproben gegen die Referenz",
+      "verglichene_fundstellen": 8050828
+    },
+    "variante": "kompakt",
+    "verfahren": "blockweise",
+    "vollpruefung": {
+      "abweichungen": 0,
+      "aussage": "BWT ergibt rückwärts Base für Base die Referenz, jede Suffix-Array-Stichprobe bestätigt",
+      "zeichen_geprueft": 6199845082
+    },
+    "zeilen": 6199845083
+  }
+}
