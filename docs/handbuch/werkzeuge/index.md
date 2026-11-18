@@ -14,6 +14,7 @@ genome index build <referenz.fa[.gz]> <index.gcfm> [Optionen]
 genome index locate <index.gcfm> <SEQUENZ> [--limit N]
 genome index count <index.gcfm> <sequenzen.txt>
 genome index smem <index.gcfm> --sequenz <SEQUENZ> | --fastq <reads.fq[.gz]> [Optionen]
+genome index ketten <index.gcfm> --fastq <reads.fq[.gz]> [--wahrheit-im-namen] [--max-orte N] [--fehlende DATEI]
 ```
 
 Optionen von `build`:
@@ -55,6 +56,10 @@ FASTA, unkomprimiert oder gzip. Groß- und Kleinbuchstaben gelten gleich. Alles 
   (1-basiert, einschließlich), `laenge`, `fundstellen_roh`, `orte`. Mit `--fastq`: `reads`, `basen`,
   `seeds`, `seed_basen`, `fundstellen_roh`, `reads_ohne_seed`, `sekunden`, `reads_je_sekunde`,
   `kerne`, `nachgeprueft`, `abweichungen`.
+- `ketten`: JSON, Schema `genome.index-ketten.v1`, Zusammenfassung über alle Reads: `reads`,
+  `seeds`, `ketten`, `reads_ohne_kette`, `sekunden`, `reads_je_sekunde`, `max_orte`; mit
+  `--wahrheit-im-namen` zusätzlich `wahrheit` (siehe [Seeds und Ketten](../verfahren/seeds-und-ketten.md)).
+  Ein Prüfbefehl für die Entwicklung; er entfällt, wenn `fq2bam` steht.
 - `count`: je Zeile `Sequenz<TAB>rohe Trefferzahl` (beide Stränge).
 
 Rohe Fundstellen und gefilterte Treffer unterscheiden sich: siehe [Glossar](../glossar.md).

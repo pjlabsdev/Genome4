@@ -1,0 +1,23 @@
+{
+  "schema": "genome.index-ketten.v1",
+  "tool": "genome",
+  "version": "0.1.0",
+  "result": {
+    "kerne": 1,
+    "ketten": 4848788,
+    "max_orte": 500,
+    "reads": 200000,
+    "reads_je_sekunde": 4594.198379968522,
+    "reads_ohne_kette": 0,
+    "seeds": 7844037,
+    "sekunden": 43.533165845,
+    "wahrheit": {
+      "irgendein_seed_genau_am_wahren_ort": 199926,
+      "irgendeine_kette_am_wahren_ort": 199909,
+      "reads": 200000,
+      "schwerste_kette_am_wahren_ort_eindeutig": 192211,
+      "schwerste_kette_am_wahren_ort_gleichstand": 6442,
+      "toleranz_basen": 100
+    }
+  }
+}

@@ -185,6 +185,40 @@ impl FmIndex {
         reach
     }
 
+    /// Dritte Seed-Runde von BWA-MEM (`bwt_seed_strategy1`): ab `x` nach rechts verlängern, bis
+    /// das Muster mehr als `min_len` Basen hat und seltener als `max_size`-mal vorkommt. Gibt die
+    /// Position zurück, an der die nächste Suche beginnt, und den Treffer, falls es einen gibt.
+    /// Anders als ein SMEM ist dieser Treffer nicht nach links verlängert und kann in einem
+    /// längeren Treffer liegen; er findet Orte, die ein längerer, anderswo passender Treffer
+    /// verdeckt.
+    pub fn seed_forward(
+        &self,
+        read: &[u8],
+        x: usize,
+        min_len: u32,
+        max_size: u64,
+    ) -> (usize, Option<Smem>) {
+        if x >= read.len() || read[x] > 3 {
+            return (x + 1, None);
+        }
+        let mut iv = self.bi_start(read[x]);
+        for (i, &c) in read.iter().enumerate().skip(x + 1) {
+            if c > 3 {
+                return (i + 1, None);
+            }
+            iv = self.extend_right(iv, c);
+            if iv.size < max_size && i - x >= min_len as usize {
+                let found = (iv.size > 0).then_some(Smem {
+                    start: x as u32,
+                    end: (i + 1) as u32,
+                    interval: iv,
+                });
+                return (i + 1, found);
+            }
+        }
+        (read.len(), None)
+    }
+
     /// Alle längsten exakten Treffer (SMEM) eines Reads mit mindestens `min_len` Basen,
     /// nach Anfang geordnet.
     pub fn smems(&self, read: &[u8], min_len: u32) -> Vec<Smem> {
@@ -361,6 +395,45 @@ mod tests {
             found += want.len();
         }
         assert!(found > 150);
+    }
+
+    #[test]
+    fn forward_seeds_match_naive_search() {
+        let index = genome(13, 1200);
+        let text = text_of(&index);
+        let mut rng = Rng(41);
+        let mut found = 0;
+        for round in 0..200 {
+            let read = read_from(&text, &mut rng);
+            let x = (rng.next() as usize) % read.len();
+            let (min_len, max_size) = (5 + (round % 7) as u32, 1 + (round % 4) as u64);
+            let got = index.seed_forward(&read, x, min_len, max_size);
+            // Vergleich: erstes Ende, an dem das Muster lang genug und selten genug ist.
+            let mut want = (read.len(), None);
+            if read[x] > 3 {
+                want = (x + 1, None);
+            } else {
+                for i in x + 1..read.len() {
+                    if read[i] > 3 {
+                        want = (i + 1, None);
+                        break;
+                    }
+                    let n = occurrences(&text, &read[x..=i]);
+                    if n < max_size && i - x >= min_len as usize {
+                        want = (i + 1, (n > 0).then_some((x, i + 1, n)));
+                        break;
+                    }
+                }
+            }
+            let got = (
+                got.0,
+                got.1
+                    .map(|m| (m.start as usize, m.end as usize, m.interval.size)),
+            );
+            assert_eq!(got, want, "Runde {round} x={x} Read {read:?}");
+            found += usize::from(want.1.is_some());
+        }
+        assert!(found > 40);
     }
 
     #[test]

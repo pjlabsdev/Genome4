@@ -1,0 +1,10 @@
+[package]
+name = "gc-align"
+description = "Genome 4.0: Reads ausrichten (Seeds, Ketten, Alignment) nach dem Verfahren von BWA-MEM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+gc-index.workspace = true
