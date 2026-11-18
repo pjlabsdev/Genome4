@@ -43,6 +43,7 @@ Auf keiner Seite steht eine Genauigkeits- oder Tempoaussage ohne Messung.
 - [Blockweiser Index-Bau für das ganze Genom](verfahren/blockweiser-bau.md)
 - [Seed-Suche: längste exakte Treffer (SMEM)](verfahren/seed-suche.md)
 - [Seeds sammeln, orten und zu Ketten verbinden](verfahren/seeds-und-ketten.md)
+- [Seed verlängern: Smith-Waterman mit Band](verfahren/seed-verlaengern.md)
 
 ### Formate
 - [Ergebnis-Hülle `genome.<werkzeug>.vN`](formate/ergebnis-huelle.md)

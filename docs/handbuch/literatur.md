@@ -13,6 +13,7 @@ noch einmal gegen die Originale geprüft.
 | Kärkkäinen 2007 | Kärkkäinen J. Fast BWT in small space by blockwise suffix sorting. Theoretical Computer Science 387, 2007. | blockweiser Bau |
 | Larsson & Sadakane 2007 | Larsson NJ, Sadakane K. Faster suffix sorting. Theoretical Computer Science 387, 2007. | Verdoppeln beim Sortieren der Stichprobe |
 | Li & Durbin 2009 | Li H, Durbin R. Fast and accurate short read alignment with Burrows-Wheeler transform. Bioinformatics 25:1754-1760, 2009. | BWA, Index über beide Stränge, `bwa aln` als Vergleich |
+| Gotoh 1982 | Gotoh O. An improved algorithm for matching biological sequences. Journal of Molecular Biology 162:705-708, 1982. | affine Lücken in quadratischer Zeit |
 | Li 2012 | Li H. Exploring single-sample SNP and INDEL calling with whole-genome de novo assembly. Bioinformatics 28:1838-1844, 2012. | FMD-Index: Suche in beide Richtungen mit einer BWT |
 | Li 2013 | Li H. Aligning sequence reads, clone sequences and assembly contigs with BWA-MEM. arXiv:1303.3997, 2013. | BWA-MEM (ab M3) |
 | Vasimuddin et al. 2019 | Vasimuddin M, Misra S, Li H, Aluru S. Efficient architecture-aware acceleration of BWA-MEM for multicore systems. IPDPS 2019. | BWA-MEM2 als Tempo-Vergleich |
