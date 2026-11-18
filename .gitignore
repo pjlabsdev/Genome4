@@ -1,0 +1,7 @@
+/target
+*.bam
+*.bai
+*.cram
+*.fq.gz
+*.fastq.gz
+.DS_Store
