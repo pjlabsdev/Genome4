@@ -153,16 +153,19 @@ pub fn global(query: &[u8], target: &[u8], sc: &Scoring, w: i32) -> (i32, Cigar)
 pub struct GlobalAlignment {
     pub score: i32,
     pub cigar: Cigar,
-    /// Editierabstand: ungleiche Basen plus Basen in Lücken (`NM`).
+    /// Editierabstand: ungleiche Basen plus Basen in Lücken (`NM`). Eine Deletion ganz am Anfang
+    /// oder Ende zählt nicht; sie wird später aus dem CIGAR entfernt.
     pub nm: u32,
+    /// Die Referenz an den abweichenden Stellen (`MD`), in Richtung des Vorwärtsstrangs.
+    pub md: String,
 }
 
 /// Alignment des Read-Stücks `query` gegen die Textpositionen `rb..re` (Vorwärtsstrang, dann
 /// reverses Komplement). `None`, wenn das Stück leer ist oder über die Strangmitte reicht.
 ///
 /// Liegt das Stück auf dem Gegenstrang, werden beide Folgen vor dem Alignment umgedreht, damit
-/// Lücken in Wiederholungen auf dem Vorwärtsstrang so weit links wie möglich stehen. Das CIGAR
-/// ist dann schon in der Richtung des Vorwärtsstrangs.
+/// Lücken in Wiederholungen auf dem Vorwärtsstrang so weit links wie möglich stehen. CIGAR und
+/// `MD` sind dann schon in der Richtung des Vorwärtsstrangs.
 pub fn gen_cigar(
     index: &FmIndex,
     query: &[u8],
@@ -171,13 +174,15 @@ pub fn gen_cigar(
     sc: &Scoring,
     band: i32,
 ) -> Option<GlobalAlignment> {
+    use std::fmt::Write;
     let l = index.reference().len();
     if query.is_empty() || rb >= re || (rb < l && re > l) || re > 2 * l {
         return None;
     }
     let mut rseq: Vec<u8> = (rb..re).map(|p| index.text_base(p)).collect();
     let mut q = query.to_vec();
-    if rb >= l {
+    let reverse = rb >= l;
+    if reverse {
         q.reverse();
         rseq.reverse();
     }
@@ -193,27 +198,51 @@ pub fn gen_cigar(
         let w = ((max_gap + diff + 1) >> 1).min(band).max(diff + 3);
         global(&q, &rseq, sc, w)
     };
-    let (mut x, mut y, mut nm) = (0usize, 0usize, 0u32);
-    for &(op, n) in &cigar {
+    // Umgedreht auf dem Gegenstrang heißt: Komplement des Vorwärtsstrangs.
+    let letters: &[u8; 5] = if reverse { b"TGCAN" } else { b"ACGTN" };
+    let letter = |code: u8| letters[usize::from(code.min(4))] as char;
+    let (mut x, mut y, mut run) = (0usize, 0usize, 0u32);
+    let (mut mismatches, mut gaps) = (0u32, 0u32);
+    let mut md = String::new();
+    for (k, &(op, n)) in cigar.iter().enumerate() {
         let n_us = n as usize;
         match op {
             Op::Match => {
-                nm += (0..n_us).filter(|&k| q[x + k] != rseq[y + k]).count() as u32;
+                for i in 0..n_us {
+                    if q[x + i] != rseq[y + i] {
+                        let _ = write!(md, "{run}{}", letter(rseq[y + i]));
+                        mismatches += 1;
+                        run = 0;
+                    } else {
+                        run += 1;
+                    }
+                }
                 x += n_us;
+                y += n_us;
+            }
+            Op::Del => {
+                if k > 0 && k < cigar.len() - 1 {
+                    let _ = write!(md, "{run}^");
+                    md.extend(rseq[y..y + n_us].iter().map(|&b| letter(b)));
+                    run = 0;
+                    gaps += n;
+                }
                 y += n_us;
             }
             Op::Ins => {
-                nm += n;
                 x += n_us;
-            }
-            Op::Del => {
-                nm += n;
-                y += n_us;
+                gaps += n;
             }
             Op::SoftClip => x += n_us,
         }
     }
-    Some(GlobalAlignment { score, cigar, nm })
+    let _ = write!(md, "{run}");
+    Some(GlobalAlignment {
+        score,
+        cigar,
+        nm: mismatches + gaps,
+        md,
+    })
 }
 
 #[cfg(test)]

@@ -16,8 +16,10 @@ prefix, fastq, ours_path, out_path = sys.argv[1:5]
 # Nach Reihenfolge zuordnen, nicht nach Namen: Namen können doppelt vorkommen.
 ours = []
 for line in open(ours_path):
-    name, contig, pos, strand, mapq, score, truesc, qb, qe = line.rstrip("\n").split("\t")[:9]
-    ours.append((contig, int(pos), strand, int(mapq), int(score), int(truesc), int(qb), int(qe), name))
+    f = line.rstrip("\n").split("\t")
+    name, contig, pos, strand, mapq, score, truesc, qb, qe = f[:9]
+    cigar, nm, md = (f[12], int(f[13]), f[14]) if len(f) >= 15 else (None, None, None)
+    ours.append((contig, int(pos), strand, int(mapq), int(score), int(truesc), int(qb), int(qe), name, cigar, nm, md))
 
 queries = list(pysam.FastxFile(fastq))
 t = time.time()
@@ -27,11 +29,14 @@ bwa_seconds = time.time() - t
 
 stats = dict(reads=0, gleich_ort_strang=0, gleich_auch_mapq=0, gleich_auch_score=0,
              anderer_ort_beide_mapq0=0, anderer_ort_sonst=0, nur_wir_ohne=0, nur_bwa_ohne=0,
-             mapq_abweichung_bei_gleichem_ort=0, score_abweichung_bei_gleichem_ort=0)
+             mapq_abweichung_bei_gleichem_ort=0, score_abweichung_bei_gleichem_ort=0,
+             gleich_auch_cigar=0, gleich_auch_nm=0, gleich_auch_md=0, reads_mit_luecke_bei_bwa=0,
+             davon_cigar_gleich=0)
 mapq_diffs, examples = {}, []
 assert len(ours) == len(queries), "Tabelle und FASTQ haben verschieden viele Reads"
 for q, recs, o in zip(queries, results, ours):
     assert o[8] == q.name, f"Reihenfolge weicht ab bei {q.name}"
+    o_cigar, o_nm, o_md = o[9:12]
     o = o[:8]
     stats["reads"] += 1
     prim = [r for r in recs if not r.is_secondary and not r.is_supplementary]
@@ -55,6 +60,16 @@ for q, recs, o in zip(queries, results, ours):
             if len(examples) < 40:
                 examples.append(dict(read=q.name, art="mapq", bwa=b.mapping_quality, wir=o[3],
                                      bwa_as=b.get_tag("AS"), bwa_xs=b.get_tag("XS")))
+        if o_cigar is not None:
+            gap = any(op in (1, 2) for op, _ in b.cigartuples)
+            stats["reads_mit_luecke_bei_bwa"] += int(gap)
+            if b.cigarstring == o_cigar:
+                stats["gleich_auch_cigar"] += 1
+                stats["davon_cigar_gleich"] += int(gap)
+            elif len(examples) < 40:
+                examples.append(dict(read=q.name, art="cigar", bwa=b.cigarstring, wir=o_cigar))
+            stats["gleich_auch_nm"] += int(b.get_tag("NM") == o_nm)
+            stats["gleich_auch_md"] += int(b.get_tag("MD") == o_md)
         if b.get_tag("AS") == o[4]:
             stats["gleich_auch_score"] += 1
         else:
