@@ -3,6 +3,7 @@ name = "gc-log"
 description = "Genome 4.0: Ereignisstrom und Lauf-Protokoll für alle Werkzeuge"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]

@@ -3,6 +3,7 @@ name = "gc-io"
 description = "Genome 4.0: Lesen und Schreiben von FASTQ, BAM und BGZF"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]

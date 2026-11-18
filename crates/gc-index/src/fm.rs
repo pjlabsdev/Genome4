@@ -13,7 +13,9 @@ use crate::reference::{Contig, Hole, Packed, Reference};
 use crate::sais;
 
 const MAGIC: &[u8; 4] = b"GCFM";
-const FORMAT: u32 = 1;
+const FORMAT: u32 = 2;
+/// Bytes je Suffix-Array-Stichprobe (40-Bit-Positionen, reicht für 1 Billion Zeichen).
+const SA_BYTES: usize = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Variant {
@@ -84,7 +86,8 @@ pub struct FmIndex {
     sa_interval: u32,
     /// Je Block: 4 Zählstände, dann `occ_interval / 32` Wörter BWT.
     blocks: Vec<u64>,
-    sa_samples: Vec<u32>,
+    /// Stichproben des Suffix-Arrays, je `SA_BYTES` Bytes little-endian.
+    sa_samples: Vec<u8>,
     reference: Reference,
 }
 
@@ -109,10 +112,92 @@ fn count_in_word(w: u64, c: u8, r: u32) -> u64 {
     u64::from(m.count_ones())
 }
 
-struct Rng(u64);
+/// Zeichen vor Textposition 0: das Endzeichen.
+pub(crate) const SENTINEL: u8 = 4;
+
+/// Nimmt die BWT Zeile für Zeile entgegen und baut daraus die Tabellen des Index.
+pub(crate) struct Builder {
+    rows: u64,
+    row: u64,
+    primary: u64,
+    occ_interval: u32,
+    sa_interval: u32,
+    stride: usize,
+    blocks: Vec<u64>,
+    counts: [u64; 4],
+    sa_samples: Vec<u8>,
+}
+
+impl Builder {
+    pub(crate) fn new(rows: u64, occ_interval: u32, sa_interval: u32) -> Self {
+        let stride = 4 + (occ_interval / 32) as usize;
+        let n_blocks = (rows / u64::from(occ_interval)) as usize + 1;
+        Builder {
+            rows,
+            row: 0,
+            primary: 0,
+            occ_interval,
+            sa_interval,
+            stride,
+            blocks: vec![0u64; n_blocks * stride],
+            counts: [0; 4],
+            sa_samples: Vec::with_capacity(
+                rows.div_ceil(u64::from(sa_interval)) as usize * SA_BYTES,
+            ),
+        }
+    }
+
+    /// Nächste Zeile: `prev` ist die Base vor dem Suffix (oder `SENTINEL`), `pos` seine Textposition.
+    #[inline]
+    pub(crate) fn push(&mut self, prev: u8, pos: u64) {
+        let interval = u64::from(self.occ_interval);
+        let within = (self.row % interval) as usize;
+        let base = (self.row / interval) as usize * self.stride;
+        if within == 0 {
+            self.blocks[base..base + 4].copy_from_slice(&self.counts);
+        }
+        if prev == SENTINEL {
+            self.primary = self.row; // als Code 0 gespeichert, beim Zählen abgezogen
+        } else {
+            self.counts[prev as usize] += 1;
+            self.blocks[base + 4 + within / 32] |= u64::from(prev) << (2 * (within % 32));
+        }
+        if self.row.is_multiple_of(u64::from(self.sa_interval)) {
+            self.sa_samples
+                .extend_from_slice(&pos.to_le_bytes()[..SA_BYTES]);
+        }
+        self.row += 1;
+    }
+
+    pub(crate) fn finish(mut self, reference: Reference) -> FmIndex {
+        assert_eq!(self.row, self.rows, "Zeilenzahl der BWT stimmt nicht");
+        if self.rows.is_multiple_of(u64::from(self.occ_interval)) {
+            let base = self.blocks.len() - self.stride;
+            self.blocks[base..base + 4].copy_from_slice(&self.counts);
+        }
+        let mut c_before = [0u64; 4];
+        let mut sum = 1; // das Endzeichen steht in Zeile 0
+        for (before, count) in c_before.iter_mut().zip(self.counts) {
+            *before = sum;
+            sum += count;
+        }
+        FmIndex {
+            rows: self.rows,
+            primary: self.primary,
+            c_before,
+            occ_interval: self.occ_interval,
+            sa_interval: self.sa_interval,
+            blocks: self.blocks,
+            sa_samples: self.sa_samples,
+            reference,
+        }
+    }
+}
+
+pub(crate) struct Rng(pub(crate) u64);
 
 impl Rng {
-    fn next(&mut self) -> u64 {
+    pub(crate) fn next(&mut self) -> u64 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
@@ -209,54 +294,20 @@ impl FmIndex {
         }
 
         let st = gc_log::stage("index.bwt", json!({}));
-        let rows = sa.len() as u64;
-        let words_per_block = (occ_interval / 32) as usize;
-        let stride = 4 + words_per_block;
-        let n_blocks = (rows / u64::from(occ_interval)) as usize + 1;
-        let mut blocks = vec![0u64; n_blocks * stride];
-        let mut counts = [0u64; 4];
-        let mut primary = 0u64;
-        for (i, &p) in sa.iter().enumerate() {
-            let within = i % occ_interval as usize;
-            let base = i / occ_interval as usize * stride;
-            if within == 0 {
-                blocks[base..base + 4].copy_from_slice(&counts);
-            }
-            if p == 0 {
-                primary = i as u64; // Endzeichen: als Code 0 gespeichert, beim Zählen abgezogen
-                continue;
-            }
-            let code = text[p as usize - 1] - 1;
-            counts[code as usize] += 1;
-            blocks[base + 4 + within / 32] |= u64::from(code) << (2 * (within % 32));
+        let mut builder = Builder::new(sa.len() as u64, occ_interval, sa_interval);
+        for &p in &sa {
+            let prev = if p == 0 {
+                SENTINEL
+            } else {
+                text[p as usize - 1] - 1
+            };
+            builder.push(prev, u64::from(p));
         }
-        if rows.is_multiple_of(u64::from(occ_interval)) {
-            let base = (n_blocks - 1) * stride;
-            blocks[base..base + 4].copy_from_slice(&counts);
-        }
-        let mut c_before = [0u64; 4];
-        let mut sum = 1; // das Endzeichen steht in Zeile 0
-        for c in 0..4 {
-            c_before[c] = sum;
-            sum += counts[c];
-        }
-        let sa_samples: Vec<u32> = sa.iter().step_by(sa_interval as usize).copied().collect();
+        let index = builder.finish(reference);
         st.finish(json!({
-            "zeilen": rows, "primaerzeile": primary,
-            "a": counts[0], "c": counts[1], "g": counts[2], "t": counts[3],
-            "sa_stichproben": sa_samples.len(),
+            "zeilen": index.rows, "primaerzeile": index.primary,
+            "sa_stichproben": index.sa_samples.len() / SA_BYTES,
         }));
-
-        let index = FmIndex {
-            rows,
-            primary,
-            c_before,
-            occ_interval,
-            sa_interval,
-            blocks,
-            sa_samples,
-            reference,
-        };
 
         let report = if check_queries > 0 {
             let st = gc_log::stage("index.selbstpruefung", json!({ "abfragen": check_queries }));
@@ -353,8 +404,18 @@ impl FmIndex {
 
     /// Speicherbedarf der Tabellen in Bytes (ohne Contig-Namen).
     pub fn table_bytes(&self) -> u64 {
-        (self.blocks.len() * 8 + self.sa_samples.len() * 4 + self.reference.forward.words.len() * 8)
+        (self.blocks.len() * 8 + self.sa_samples.len() + self.reference.forward.words.len() * 8)
             as u64
+    }
+
+    #[inline]
+    fn sa_sample(&self, i: usize) -> u64 {
+        let b = &self.sa_samples[i * SA_BYTES..(i + 1) * SA_BYTES];
+        u64::from(b[0])
+            | u64::from(b[1]) << 8
+            | u64::from(b[2]) << 16
+            | u64::from(b[3]) << 24
+            | u64::from(b[4]) << 32
     }
 
     /// Anzahl der Base `c` in den BWT-Zeilen `0..i`.
@@ -417,12 +478,115 @@ impl FmIndex {
                 return steps;
             }
             if row.is_multiple_of(interval) {
-                return u64::from(self.sa_samples[(row / interval) as usize]) + steps;
+                return self.sa_sample((row / interval) as usize) + steps;
             }
             let c = self.bwt(row);
             row = self.c_before[c as usize] + self.occ(c, row);
             steps += 1;
         }
+    }
+
+    /// Base an Textposition `p` (Vorwärtsstrang, dann reverses Komplement), aus der Referenz gelesen.
+    #[inline]
+    fn text_base(&self, p: u64) -> u8 {
+        let l = self.reference.len();
+        if p < l {
+            self.reference.forward.get(p)
+        } else {
+            3 - self.reference.forward.get(2 * l - 1 - p)
+        }
+    }
+
+    /// Vollprüfung ohne Suffix-Array: geht die BWT einmal rückwärts durch. Jeder Schritt muss die
+    /// nächste Base der Referenz liefern (von hinten nach vorn, beide Stränge), jede Stichprobe
+    /// des Suffix-Arrays muss die erreichte Textposition nennen, und nach genau so vielen Schritten,
+    /// wie der Text Zeichen hat, muss die Primärzeile erreicht sein. `progress` wird gelegentlich
+    /// mit der Zahl der geprüften Zeichen gerufen.
+    pub fn verify_by_inversion(&self, mut progress: impl FnMut(u64)) -> Result<u64, String> {
+        let n = self.rows - 1;
+        let sa_interval = u64::from(self.sa_interval);
+        let (mut row, mut p) = (0u64, n);
+        if self.sa_sample(0) != n {
+            return Err(format!(
+                "Zeile 0: Stichprobe {} statt {n}",
+                self.sa_sample(0)
+            ));
+        }
+        while p > 0 {
+            if row == self.primary {
+                return Err(format!(
+                    "Primärzeile zu früh erreicht, noch {p} Zeichen offen"
+                ));
+            }
+            let c = self.bwt(row);
+            p -= 1;
+            if c != self.text_base(p) {
+                return Err(format!(
+                    "Textposition {p}: BWT liefert Base {c}, Referenz {}",
+                    self.text_base(p)
+                ));
+            }
+            row = self.c_before[c as usize] + self.occ(c, row);
+            if row.is_multiple_of(sa_interval) && self.sa_sample((row / sa_interval) as usize) != p
+            {
+                return Err(format!(
+                    "Zeile {row}: Stichprobe {} statt {p}",
+                    self.sa_sample((row / sa_interval) as usize)
+                ));
+            }
+            if p.is_multiple_of(1 << 24) {
+                progress(n - p);
+            }
+        }
+        if row != self.primary {
+            return Err(format!(
+                "am Textanfang in Zeile {row}, Primärzeile ist {}",
+                self.primary
+            ));
+        }
+        Ok(n)
+    }
+
+    /// Stichprobenprüfung ohne Suffix-Array: Stücke aus der Referenz müssen an ihrer Herkunft
+    /// gefunden werden, und jede geortete Fundstelle muss in der Referenz tatsächlich das Muster tragen.
+    pub fn check_against_reference(&self, queries: u64) -> Result<CheckReport, String> {
+        let n = self.rows - 1;
+        let mut rng = Rng(0x5EED_1234_ABCD_EF01);
+        let mut report = CheckReport::default();
+        let mut pattern = Vec::new();
+        for q in 0..queries {
+            let len = (12 + rng.next() % 139).min(n);
+            let start = rng.next() % (n - len + 1);
+            pattern.clear();
+            pattern.extend((start..start + len).map(|p| self.text_base(p)));
+            if q % 3 == 2 {
+                let at = (rng.next() % len) as usize;
+                pattern[at] = (pattern[at] + 1 + (rng.next() % 3) as u8) & 3;
+            }
+            let (lo, hi) = self.interval(&pattern);
+            report.queries += 1;
+            if hi > lo {
+                report.queries_with_hits += 1;
+            }
+            let mut found_origin = q % 3 == 2;
+            for row in lo..hi.min(lo + 200) {
+                let at = self.locate(row);
+                if at + len > n || (0..len).any(|i| self.text_base(at + i) != pattern[i as usize]) {
+                    return Err(format!(
+                        "Abfrage {q}: Zeile {row} ortet {at}, dort steht das Muster nicht"
+                    ));
+                }
+                found_origin |= at == start;
+                report.occurrences_compared += 1;
+            }
+            if !found_origin && hi - lo <= 200 {
+                return Err(format!(
+                    "Abfrage {q}: Herkunft {start} (Länge {len}) nicht unter den {} Fundstellen",
+                    hi - lo
+                ));
+            }
+        }
+        Ok(report)
     }
 
     /// Wandelt eine Textposition in einen Treffer im Genom um. `None`, wenn die Fundstelle über
@@ -495,14 +659,9 @@ impl FmIndex {
         w.write_all(&r.forward.len.to_le_bytes())?;
         write_u64s(&mut w, &r.forward.words)?;
         write_u64s(&mut w, &self.blocks)?;
-        w.write_all(&(self.sa_samples.len() as u64).to_le_bytes())?;
-        let mut buf = Vec::with_capacity(1 << 16);
-        for chunk in self.sa_samples.chunks(1 << 14) {
-            buf.clear();
-            for v in chunk {
-                buf.extend_from_slice(&v.to_le_bytes());
-            }
-            w.write_all(&buf)?;
+        w.write_all(&((self.sa_samples.len() / SA_BYTES) as u64).to_le_bytes())?;
+        for chunk in self.sa_samples.chunks(1 << 16) {
+            w.write_all(chunk)?;
         }
         let crc = w.crc.sum();
         w.inner.write_all(&crc.to_le_bytes())?;
@@ -535,7 +694,7 @@ impl FmIndex {
         {
             return Err(bad("unzulässige Abstände"));
         }
-        if rows == 0 || rows > sais::MAX_LEN as u64 || primary >= rows {
+        if rows == 0 || rows >= 1 << 40 || primary >= rows {
             return Err(bad("unzulässige Zeilenzahl"));
         }
         let mut c_before = [0u64; 4];
@@ -583,20 +742,9 @@ impl FmIndex {
         if n_samples != rows.div_ceil(sa_interval) {
             return Err(bad("Zahl der Suffix-Array-Stichproben passt nicht"));
         }
-        let mut sa_samples = Vec::with_capacity(n_samples as usize);
-        let mut buf = vec![0u8; 1 << 16];
-        let mut left = n_samples as usize;
-        while left > 0 {
-            let take = left.min(buf.len() / 4);
-            r.read_exact(&mut buf[..take * 4])?;
-            sa_samples.extend(
-                buf[..take * 4]
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|b| u32::from_le_bytes(*b)),
-            );
-            left -= take;
+        let mut sa_samples = vec![0u8; n_samples as usize * SA_BYTES];
+        for chunk in sa_samples.chunks_mut(1 << 16) {
+            r.read_exact(chunk)?;
         }
         let computed = r.crc.sum();
         let mut stored = [0u8; 4];
@@ -862,6 +1010,24 @@ mod tests {
                 .to_string()
                 .contains("Kennung")
         );
+    }
+
+    #[test]
+    fn inversion_check_passes_and_detects_damage() {
+        let contigs = random_genome(21);
+        for variant in [Variant::Kompakt, Variant::Schnell] {
+            let mut index = build(&contigs, variant);
+            assert_eq!(index.verify_by_inversion(|_| {}), Ok(index.rows() - 1));
+            assert!(index.check_against_reference(500).is_ok());
+            // eine Base der BWT ändern
+            let stride = 4 + (index.occ_interval() / 32) as usize;
+            index.blocks[3 * stride + 4] ^= 1 << 10;
+            assert!(index.verify_by_inversion(|_| {}).is_err());
+            index.blocks[3 * stride + 4] ^= 1 << 10;
+            // eine Stichprobe ändern
+            index.sa_samples[SA_BYTES * 17] ^= 1;
+            assert!(index.verify_by_inversion(|_| {}).is_err());
+        }
     }
 
     #[test]
