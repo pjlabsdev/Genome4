@@ -1,0 +1,19 @@
+{
+  "schema": "genome.index-smem.v1",
+  "tool": "genome",
+  "version": "0.1.0",
+  "result": {
+    "abweichungen": 0,
+    "basen": 30000000,
+    "fundstellen_roh": 4098313,
+    "kerne": 1,
+    "min_laenge": 19,
+    "nachgeprueft": 471822,
+    "reads": 200000,
+    "reads_je_sekunde": 10225.925607467689,
+    "reads_ohne_seed": 0,
+    "seed_basen": 31236818,
+    "seeds": 471822,
+    "sekunden": 19.558131721
+  }
+}
