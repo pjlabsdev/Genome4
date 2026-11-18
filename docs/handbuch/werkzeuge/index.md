@@ -60,7 +60,8 @@ FASTA, unkomprimiert oder gzip. Groß- und Kleinbuchstaben gelten gleich. Alles 
   `seeds`, `ketten`, `ketten_nach_filter`, `bereiche`, `reads_ohne_kette`, `sekunden`, `reads_je_sekunde`, `max_orte`; mit
   `--wahrheit-im-namen` zusätzlich `wahrheit` (siehe [Seeds und Ketten](../verfahren/seeds-und-ketten.md)).
   `--tabelle` schreibt je Read den primären Bereich: Name, Contig, Position, Strang, MAPQ, Score,
-  gemeldeter Score, Read-Anfang, Read-Ende, `sub`, `sub_n`, Anteil in sehr häufigen Seeds.
+  gemeldeter Score, Read-Anfang, Read-Ende, `sub`, `sub_n`, Anteil in sehr häufigen Seeds,
+  CIGAR, `NM`, `MD`. Die Position ist die des fertigen Alignments.
   Ein Prüfbefehl für die Entwicklung; er entfällt, wenn `fq2bam` steht.
 - `count`: je Zeile `Sequenz<TAB>rohe Trefferzahl` (beide Stränge).
 

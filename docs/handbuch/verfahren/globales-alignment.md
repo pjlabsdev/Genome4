@@ -1,8 +1,9 @@
 # Globales Alignment, CIGAR und Zusammenfügen von Bereichen
 
-Stand: gebaut und geprüft (`gc-align`, `global.rs`, `finalize.rs`). Messung:
-[M3 Vergleich mit bwa](../../bench/M3-vergleich-bwa.md). Noch nicht gebaut: das CIGAR je Read mit
-abgeschnittenen Enden, `NM`/`MD` in der Ausgabe.
+Stand: gebaut und geprüft (`gc-align`, `global.rs`, `align.rs`, `finalize.rs`). Messungen:
+[M3 CIGAR gegen bwa](../../bench/M3-cigar.md),
+[M3 Vergleich mit bwa](../../bench/M3-vergleich-bwa.md). Noch nicht gebaut: die Ausgabe als SAM
+oder BAM.
 
 ## Wozu
 Das [Verlängern](seed-verlaengern.md) liefert nur, wo ein Alignment beginnt und endet und wie
@@ -27,7 +28,24 @@ bei der halben Read-Länge noch Punkte übrig ließe, mindestens der Längenunte
 Alignment umgedreht. Lücken in Wiederholungen stehen dadurch auf dem Vorwärtsstrang so weit
 links wie möglich, wie es für VCF üblich ist, und das CIGAR ist schon in Vorwärtsrichtung.
 
-`NM` (Editierabstand) wird aus dem CIGAR gezählt: ungleiche Basen plus Basen in Lücken.
+`NM` (Editierabstand) wird aus dem CIGAR gezählt: ungleiche Basen plus Basen in Lücken. `MD`
+nennt die Referenz an den abweichenden Stellen: Zahl gleicher Basen, dann die Referenzbase bei
+einem Austausch oder `^` und die fehlenden Basen bei einer Deletion, in Vorwärtsrichtung.
+
+## Vom Bereich zum Alignment
+Wie `mem_reg2aln`:
+
+1. **Band schätzen.** Aus den Längen von Read- und Referenzstück und dem Score des Bereichs
+   folgt, wie breit eine Lücke höchstens sein kann. Sind beide Stücke gleich lang und fehlen
+   weniger Punkte, als zwei Lücken kosten, ist das Band 0 und es wird ohne dynamische
+   Programmierung Base gegen Base gezählt.
+2. **Ausrichten, notfalls breiter.** Liegt der Score des globalen Alignments mehr als einen
+   Punkt unter dem des Bereichs, wird das Band verdoppelt, höchstens zweimal und höchstens bis
+   400.
+3. **Ränder.** Eine Deletion ganz am Anfang oder Ende wird entfernt (am Anfang rückt der Ort
+   entsprechend). Read-Enden außerhalb des Bereichs werden als `S` angehängt, in
+   Vorwärtsrichtung: bei einem Read vom Gegenstrang steht das abgeschnittene Read-Ende links.
+4. **Ort.** Linkes Ende auf dem Vorwärtsstrang, im Contig gezählt.
 
 ## Zusammenfügen zweier Bereiche
 Wie `mem_patch_reg`. Zwei Bereiche eines Reads, die hintereinander auf fast derselben Diagonale
@@ -51,11 +69,12 @@ Read gemeldet.
 | Gesetzte Fälle: gleich, Deletion von 3, Insertion von 4, mit erwartetem Score und CIGAR | bestanden |
 | 400 zufällige Paare mit Austauschen, Insertionen, Deletionen, N: Score gleich einer unabhängigen Rechnung ohne Band; Punkte des CIGAR ergeben den Score; CIGAR verbraucht Read und Referenz ganz; auch mit engstem Band | bestanden |
 | Zusammenfügen: Deletion von 3 wird ein Bereich mit 141 Punkten, Deletion von 30 bleibt zwei | bestanden |
-| Vergleich mit bwa auf chr20 | siehe Messung; die erzeugten Reads haben keine Indels, das Zusammenfügen ist dort praktisch nicht gefordert |
+| Alignment je Read: exakt, Austausch, Deletion von 3, Insertion von 2, je auf beiden Strängen, mit Ort, CIGAR, `NM`, `MD`; fremde Read-Enden als `S` in Vorwärtsrichtung | bestanden |
+| Vergleich mit bwa auf chr20, 200.000 Reads mit Indels: CIGAR, `NM`, `MD` | gleich bei allen 199.990 Reads mit gleichem Ort, darunter 45.544 mit Lücke; siehe Messung |
 
 ## Grenzen
-- Noch nicht gegen CIGARs von bwa verglichen. Das folgt mit der SAM-Ausgabe.
-- Reads mit Indels sind noch nicht im Messsatz.
+- Verglichen ist nur das primäre Alignment, mit Indels bis 10 Basen. Längere Lücken, geteilte
+  Reads und sekundäre Alignments sind noch nicht verglichen.
 
 ## Literatur
 Gotoh 1982, Li 2013, siehe [Literatur](../literatur.md).

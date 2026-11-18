@@ -10,7 +10,12 @@
   "nur_bwa_ohne": 0,
   "mapq_abweichung_bei_gleichem_ort": 3,
   "score_abweichung_bei_gleichem_ort": 0,
-  "bwa_sekunden": 61.1,
+  "gleich_auch_cigar": 199993,
+  "gleich_auch_nm": 199993,
+  "gleich_auch_md": 199993,
+  "reads_mit_luecke_bei_bwa": 26,
+  "davon_cigar_gleich": 26,
+  "bwa_sekunden": 65.2,
   "mapq_differenzen_wir_minus_bwa": {
    "-2": 1,
    "1": 1,
