@@ -3,6 +3,7 @@ name = "genome"
 description = "Genome 4.0: ein Programm für Oberfläche, Arbeitsprozesse und Werkzeuge"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]

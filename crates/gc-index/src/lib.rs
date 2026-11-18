@@ -3,6 +3,7 @@
 //! Der Index deckt wie bei BWA beide Stränge ab: der Text ist der Vorwärtsstrang aller Contigs,
 //! gefolgt von seinem reversen Komplement.
 
+pub mod blockwise;
 pub mod fm;
 pub mod reference;
 pub mod sais;

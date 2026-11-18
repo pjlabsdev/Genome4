@@ -52,6 +52,20 @@ enum IndexCommand {
         /// gegen die binäre Suche im vollen Suffix-Array vergleichen (0 = aus).
         #[arg(long, default_value_t = 100_000)]
         pruefen: u64,
+        /// Bauverfahren: `direkt` (volles Suffix-Array im RAM, für einzelne Chromosomen),
+        /// `blockweise` (fester RAM-Bedarf, für das ganze Genom) oder `auto`.
+        #[arg(long, default_value = "auto")]
+        verfahren: String,
+        /// Blockweise: Millionen Suffixe je Block (16 MB RAM je Million).
+        #[arg(long, default_value_t = 96)]
+        block_mio: u64,
+        /// Kerne (0 = alle)
+        #[arg(long, default_value_t = 0)]
+        kerne: usize,
+        /// Vollprüfung: die BWT einmal rückwärts durchgehen; sie muss Base für Base die Referenz
+        /// ergeben und jede Suffix-Array-Stichprobe bestätigen. Dauert beim ganzen Genom lange.
+        #[arg(long)]
+        vollpruefung: bool,
         /// Protokollstufe: error, warn, info, debug, trace
         #[arg(long, default_value = "info")]
         log_stufe: String,
@@ -90,13 +104,30 @@ fn encode_sequence(seq: &str) -> Result<Vec<u8>> {
         .collect()
 }
 
+struct IndexBuildOptions<'a> {
+    variante: &'a str,
+    wanted: &'a [String],
+    pruefen: u64,
+    verfahren: &'a str,
+    block_mio: u64,
+    kerne: usize,
+    vollpruefung: bool,
+}
+
 fn index_build(
     fasta: &std::path::Path,
     out: &std::path::Path,
-    variante: &str,
-    wanted: &[String],
-    pruefen: u64,
+    o: &IndexBuildOptions,
 ) -> Result<serde_json::Value> {
+    let IndexBuildOptions {
+        variante,
+        wanted,
+        pruefen,
+        verfahren,
+        block_mio,
+        kerne,
+        vollpruefung,
+    } = *o;
     let variant = match variante {
         "kompakt" => gc_index::Variant::Kompakt,
         "schnell" => gc_index::Variant::Schnell,
@@ -136,7 +167,39 @@ fn index_build(
     }
     st.finish(json!({ "contigs_in_datei": seen, "contigs_aufgenommen": reference.contigs.len(), "basen": reference.len() }));
 
-    let (index, report) = match gc_index::FmIndex::build(reference, variant, pruefen) {
+    // Der direkte Bau hält das volle Suffix-Array im RAM (rund 10 Bytes je Referenzbase).
+    const DIREKT_BIS_BASEN: u64 = 300_000_000;
+    let blockweise = match verfahren {
+        "direkt" => false,
+        "blockweise" => true,
+        "auto" => {
+            let b = reference.len() > DIREKT_BIS_BASEN;
+            gc_log::decision(
+                "INDEX.VERFAHREN",
+                if b { "blockweise" } else { "direkt" },
+                if b {
+                    "Referenz zu groß für ein volles Suffix-Array im RAM"
+                } else {
+                    "Referenz klein genug für das volle Suffix-Array im RAM"
+                },
+                json!({ "referenz_basen": reference.len(), "grenze_basen": DIREKT_BIS_BASEN }),
+            );
+            b
+        }
+        other => {
+            anyhow::bail!("unbekanntes Verfahren {other}: erlaubt sind auto, direkt und blockweise")
+        }
+    };
+    let built = if blockweise {
+        let options = gc_index::blockwise::Options {
+            threads: kerne,
+            block_suffixes: block_mio.max(1) * 1_000_000,
+        };
+        gc_index::blockwise::build(reference, variant, options).map(|index| (index, None))
+    } else {
+        gc_index::FmIndex::build(reference, variant, pruefen)
+    };
+    let (index, mut report) = match built {
         Ok(v) => v,
         Err(e) => {
             let (cause, action) = match &e {
@@ -145,8 +208,8 @@ fn index_build(
                     "Datei und --contig prüfen",
                 ),
                 gc_index::BuildError::TooLong { .. } => (
-                    "Das ganze Humangenom braucht den blockweisen Bau, der in M2 noch folgt",
-                    "vorerst einzelne Chromosomen mit --contig wählen",
+                    "Der direkte Bau arbeitet mit 32-Bit-Positionen",
+                    "--verfahren blockweise (oder auto) verwenden",
                 ),
                 _ => (
                     "Fehler im Programm, nicht in den Eingabedaten",
@@ -163,6 +226,53 @@ fn index_build(
             return Err(e.into());
         }
     };
+
+    let check_failed = |what: &str, detail: &str| {
+        gc_log::failure(gc_log::Failure {
+            code: "INDEX.PRUEFUNG_FEHLGESCHLAGEN",
+            what: &format!("{what}: {detail}"),
+            location: json!({ "index": out.display().to_string() }),
+            cause: "Fehler im Programm oder beschädigter Speicher, nicht in den Eingabedaten",
+            action: "Index nicht verwenden; Protokoll aufbewahren und melden",
+        });
+    };
+    if blockweise && pruefen > 0 {
+        let st = gc_log::stage("index.stichprobenpruefung", json!({ "abfragen": pruefen }));
+        match index.check_against_reference(pruefen) {
+            Ok(r) => {
+                st.finish(json!({
+                    "abfragen": r.queries, "abfragen_mit_treffern": r.queries_with_hits,
+                    "gepruefte_fundstellen": r.occurrences_compared, "abweichungen": 0,
+                }));
+                report = Some(r);
+            }
+            Err(detail) => {
+                check_failed("Stichprobenprüfung", &detail);
+                anyhow::bail!("Stichprobenprüfung fehlgeschlagen: {detail}");
+            }
+        }
+    }
+    let mut inversion = None;
+    if vollpruefung {
+        let mut st = gc_log::stage("index.vollpruefung", json!({ "zeichen": index.rows() - 1 }));
+        let total = index.rows() - 1;
+        let outcome = index.verify_by_inversion(|done| {
+            st.heartbeat(
+                30,
+                || json!({ "zeichen_geprueft": done, "anteil": done as f64 / total as f64 }),
+            );
+        });
+        match outcome {
+            Ok(n) => {
+                st.finish(json!({ "zeichen_geprueft": n, "abweichungen": 0 }));
+                inversion = Some(n);
+            }
+            Err(detail) => {
+                check_failed("Vollprüfung", &detail);
+                anyhow::bail!("Vollprüfung fehlgeschlagen: {detail}");
+            }
+        }
+    }
 
     let st = gc_log::stage(
         "index.schreiben",
@@ -190,8 +300,13 @@ fn index_build(
         "sa_abstand": index.sa_interval(),
         "datei_bytes": bytes,
         "bits_je_base": 8.0 * index.table_bytes() as f64 / index.reference().len() as f64,
+        "verfahren": if blockweise { "blockweise" } else { "direkt" },
+        "vollpruefung": inversion.map(|n| json!({
+            "zeichen_geprueft": n, "abweichungen": 0,
+            "aussage": "BWT ergibt rückwärts Base für Base die Referenz, jede Suffix-Array-Stichprobe bestätigt",
+        })),
         "selbstpruefung": report.map(|r| json!({
-            "suffix_array": "vollständig geprüft",
+            "art": if blockweise { "Stichproben gegen die Referenz" } else { "Suffix-Array vollständig geprüft, Abfragen gegen binäre Suche" },
             "abfragen": r.queries,
             "abfragen_mit_treffern": r.queries_with_hits,
             "verglichene_fundstellen": r.occurrences_compared,
@@ -280,6 +395,10 @@ fn main() -> Result<()> {
                 variante,
                 contigs,
                 pruefen,
+                verfahren,
+                block_mio,
+                kerne,
+                vollpruefung,
                 log_stufe,
             } => {
                 let started = std::time::Instant::now();
@@ -298,8 +417,18 @@ fn main() -> Result<()> {
                 gc_log::run_header(json!({
                     "fasta": fasta.display().to_string(), "index": index.display().to_string(),
                     "variante": variante, "contigs": contigs, "pruefen": pruefen, "log_stufe": log_stufe,
+                    "verfahren": verfahren, "block_mio": block_mio, "kerne": kerne, "vollpruefung": vollpruefung,
                 }));
-                match index_build(&fasta, &index, &variante, &contigs, pruefen) {
+                let options = IndexBuildOptions {
+                    variante: &variante,
+                    wanted: &contigs,
+                    pruefen,
+                    verfahren: &verfahren,
+                    block_mio,
+                    kerne,
+                    vollpruefung,
+                };
+                match index_build(&fasta, &index, &options) {
                     Ok(mut result) => {
                         result["seconds"] = json!(started.elapsed().as_secs_f64());
                         result["lauf"] = json!(gc_log::run_id());
