@@ -130,8 +130,8 @@ enum IndexCommand {
     Build {
         fasta: PathBuf,
         index: PathBuf,
-        /// `kompakt` (wenig RAM) oder `schnell`
-        #[arg(long, default_value = "kompakt")]
+        /// `standard` (Vorgabe), `kompakt` (wenig RAM, langsamer) oder `schnell` (mehr RAM)
+        #[arg(long, default_value = "standard")]
         variante: String,
         /// Nur diese Contigs aufnehmen (mehrfach möglich); ohne Angabe alle.
         #[arg(long = "contig")]
@@ -1283,9 +1283,12 @@ fn index_build(
         vollpruefung,
     } = *o;
     let variant = match variante {
+        "standard" => gc_index::Variant::Standard,
         "kompakt" => gc_index::Variant::Kompakt,
         "schnell" => gc_index::Variant::Schnell,
-        other => anyhow::bail!("unbekannte Variante {other}: erlaubt sind kompakt und schnell"),
+        other => {
+            anyhow::bail!("unbekannte Variante {other}: erlaubt sind standard, kompakt und schnell")
+        }
     };
     gc_log::input_file("referenz", fasta);
 

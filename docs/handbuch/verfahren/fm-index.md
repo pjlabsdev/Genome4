@@ -26,12 +26,21 @@ Strecken vermerkt. Das Prinzip stammt von BWA; die gefüllten Basen selbst sind 
 
 | Variante | `b` (Zählblock) | `s` (Stichprobe) | Bits je Referenzbase |
 |---|---|---|---|
+| standard (Vorgabe) | 128 | 8 | 20 |
 | kompakt | 128 | 32 | 12,5 |
 | schnell | 64 | 8 | 24 |
 
 Die Zahl gilt für beide Stränge samt gepackter Referenz. Rechnung für kompakt, je Zeile der BWT:
 Zählblock (256 + 256 Bit auf 128 Zeilen) 4 Bit, Stichproben 40 / 32 = 1,25 Bit; mal zwei Zeilen
-je Referenzbase, plus 2 Bit Referenz.
+je Referenzbase, plus 2 Bit Referenz. Bei standard sind es 40 / 8 = 5 Bit für die Stichproben,
+zusammen 20 Bit.
+
+Am ganzen Genom (GRCh38 ohne ALT) ist die Datei mit standard 7,75 GB groß, mit kompakt 4,84 GB
+und mit schnell 9,3 GB (gerechnet). Der Index liegt beim Ausrichten ganz im Arbeitsspeicher.
+Standard ist die Vorgabe, weil die dichteren Stichproben das Ausrichten am ganzen Genom auf rund
+0,87-mal die Zeit von kompakt bringen (siehe [M6 Tempo](../../bench/M6-tempo.md)); die Ausgabe
+ist mit jeder Variante dieselbe. Wer wenig Arbeitsspeicher hat, baut mit `--variante kompakt`.
+Jede Datei trägt ihre Abstände im Kopf, ältere Indexdateien bleiben also lesbar.
 
 ## Suche
 `occ(c, i)` zählt die Base c in den Zeilen 0 bis i-1 der BWT: Zählstand des Blocks plus Auszählen

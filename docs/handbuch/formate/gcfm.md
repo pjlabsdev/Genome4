@@ -27,7 +27,7 @@ Zeilen / s (aufgerundet).
 
 ## Prüfung beim Lesen
 Kennung, Formatversion, zulässige Abstände (beide Zweierpotenzen, `b` von 32 bis 128, `s` bis
-1024; die beiden Varianten des Programms schreiben 128 und 32 oder 64 und 8), Zeilenzahl, Größe jeder Tabelle und die CRC-32 werden
+1024; die drei Varianten des Programms schreiben 128 und 8, 128 und 32 oder 64 und 8), Zeilenzahl, Größe jeder Tabelle und die CRC-32 werden
 geprüft. Eine abgeschnittene oder beschädigte Datei wird abgelehnt.
 
 ## Änderungen

@@ -22,7 +22,7 @@ Optionen von `build`:
 
 | Option | Standard | Bedeutung |
 |---|---|---|
-| `--variante kompakt\|schnell` | `kompakt` | Größe gegen Tempo, siehe [FM-Index](../verfahren/fm-index.md) |
+| `--variante standard\|kompakt\|schnell` | `standard` | Größe gegen Tempo, siehe [FM-Index](../verfahren/fm-index.md) |
 | `--contig NAME` | alle | nur diese Contigs aufnehmen (mehrfach möglich) |
 | `--verfahren auto\|direkt\|blockweise` | `auto` | `direkt` hält das volle Suffix-Array im RAM (bis 300 Mio. Basen), `blockweise` arbeitet mit festem RAM für das ganze Genom |
 | `--block-mio N` | 96 | blockweise: Millionen Suffixe je Block (16 MB RAM je Million) |

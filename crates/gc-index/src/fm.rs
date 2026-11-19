@@ -1,6 +1,7 @@
 //! FM-Index: BWT mit Zähltabelle in Blöcken und abgetastetem Suffix-Array.
 //!
-//! Zwei Varianten desselben Formats:
+//! Drei Varianten desselben Formats:
+//! - `Standard`: Zählstand alle 128 Basen, Suffix-Array jede 8. Zeile (Vorgabe).
 //! - `Kompakt`: Zählstand alle 128 Basen, Suffix-Array jede 32. Zeile (wenig RAM).
 //! - `Schnell`: Zählstand alle 64 Basen, Suffix-Array jede 8. Zeile (mehr RAM, kürzere Wege).
 
@@ -19,6 +20,8 @@ const SA_BYTES: usize = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Variant {
+    /// Vorgabe: Zählblöcke wie `Kompakt`, Stichproben so dicht wie `Schnell`.
+    Standard,
     Kompakt,
     Schnell,
 }
@@ -27,6 +30,7 @@ impl Variant {
     /// (Basen je Zählblock, Abstand der Suffix-Array-Stichproben)
     pub fn parameters(self) -> (u32, u32) {
         match self {
+            Variant::Standard => (128, 8),
             Variant::Kompakt => (128, 32),
             Variant::Schnell => (64, 8),
         }
@@ -34,6 +38,7 @@ impl Variant {
 
     pub fn name(self) -> &'static str {
         match self {
+            Variant::Standard => "standard",
             Variant::Kompakt => "kompakt",
             Variant::Schnell => "schnell",
         }
@@ -1163,7 +1168,7 @@ mod tests {
     #[test]
     fn hits_equal_naive_search_in_both_variants() {
         let contigs = random_genome(7);
-        for variant in [Variant::Kompakt, Variant::Schnell] {
+        for variant in [Variant::Standard, Variant::Kompakt, Variant::Schnell] {
             let index = build(&contigs, variant);
             let mut rng = Rng(99);
             let mut with_hits = 0;
@@ -1238,7 +1243,7 @@ mod tests {
         }
         assert_eq!(counts.iter().sum::<u64>(), index.rows() - 1);
         // beide Enden eines Bereichs auf einmal, in beiden Varianten, auch über das Endzeichen
-        for variant in [Variant::Kompakt, Variant::Schnell] {
+        for variant in [Variant::Standard, Variant::Kompakt, Variant::Schnell] {
             let index = build(&contigs, variant);
             for k in 0..=index.rows() {
                 for l in (k..=index.rows()).take(140) {
@@ -1258,7 +1263,7 @@ mod tests {
 
     #[test]
     fn locate_many_equals_locate() {
-        for variant in [Variant::Kompakt, Variant::Schnell] {
+        for variant in [Variant::Standard, Variant::Kompakt, Variant::Schnell] {
             let index = build(&random_genome(5), variant);
             let mut rng = Rng(9);
             // Alle Zeilen der Reihe nach, dann zufällige Mengen mit Wiederholungen, auch leere.
@@ -1312,7 +1317,7 @@ mod tests {
     #[test]
     fn inversion_check_passes_and_detects_damage() {
         let contigs = random_genome(21);
-        for variant in [Variant::Kompakt, Variant::Schnell] {
+        for variant in [Variant::Standard, Variant::Kompakt, Variant::Schnell] {
             let mut index = build(&contigs, variant);
             assert_eq!(index.verify_by_inversion(|_| {}), Ok(index.rows() - 1));
             assert!(index.check_against_reference(500).is_ok());

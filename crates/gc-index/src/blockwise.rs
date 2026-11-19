@@ -779,11 +779,8 @@ mod tests {
                 reference.push_contig(&format!("c{c}"), &seq);
                 direct.push_contig(&format!("c{c}"), &seq);
             }
-            let variant = if round % 2 == 0 {
-                Variant::Kompakt
-            } else {
-                Variant::Schnell
-            };
+            let variant =
+                [Variant::Kompakt, Variant::Schnell, Variant::Standard][(round % 3) as usize];
             let (want, _) = FmIndex::build(direct, variant, 200).expect("direkter Bau");
             let params = Params {
                 v: [4, 8, 16, 64, 1024][(round % 5) as usize],

@@ -100,7 +100,7 @@ Laufzeit, je ein bis drei Läufe im Wechsel, Rechner zur Zeit der Messung unruhi
 
 Mit echten Reads ist kein Unterschied messbar, mit erzeugten rund 5 %.
 
-### Nachtrag: dichtere Tabellen im Index (Versuch, nicht im Programm)
+### Nachtrag: dichtere Tabellen im Index
 Der Index wurde versuchsweise mit anderen Abständen gebaut (Zählstand alle `b` Basen,
 Suffix-Array-Stichprobe jede `s`-te Zeile). Die Ausgabe ist in jedem Fall dieselbe.
 
@@ -118,7 +118,14 @@ chr20, 100.000 echte Paare, ein Kern, mittlerer von drei Läufen:
 Ganzes Genom mit `b` = 128 und `s` = 8 (Datei 7,75 GB, Bau 18,3 min auf 4 Kernen, Stichprobe
 von 100.000 Abfragen ohne Abweichung), 50.000 echte Paare, ein Kern, je zwei Läufe: 12,7 s und
 13,0 s gegen 14,6 s und 14,7 s mit dem kompakten Index, also rund 0,87-mal die Zeit für 2,9 GB
-mehr Arbeitsspeicher. Ob das eine Variante oder die Vorgabe wird, ist offen.
+mehr Arbeitsspeicher.
+
+Entscheidung vom 19.11.2026: `b` = 128 und `s` = 8 ist als Variante `standard` die Vorgabe von
+`genome index build`. `kompakt` und `schnell` bleiben wählbar, vorhandene Indexdateien bleiben
+lesbar. Die Messungen weiter oben in diesem Bericht gelten für den Index, der dort genannt ist.
+Der Spitzenbedarf von `genome fq2bam` am ganzen Genom (5,24 GB mit kompakt, siehe
+[M5](M5-ganzes-genom.md)) steigt mit der Vorgabe rechnerisch um 2,9 GB auf rund 8,2 GB; gemessen
+ist das noch nicht.
 
 ### Versucht und verworfen
 - **Zählen ohne Verzweigung** (immer alle Wörter des Blocks, nicht gefragte Basen ausgeblendet):
