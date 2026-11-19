@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 gc-align.workspace = true
+gc-bam.workspace = true
 gc-index.workspace = true
 gc-io.workspace = true
 gc-log.workspace = true

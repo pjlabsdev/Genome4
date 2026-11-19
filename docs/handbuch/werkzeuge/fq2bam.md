@@ -16,7 +16,7 @@ CRAM) mit Qualitätsauswertung. Ersetzt in Genome 3.x fastp, `bwa mem` 0.7.19 un
 | M2 | Suffix-Array und FM-Index, Protokoll-Grundlage | gebaut und geprüft |
 | M3 | Seeds, Chaining, SIMD-Erweiterung, Einzel-Lesungen auf chr20 | offen |
 | M4 | Paarung, MAPQ, supplementäre Alignments, ALT, ganzes Genom | offen |
-| M5 | Sortieren, Duplikate, Index, QC, Trimmen; erster Werkzeugbericht; Schattenbetrieb in 3.x | offen |
+| M5 | Sortieren, Duplikate, Index, QC, Trimmen; erster Werkzeugbericht; Schattenbetrieb in 3.x | Sortieren gebaut und geprüft ([`genome sort`](sort.md)), Rest offen |
 | M6 | eingefrorene Version, volle Testrunde, Forschungsbericht | offen |
 
 ## Vergleichsmaßstab

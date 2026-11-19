@@ -150,6 +150,35 @@ pub fn write_encoded(writer: &mut MtWriter, records: &[u8]) -> io::Result<()> {
     writer.get_mut().write_all(records)
 }
 
+/// Liest den nächsten Datensatz roh (mit seinem Längenfeld) und hängt ihn an `out` an.
+/// `false` am Ende der Datei. Der Kopf muss schon gelesen sein.
+pub fn read_encoded(reader: &mut MtReader, out: &mut Vec<u8>) -> io::Result<bool> {
+    use std::io::Read;
+    let inner = reader.get_mut();
+    let mut len = [0u8; 4];
+    let mut got = 0;
+    while got < 4 {
+        let n = inner.read(&mut len[got..])?;
+        if n == 0 {
+            break;
+        }
+        got += n;
+    }
+    if got == 0 {
+        return Ok(false);
+    }
+    let cut = || io::Error::new(io::ErrorKind::UnexpectedEof, "BAM-Datensatz abgeschnitten");
+    if got < 4 {
+        return Err(cut());
+    }
+    let n = u32::from_le_bytes(len) as usize;
+    let start = out.len();
+    out.extend_from_slice(&len);
+    out.resize(start + 4 + n, 0);
+    inner.read_exact(&mut out[start + 4..]).map_err(|_| cut())?;
+    Ok(true)
+}
+
 /// Liest eine BAM und schreibt Kopf und alle Datensätze unverändert neu.
 /// Grundlage des Rundreise-Tests gegen samtools (M1).
 pub fn roundtrip(src: impl AsRef<Path>, dst: impl AsRef<Path>, threads: usize) -> io::Result<u64> {

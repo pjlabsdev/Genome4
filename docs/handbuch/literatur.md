@@ -18,6 +18,7 @@ noch einmal gegen die Originale geprüft.
 | Farrar 2007 | Farrar M. Striped Smith-Waterman speeds database searches six times over other SIMD implementations. Bioinformatics 23:156-161, 2007. | lokales Alignment in gestreifter Anordnung (Partnersuche bei Paaren) |
 | Li 2013 | Li H. Aligning sequence reads, clone sequences and assembly contigs with BWA-MEM. arXiv:1303.3997, 2013. | BWA-MEM (ab M3) |
 | Vasimuddin et al. 2019 | Vasimuddin M, Misra S, Li H, Aluru S. Efficient architecture-aware acceleration of BWA-MEM for multicore systems. IPDPS 2019. | BWA-MEM2 als Tempo-Vergleich |
+| Knuth 1998 | Knuth DE. The Art of Computer Programming, Volume 3: Sorting and Searching. 2. Auflage, Addison-Wesley, 1998. Abschnitt 5.4 (externes Sortieren). | Sortieren in Teilen |
 | Li et al. 2009 | Li H, Handsaker B, Wysoker A, et al. The Sequence Alignment/Map format and SAMtools. Bioinformatics 25:2078-2079, 2009. | SAM/BAM |
 | SAM-Spezifikation | The SAM/BAM Format Specification Working Group. Sequence Alignment/Map Format Specification. hts-specs. | BAM und BGZF im Einzelnen |
 

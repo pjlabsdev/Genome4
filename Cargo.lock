@@ -230,6 +230,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "gc-bam"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+]
+
+[[package]]
 name = "gc-index"
 version = "0.1.0"
 dependencies = [
@@ -270,6 +277,7 @@ dependencies = [
  "anyhow",
  "clap",
  "gc-align",
+ "gc-bam",
  "gc-index",
  "gc-io",
  "gc-log",
