@@ -37,11 +37,12 @@ impl Default for FinalizeOptions {
 /// die sich in Read und Referenz fast ganz überlappen, bleibt der mit dem höheren Score.
 /// Zwei Bereiche, die hintereinander auf derselben Linie liegen und nur durch eine größere Lücke
 /// getrennt sind, werden zu einem zusammengefügt, wenn das gemeinsame Alignment gut genug ist
-/// ([`patch`]).
+/// ([`patch`]). Mit `read = None` wird nicht zusammengefügt (so ruft bwa es nach der Suche nach
+/// dem Partner eines Paares).
 pub fn sort_dedup(
     regions: &mut Vec<Region>,
     index: &FmIndex,
-    read: &[u8],
+    read: Option<&[u8]>,
     sc: &Scoring,
     opt: &FinalizeOptions,
 ) {
@@ -78,13 +79,14 @@ pub fn sort_dedup(
                         break;
                     }
                     regions[j].qe = regions[j].qb;
-                } else if let Some((score, w)) = (q.rb < p.rb)
-                    .then(|| patch(index, read, &q, &p, sc))
-                    .flatten()
+                } else if let Some((score, w)) = read
+                    .filter(|_| q.rb < p.rb)
+                    .and_then(|read| patch(index, read, &q, &p, sc))
                 {
                     let p = &mut regions[i];
                     p.seedcov = p.seedcov.max(q.seedcov);
                     p.sub = p.sub.max(q.sub);
+                    p.csub = p.csub.max(q.csub);
                     p.qb = q.qb;
                     p.rb = q.rb;
                     p.score = score;
@@ -151,7 +153,7 @@ fn patch(index: &FmIndex, read: &[u8], a: &Region, b: &Region, sc: &Scoring) -> 
 }
 
 /// Streuwert für die Reihenfolge gleich guter Bereiche (Thomas Wangs 64-Bit-Hash, wie in bwa).
-fn hash_64(mut key: u64) -> u64 {
+pub(crate) fn hash_64(mut key: u64) -> u64 {
     key = key.wrapping_add(!(key << 32));
     key ^= key >> 22;
     key = key.wrapping_add(!(key << 13));
@@ -228,6 +230,10 @@ pub fn mapq(r: &Region, frac_rep: f32, sc: &Scoring, opt: &FinalizeOptions) -> u
     } else {
         opt.min_seed_len * sc.matching
     };
+    let sub = sub.max(r.csub);
+    // Ein bei der Partnersuche gefundener Bereich hat keine Seeds, also auch keinen Anteil
+    // häufiger Seeds (in bwa bleibt der Wert dort 0).
+    let frac_rep = if r.rescued { 0.0 } else { frac_rep };
     if sub >= r.score || r.score == 0 {
         return 0;
     }
@@ -294,6 +300,8 @@ mod tests {
             sub: 0,
             sub_n: 0,
             secondary: -1,
+            csub: 0,
+            rescued: false,
         }
     }
 
@@ -308,7 +316,7 @@ mod tests {
             region(1000, 0, 40, 40), // kürzer, im ersten enthalten: bleibt (nur 40 % Überlappung des ersten ...)
         ];
         let (index, _) = setup();
-        sort_dedup(&mut v, &index, &[], &Scoring::default(), &opt);
+        sort_dedup(&mut v, &index, None, &Scoring::default(), &opt);
         let got: Vec<(u64, i32)> = v.iter().map(|r| (r.rb, r.score)).collect();
         assert_eq!(got, vec![(1000, 90), (3000, 70)]);
     }
@@ -320,14 +328,14 @@ mod tests {
         // 3 Basen der Referenz fehlen im Read: 150 Treffer, eine Deletion der Länge 3.
         let read: Vec<u8> = [&codes[500..570], &codes[573..653]].concat();
         let mut v = vec![region(573, 70, 80, 80), region(500, 0, 70, 70)];
-        sort_dedup(&mut v, &index, &read, &sc, &opt);
+        sort_dedup(&mut v, &index, Some(&read), &sc, &opt);
         assert_eq!(v.len(), 1);
         assert_eq!((v[0].rb, v[0].re, v[0].qb, v[0].qe), (500, 653, 0, 150));
         assert_eq!((v[0].score, v[0].truesc), (150 - 6 - 3, 150 - 6 - 3));
         // 30 Basen fehlen: die Linien liegen zu weit auseinander, beide Bereiche bleiben.
         let read: Vec<u8> = [&codes[500..570], &codes[600..680]].concat();
         let mut v = vec![region(600, 70, 80, 80), region(500, 0, 70, 70)];
-        sort_dedup(&mut v, &index, &read, &sc, &opt);
+        sort_dedup(&mut v, &index, Some(&read), &sc, &opt);
         assert_eq!(v.len(), 2);
     }
 

@@ -1,0 +1,32 @@
+{
+ "reads_mit_wahrem_ort": 199028,
+ "richtig": 194778,
+ "falsch": 4250,
+ "ohne_ort": 0,
+ "falsch_mapq_ab_30": 0,
+ "mapq_ab_30": 191846,
+ "richtig_mapq_0": 966,
+ "fremde_reads": 972,
+ "fremde_reads_mit_ort": 0,
+ "richtiges_paar_flag": 195992,
+ "nach_art": {
+  "p": {
+   "reads": 195994,
+   "richtig": 191841,
+   "falsch": 4153,
+   "ohne_ort": 0
+  },
+  "f": {
+   "reads": 2062,
+   "richtig": 1996,
+   "falsch": 66,
+   "ohne_ort": 0
+  },
+  "x": {
+   "reads": 972,
+   "richtig": 941,
+   "falsch": 31,
+   "ohne_ort": 0
+  }
+ }
+}

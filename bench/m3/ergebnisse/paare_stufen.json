@@ -1,0 +1,9 @@
+{
+ "hinweis": "Erster Block (33.334 Paare) des Paarsatzes. bwa-Seite: bench/m3/trace_bwa_pairs.py mit der Insertgröße des Blocks (116, 683, 399.4249391849112, 59.939602482277). Unsere Seite: dieselben Zeilen aus einer vorübergehenden Ausgabe im Programm, die nicht im Repository steht.",
+ "paare": 33334,
+ "reads": 66668,
+ "reads_mit_anderen_bereichen_vor_der_paarung": 51,
+ "paare_mit_anderem_ergebnis_von_mem_pair": 8,
+ "davon_mit_anderen_bereichen_vor_der_paarung": 7,
+ "davon_bei_gleichen_bereichen": 1
+}
