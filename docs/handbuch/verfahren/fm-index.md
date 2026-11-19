@@ -26,18 +26,43 @@ Strecken vermerkt. Das Prinzip stammt von BWA; die gefüllten Basen selbst sind 
 
 | Variante | `b` (Zählblock) | `s` (Stichprobe) | Bits je Referenzbase |
 |---|---|---|---|
+| standard (Vorgabe) | 128 | 8 | 20 |
 | kompakt | 128 | 32 | 12,5 |
 | schnell | 64 | 8 | 24 |
 
 Die Zahl gilt für beide Stränge samt gepackter Referenz. Rechnung für kompakt, je Zeile der BWT:
 Zählblock (256 + 256 Bit auf 128 Zeilen) 4 Bit, Stichproben 40 / 32 = 1,25 Bit; mal zwei Zeilen
-je Referenzbase, plus 2 Bit Referenz.
+je Referenzbase, plus 2 Bit Referenz. Bei standard sind es 40 / 8 = 5 Bit für die Stichproben,
+zusammen 20 Bit.
+
+Am ganzen Genom (GRCh38 ohne ALT) ist die Datei mit standard 7,75 GB groß, mit kompakt 4,84 GB
+und mit schnell 9,3 GB (gerechnet). Der Index liegt beim Ausrichten ganz im Arbeitsspeicher.
+Standard ist die Vorgabe, weil die dichteren Stichproben das Ausrichten am ganzen Genom auf rund
+0,87-mal die Zeit von kompakt bringen (siehe [M6 Tempo](../../bench/M6-tempo.md)); die Ausgabe
+ist mit jeder Variante dieselbe. Wer wenig Arbeitsspeicher hat, baut mit `--variante kompakt`.
+Jede Datei trägt ihre Abstände im Kopf, ältere Indexdateien bleiben also lesbar.
 
 ## Suche
 `occ(c, i)` zählt die Base c in den Zeilen 0 bis i-1 der BWT: Zählstand des Blocks plus Auszählen
-der Wörter bis i (Bitmaske und Popcount). `occ4(i)` liefert die Zählung für alle vier Basen in
-einem Durchgang durch denselben Block (wie `bwt_occ4` in bwa): je Wort drei Popcounts, A ergibt
-sich als Rest. Die Seed-Suche braucht immer alle vier. Rückwärtssuche über das Muster von hinten nach vorn:
+der Wörter bis i. `occ4(i)` liefert die Zählung für alle vier Basen in einem Durchgang durch
+denselben Block (wie `bwt_occ4` in bwa): gezählt werden C, G und T, A ergibt sich als Rest. Die
+Seed-Suche braucht immer alle vier, und immer an beiden Enden eines Bereichs: `occ4_pair(k, l)`
+(wie `bwt_2occ4` in bwa) zählt, wenn beide Enden im selben Wort der BWT liegen, nur bis `k` und
+das kurze Stück bis `l` dazu. Nach wenigen Basen sind die Bereiche der Seed-Suche eng, das ist
+dann der häufigste Fall.
+
+**Zählen.** Je Base wird ein Bit gebildet (das untere ihrer zwei), gesetzt, wo die gesuchte Base
+steht. Die Wörter eines Blocks werden nicht einzeln fertig gezählt: Jedes Wort wird nur zu Summen
+je Halbbyte verdichtet, die Summen werden addiert, und erst am Ende wird einmal ganz
+zusammengezählt. Je Halbbyte kommen höchstens 2 dazu, sieben Wörter passen also in eine Summe;
+ein Block hat höchstens vier. Das braucht keinen besonderen Befehl des Prozessors und läuft auf
+jedem Rechner gleich.
+
+**Abstände.** `b` und `s` sind Zweierpotenzen, `b` höchstens 128. Block und Stelle im Block
+ergeben sich durch Schieben und Maskieren. Eine echte Division je Zugriff kostete mehr als das
+Zählen selbst ([M6 Tempo](../../bench/M6-tempo.md)).
+
+Rückwärtssuche über das Muster von hinten nach vorn:
 
 ```text
 lo = 0; hi = Zeilen
@@ -54,6 +79,13 @@ Von einer Zeile aus mit der LF-Abbildung (`Zeile ← c_before[c] + occ(c, Zeile)
 Zeile) rückwärts gehen, bis eine Stichprobenzeile oder die Primärzeile erreicht ist. Textposition =
 Stichprobe + Zahl der Schritte.
 
+`locate_many` ortet viele Zeilen auf einmal, mit demselben Ergebnis wie `locate` je Zeile. Die
+Wege von bis zu 32 Zeilen laufen im Gleichschritt: In jeder Runde wird erst für alle offenen
+Zeilen die Base der BWT gelesen, dann für alle gezählt. Die Zugriffe einer Runde hängen nicht
+voneinander ab, der Prozessor wartet also auf mehrere Stellen des Arbeitsspeichers zugleich statt
+auf eine nach der anderen. Beim ganzen Genom liegt fast jeder Schritt außerhalb des
+Zwischenspeichers. Der Aligner ortet so alle Seeds eines Reads gemeinsam.
+
 ## Von der Textposition zum Treffer
 Eine Fundstelle der Länge m an Textposition p liegt auf dem Vorwärtsstrang, wenn p + m ≤ L, und
 auf dem Gegenstrang, wenn p ≥ L (linkes Ende auf dem Vorwärtsstrang: 2L − p − m). Verworfen wird
@@ -62,7 +94,9 @@ N-Strecke berührt. Übrig bleiben die gefilterten Treffer.
 
 ## Prüfung
 Siehe [Werkzeug index](../werkzeuge/index.md), Abschnitt Validierung. Tests: Treffer gegen naive
-Suche in beiden Varianten, `occ` und `occ4` gegen direktes Zählen an jeder Zeile, Datei-Rundreise,
+Suche in beiden Varianten, `occ` und `occ4` gegen direktes Zählen an jeder Zeile, `occ4_pair` gegen
+zweimal `occ4` für jeden Anfang und 140 Längen, `locate_many` gegen `locate` für alle Zeilen und
+für zufällige Mengen mit Wiederholungen, Datei-Rundreise,
 beschädigte und abgeschnittene Dateien, Vollprüfung erkennt eine geänderte Base und eine geänderte
 Stichprobe.
 

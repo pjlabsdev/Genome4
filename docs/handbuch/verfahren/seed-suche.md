@@ -67,8 +67,11 @@ Stranggrenze oder eine gefüllte N-Strecke reichen; diese fallen erst beim Orten
 - Noch kein Vergleich der Seeds mit denen von bwa Read für Read. Der Vergleich mit bwa folgt auf
   der Ebene der fertigen Alignments.
 - Noch nicht geprüft: ob bei erzeugten Reads der wahre Ort unter den Orten der Seeds ist.
-- Je Verlängerung zwei Zugriffe auf den Index (`occ4` an beiden Enden des Bereichs), noch ohne
-  Vorabruf. Tempo: [M3 Tempo](../../bench/M3-tempo.md).
+- Je Verlängerung ein Zugriff auf den Index für beide Enden des Bereichs (`occ4_pair`), ohne
+  Vorabruf. Die Suchen mehrerer Reads abwechselnd weiterzuführen, damit der Prozessor auf mehrere
+  Stellen des Arbeitsspeichers zugleich wartet, wurde gebaut und gemessen und brachte auf dem
+  Messrechner nichts: Die Suche hängt dort am Rechnen, nicht am Speicher. Tempo:
+  [M3 Tempo](../../bench/M3-tempo.md), [M6 Tempo](../../bench/M6-tempo.md).
 
 ## Literatur
 Li 2012 (FMD-Index), Li 2013 (BWA-MEM, SMEM als Seeds), siehe [Literatur](../literatur.md).

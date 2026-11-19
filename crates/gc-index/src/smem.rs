@@ -63,7 +63,7 @@ impl FmIndex {
             size: 0,
         }; 4];
         let mut total = 0;
-        let (lo, hi) = (self.occ4(iv.k), self.occ4(iv.k + iv.size));
+        let (lo, hi) = self.occ4_pair(iv.k, iv.k + iv.size);
         for c in 0..4usize {
             out[c].k = self.first_row(c as u8) + lo[c];
             out[c].size = hi[c] - lo[c];

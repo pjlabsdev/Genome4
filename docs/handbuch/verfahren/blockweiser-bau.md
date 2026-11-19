@@ -65,6 +65,9 @@ verschieden sind und die Sortierung deshalb eindeutig ist.
 | Index im Aufbau | bis 4,8 GB |
 | Referenz (gepackt) | 0,78 GB |
 
+Mit der Vorgabe `standard` wächst der Index im Aufbau auf bis zu 7,7 GB, der Bedarf steigt also
+um 2,9 GB (gerechnet, nicht eigens gemessen).
+
 Gemessener Spitzenwert: siehe Messdokument. Der Index wird noch im RAM aufgebaut; ein Bau, der
 fortlaufend auf die Platte schreibt, würde den Bedarf weiter senken (offen).
 
