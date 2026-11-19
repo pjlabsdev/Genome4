@@ -51,7 +51,8 @@ Fast die ganze Zeit ist Ausrichten. Alles danach macht hier 3 % aus.
 - Ein Chromosom, 0,6-fache Abdeckung, erzeugte Reads. Die Zeiten sagen nichts über ein ganzes
   Genom: Dort ist der Index 50-mal größer, Reads aus Wiederholungen sind teurer, und das Sortieren
   schreibt Teile auf die Platte. Ein Vergleich mit den 11 h 40 min von Genome 3.x ist daraus nicht
-  ableitbar.
+  ableitbar. Das ganze Genom mit erzeugten Reads steht in
+  [M5 Ganzes Genom](M5-ganzes-genom.md).
 - Kein Zeitvergleich mit bwa und samtools unter gleichen Bedingungen in dieser Messung.
 
 ## Wiederholen

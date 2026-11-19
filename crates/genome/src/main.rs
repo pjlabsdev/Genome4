@@ -306,9 +306,18 @@ impl AlignOutput {
                 gc_io::bam::write_encoded(writer, &encode_lines(lines)?)?;
             }
             AlignOutput::Sorter(sorter) => {
+                let runs = sorter.stats().runs;
                 sorter
                     .push(&encode_lines(lines)?)
                     .context("sortierten Teil auf die Platte schreiben")?;
+                let now = sorter.stats();
+                if now.runs != runs {
+                    gc_log::info(
+                        "SORT.TEIL",
+                        "Speicher voll, sortierter Teil auf die Platte geschrieben",
+                        json!({ "teile": now.runs, "bytes_auf_platte": now.run_bytes, "saetze_bisher": now.records }),
+                    );
+                }
             }
         }
         Ok(block.iter().map(|l| l.len() as u64).sum())
