@@ -67,8 +67,8 @@ Stranggrenze oder eine gefüllte N-Strecke reichen; diese fallen erst beim Orten
 - Noch kein Vergleich der Seeds mit denen von bwa Read für Read. Der Vergleich mit bwa folgt auf
   der Ebene der fertigen Alignments.
 - Noch nicht geprüft: ob bei erzeugten Reads der wahre Ort unter den Orten der Seeds ist.
-- Geschwindigkeit ist noch nicht optimiert: je Verlängerung acht einzelne `occ`-Aufrufe, kein
-  Vorabruf, ein Kern.
+- Je Verlängerung zwei Zugriffe auf den Index (`occ4` an beiden Enden des Bereichs), noch ohne
+  Vorabruf. Tempo: [M3 Tempo](../../bench/M3-tempo.md).
 
 ## Literatur
 Li 2012 (FMD-Index), Li 2013 (BWA-MEM, SMEM als Seeds), siehe [Literatur](../literatur.md).

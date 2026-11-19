@@ -1,0 +1,32 @@
+{
+  "eingabe": [
+    "pairs_1.fq",
+    "pairs_2.fq"
+  ],
+  "paare": true,
+  "kerne_im_rechner": 4,
+  "laeufe": [
+    {
+      "kerne": 1,
+      "sekunden": 68.0,
+      "zeilen": 200000,
+      "sha256_ohne_pg": "f66499fcbcfe28a77ef500138ef72f121d03306062bd7b8c823bb8acf53ddffb",
+      "gleich_wie_erster_lauf": true
+    },
+    {
+      "kerne": 4,
+      "sekunden": 17.2,
+      "zeilen": 200000,
+      "sha256_ohne_pg": "f66499fcbcfe28a77ef500138ef72f121d03306062bd7b8c823bb8acf53ddffb",
+      "gleich_wie_erster_lauf": true
+    }
+  ],
+  "bam": {
+    "kerne": 4,
+    "sekunden": 17.2,
+    "bytes": 17009800,
+    "samtools_quickcheck": "bestanden",
+    "zeilen_gleich_wie_sam": true,
+    "abweichende_zeilen": 0
+  }
+}

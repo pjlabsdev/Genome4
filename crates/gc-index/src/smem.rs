@@ -63,12 +63,11 @@ impl FmIndex {
             size: 0,
         }; 4];
         let mut total = 0;
-        for c in 0..4u8 {
-            let lo = self.occ(c, iv.k);
-            let hi = self.occ(c, iv.k + iv.size);
-            out[c as usize].k = self.first_row(c) + lo;
-            out[c as usize].size = hi - lo;
-            total += hi - lo;
+        let (lo, hi) = (self.occ4(iv.k), self.occ4(iv.k + iv.size));
+        for c in 0..4usize {
+            out[c].k = self.first_row(c as u8) + lo[c];
+            out[c].size = hi[c] - lo[c];
+            total += hi[c] - lo[c];
         }
         // Im Bereich von rk(P) stehen die Fortsetzungen in der Reihenfolge Endzeichen, A, C, G, T.
         // rk(P)·x kommt so oft vor wie komp(x)·P. Das Endzeichen folgt höchstens einmal.

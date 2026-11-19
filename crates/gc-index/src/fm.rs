@@ -112,6 +112,20 @@ fn count_in_word(w: u64, c: u8, r: u32) -> u64 {
     u64::from(m.count_ones())
 }
 
+/// Anzahl jeder der vier Basen unter den ersten `r` Basen des Wortes (`r` von 1 bis 32).
+#[inline]
+fn counts_in_word(w: u64, r: u32) -> [u64; 4] {
+    let mut m = 0x5555_5555_5555_5555u64;
+    if r < 32 {
+        m &= (1u64 << (2 * r)) - 1;
+    }
+    let (low, high) = (w & m, (w >> 1) & m);
+    let c1 = u64::from((low & !high).count_ones());
+    let c2 = u64::from((high & !low).count_ones());
+    let c3 = u64::from((low & high).count_ones());
+    [u64::from(r) - c1 - c2 - c3, c1, c2, c3]
+}
+
 /// Zeichen vor Textposition 0: das Endzeichen.
 pub(crate) const SENTINEL: u8 = 4;
 
@@ -443,6 +457,37 @@ impl FmIndex {
         let block_start = i - u64::from(within);
         if c == 0 && self.primary >= block_start && self.primary < i {
             n -= 1;
+        }
+        n
+    }
+
+    /// Anzahl jeder der vier Basen in den BWT-Zeilen `0..i`, in einem Durchgang durch den
+    /// Zählblock (bwa: `bwt_occ4`). Dasselbe wie viermal `occ`.
+    #[inline]
+    pub fn occ4(&self, i: u64) -> [u64; 4] {
+        let interval = u64::from(self.occ_interval);
+        let stride = 4 + (self.occ_interval / 32) as usize;
+        let base = (i / interval) as usize * stride;
+        let within = (i % interval) as u32;
+        let block = &self.blocks[base..];
+        let mut n = [block[0], block[1], block[2], block[3]];
+        let full = (within / 32) as usize;
+        let mut add = |w: u64, r: u32| {
+            let c = counts_in_word(w, r);
+            for (total, part) in n.iter_mut().zip(c) {
+                *total += part;
+            }
+        };
+        for &w in &block[4..4 + full] {
+            add(w, 32);
+        }
+        if !within.is_multiple_of(32) {
+            add(block[4 + full], within % 32);
+        }
+        // Das Endzeichen ist als Code 0 gespeichert, zählt aber nicht als A.
+        let block_start = i - u64::from(within);
+        if self.primary >= block_start && self.primary < i {
+            n[0] -= 1;
         }
         n
     }
@@ -998,6 +1043,7 @@ mod tests {
             for c in 0..4u8 {
                 assert_eq!(index.occ(c, row), counts[c as usize], "occ({c}, {row})");
             }
+            assert_eq!(index.occ4(row), counts, "occ4({row})");
             if row < index.rows() && row != index.primary {
                 counts[index.bwt(row) as usize] += 1;
             }
