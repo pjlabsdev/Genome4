@@ -65,11 +65,35 @@ Prüffällen jeden Wert wie `ksw_align2` aus bwa.
 - Die Paarung kostet bei uns rund 18 s auf einem Kern: Dieselben 200.000 Reads einzeln
   ausgerichtet brauchen 71 s.
 
+## Zweiter Schritt: Zählen im Index für alle vier Basen
+
+Die Seed-Suche braucht bei jeder Verlängerung die Zählung aller vier Basen an beiden Enden des
+Bereichs. Bisher waren das acht einzelne Aufrufe von `occ`, jetzt zwei von `occ4`, die den
+Zählblock je einmal durchgehen ([FM-Index](../handbuch/verfahren/fm-index.md)). Die Ausgabe ist
+wieder unverändert (gleiche Prüfsummen, beide Index-Varianten, 1 und 4 Kerne).
+
+Seed-Suche allein (`genome index smem`, 200.000 Reads, ein Kern): 8,5 s statt 12,1 s.
+
+| Satz | Kerne | Index kompakt | Index schnell | bwa (pybwa) |
+|---|---|---|---|---|
+| 100.000 Paare | 1 | 81,8 s | 68,0 s | 67,7 s |
+| 100.000 Paare | 4 | 21,1 s | 17,2 s | |
+| 200.000 einzelne Reads | 1 | 61,8 s | 49,0 s | 59,5 s |
+| 200.000 einzelne Reads | 4 | 15,4 s | 13,1 s | |
+
+- Mit dem kompakten Index (12,5 Bit je Base) liegen wir je Kern bei rund 1,2-mal (Paare) und
+  1,04-mal (einzeln) der Zeit von bwa.
+- Mit dem schnellen Index (24 Bit je Base, Stichprobe des Suffix-Arrays alle 8 statt 32 Zeilen)
+  sind es Gleichstand bei Paaren und 0,82-mal bei einzelnen Reads. Der Index von bwa hat
+  Zählblöcke alle 128 und Stichproben alle 32 Zeilen, entspricht also dem kompakten; der
+  schnelle tauscht Speicher gegen Zeit. Für das ganze Genom wäre er rund 9 GB groß statt 4,8 GB.
+- Rohdaten: `bench/m3/ergebnisse/tempo2_paare_kompakt.json`, `tempo2_paare_schnell.json`,
+  `tempo2_einzeln_kompakt.json`, `tempo2_einzeln_schnell.json`.
+
 ## Einordnung
 Der Aligner ist ein Nachbau von bwa mem und rechnet dieselben Schritte. Mehr als etwa
 Gleichstand mit bwa je Kern ist auf diesem Weg nicht zu erwarten. Was darüber hinausgeht,
-braucht andere Mittel: Zählen im Index für alle vier Basen in einem Zugriff und mit
-Vorabladen, Verlängerung vieler Seeds gleichzeitig mit Vektorbefehlen (der Weg von BWA-MEM2,
+braucht andere Mittel: Index-Zugriffe mit Vorabladen, Verlängerung vieler Seeds gleichzeitig mit Vektorbefehlen (der Weg von BWA-MEM2,
 Vasimuddin et al. 2019). Das sind die nächsten Schritte; die Ausgabe muss dabei Byte für Byte
 gleich bleiben.
 

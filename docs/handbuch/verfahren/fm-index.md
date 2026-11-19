@@ -35,7 +35,9 @@ je Referenzbase, plus 2 Bit Referenz.
 
 ## Suche
 `occ(c, i)` zählt die Base c in den Zeilen 0 bis i-1 der BWT: Zählstand des Blocks plus Auszählen
-der Wörter bis i (Bitmaske und Popcount). Rückwärtssuche über das Muster von hinten nach vorn:
+der Wörter bis i (Bitmaske und Popcount). `occ4(i)` liefert die Zählung für alle vier Basen in
+einem Durchgang durch denselben Block (wie `bwt_occ4` in bwa): je Wort drei Popcounts, A ergibt
+sich als Rest. Die Seed-Suche braucht immer alle vier. Rückwärtssuche über das Muster von hinten nach vorn:
 
 ```text
 lo = 0; hi = Zeilen
@@ -60,7 +62,7 @@ N-Strecke berührt. Übrig bleiben die gefilterten Treffer.
 
 ## Prüfung
 Siehe [Werkzeug index](../werkzeuge/index.md), Abschnitt Validierung. Tests: Treffer gegen naive
-Suche in beiden Varianten, `occ` gegen direktes Zählen an jeder Zeile, Datei-Rundreise,
+Suche in beiden Varianten, `occ` und `occ4` gegen direktes Zählen an jeder Zeile, Datei-Rundreise,
 beschädigte und abgeschnittene Dateien, Vollprüfung erkennt eine geänderte Base und eine geänderte
 Stichprobe.
 
