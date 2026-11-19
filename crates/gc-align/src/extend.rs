@@ -74,7 +74,286 @@ pub struct Extension {
 
 /// Verlängert ab dem Anker mit Score `h0` über `query` (Read) und `target` (Referenz).
 /// `end_bonus` geht nur in die Begrenzung der Bandbreite ein, wie in bwa.
+///
+/// Die Rechnung endet, sobald feststeht, dass keine weitere Zeile der Referenz das Ergebnis noch
+/// ändern kann (siehe `nothing_left_to_gain`). bwa rechnet in dem Fall weiter, bis der Score um
+/// `zdrop` gefallen ist, und kommt zum selben Ergebnis.
+///
+/// Gerechnet wird, wenn die Zahlen in 16 Bit passen (bei Reads bis einige tausend Basen immer),
+/// zeilenweise in Durchgängen, aus denen der Übersetzer Vektorbefehle macht (`extend_rows`);
+/// sonst Zelle für Zelle (`extend_cells`). Beide liefern dasselbe.
 pub fn extend(query: &[u8], target: &[u8], sc: &Scoring, end_bonus: i32, h0: i32) -> Extension {
+    if fits_16_bit(query.len(), sc, h0) {
+        extend_rows(query, target, sc, end_bonus, h0, true)
+    } else {
+        extend_cells(query, target, sc, end_bonus, h0, true)
+    }
+}
+
+/// Zellen je Block in `extend_rows`: acht Zahlen zu 16 Bit füllen ein Vektorregister von 128 Bit,
+/// das jeder unterstützte Prozessor hat.
+const LANES: usize = 8;
+
+/// Die ersten `LANES` Werte als Feld fester Länge.
+#[inline(always)]
+fn lanes(s: &[i16]) -> [i16; LANES] {
+    let mut a = [0i16; LANES];
+    a.copy_from_slice(&s[..LANES]);
+    a
+}
+
+/// Bleiben alle Zwischenwerte von `extend_rows` sicher in 16 Bit? Der größte ist der höchste
+/// mögliche Score plus der Ausgleich für die Insertionsfolge, der kleinste liegt um dieselbe
+/// Größe unter dem Startwert der Folge (-16384).
+fn fits_16_bit(qlen: usize, sc: &Scoring, h0: i32) -> bool {
+    let costs = [
+        sc.matching,
+        sc.mismatch,
+        sc.ambiguous,
+        sc.o_del,
+        sc.e_del,
+        sc.o_ins,
+        sc.e_ins,
+    ];
+    if costs.iter().any(|&c| !(0..=1000).contains(&c)) || !(0..=16_000).contains(&h0) {
+        return false;
+    }
+    let q = qlen as i64;
+    let span = i64::from(h0)
+        + (q + LANES as i64) * i64::from(sc.matching + sc.e_ins)
+        + i64::from(sc.o_ins + sc.e_ins + sc.o_del + sc.e_del + sc.mismatch + sc.ambiguous);
+    span < 16_000
+}
+
+/// Wie [`extend_cells`], aber jede Zeile in getrennten, einfachen Durchgängen über Felder von
+/// 16-Bit-Zahlen, damit der Übersetzer Vektorbefehle daraus macht. Die einzige Größe, die in
+/// einer Zeile von Zelle zu Zelle weiterläuft, ist die Insertion `F`: Sie ist das Maximum über
+/// alle Zellen links davon, je Schritt um `e_ins` gesunken. Mit dem Ausgleich `ramp[k] = k *
+/// e_ins` wird daraus ein laufendes Maximum, ein einziger Rechenschritt je Zelle; alles andere
+/// hängt nur von der vorigen Zeile ab.
+fn extend_rows(
+    query: &[u8],
+    target: &[u8],
+    sc: &Scoring,
+    end_bonus: i32,
+    h0: i32,
+    stop_early: bool,
+) -> Extension {
+    let n_q = query.len();
+    let qlen = n_q as i32;
+    let tlen = target.len() as i32;
+    let (e_del, e_ins) = (sc.e_del as i16, sc.e_ins as i16);
+    let oe_del = (sc.o_del + sc.e_del) as i16;
+    let oe_ins = (sc.o_ins + sc.e_ins) as i16;
+    // Je Spalte j: h = H(i-1, j-1), e = E(i, j).
+    let mut h = vec![0i16; n_q + 2 + LANES];
+    let mut e = vec![0i16; n_q + 2 + LANES];
+    h[0] = h0 as i16;
+    if qlen >= 1 {
+        h[1] = (h0 - i32::from(oe_ins)).max(0) as i16;
+    }
+    let mut j = 2;
+    while j <= n_q && h[j - 1] > e_ins {
+        h[j] = h[j - 1] - e_ins;
+        j += 1;
+    }
+    let limit = |open: i32, ext: i32| -> i32 {
+        ((f64::from(qlen * sc.matching + end_bonus - open) / f64::from(ext) + 1.0) as i32).max(1)
+    };
+    let w = sc
+        .band_width
+        .min(limit(sc.o_ins, sc.e_ins))
+        .min(limit(sc.o_del, sc.e_del));
+
+    // Alle Felder haben `LANES` Plätze Luft, damit ganze Blöcke gelesen werden können.
+    let stride = n_q + LANES;
+    let mut profile = vec![0i16; 5 * stride];
+    for (a, row) in profile.chunks_exact_mut(stride).enumerate() {
+        for (p, &q) in row.iter_mut().zip(query) {
+            *p = sc.score(a as u8, q) as i16;
+        }
+    }
+    let ramp: Vec<i16> = (0..=stride).map(|k| (k as i32 * sc.e_ins) as i16).collect();
+    // Arbeitsfelder einer Zeile: bester Wert ohne Insertion, neue Deletion, laufendes Maximum,
+    // fertige Zelle.
+    let mut top = vec![0i16; stride];
+    let mut del = vec![0i16; stride];
+    let mut run = vec![0i16; stride];
+    let mut out = vec![0i16; stride];
+
+    let (mut max, mut max_i, mut max_j) = (h0, -1i32, -1i32);
+    let (mut max_ie, mut gscore, mut max_off) = (-1i32, -1i32, 0i32);
+    let (mut beg, mut end) = (0i32, qlen);
+    for i in 0..tlen {
+        let t = usize::from(target[i as usize].min(4));
+        beg = beg.max(i - w);
+        end = end.min(i + w + 1).min(qlen);
+        let first = if beg == 0 {
+            (h0 - (sc.o_del + sc.e_del * (i + 1))).max(0) as i16
+        } else {
+            0
+        };
+        let (mut h1, mut m, mut mj) = (first, 0i16, -1i32);
+        if beg < end {
+            let (b, n) = (beg as usize, end as usize);
+            let len = n - b;
+            // Gerechnet wird in ganzen Blöcken von `LANES` Zellen, auch über das Ende der Zeile
+            // hinaus; die überzähligen Zellen landen nur in den Arbeitsfeldern und werden nicht
+            // zurückgeschrieben.
+            let width = len.div_ceil(LANES) * LANES;
+            let points = &profile[t * stride + b..][..width];
+            // 1. Paar-Score aus der Diagonale (tot bleibt tot), bester Wert ohne Insertion,
+            //    Deletion für die nächste Zeile und der ausgeglichene Wert für die Insertion.
+            for c in (0..width).step_by(LANES) {
+                let d = lanes(&h[b + c..]);
+                let p = lanes(&points[c..]);
+                let ej = lanes(&e[b + c..]);
+                let up = lanes(&ramp[c..]);
+                let (mut x, mut dn, mut g) = ([0i16; LANES], [0i16; LANES], [0i16; LANES]);
+                for l in 0..LANES {
+                    // Maske statt Verzweigung: alle Bits gesetzt, wo die Diagonale lebt.
+                    let v = (d[l] + p[l]) & -i16::from(d[l] != 0);
+                    x[l] = v.max(ej[l]);
+                    dn[l] = (ej[l] - e_del).max(v - oe_del).max(0);
+                    g[l] = v - oe_ins + up[l];
+                }
+                top[c..c + LANES].copy_from_slice(&x);
+                del[c..c + LANES].copy_from_slice(&dn);
+                run[c..c + LANES].copy_from_slice(&g);
+            }
+            // 2. Insertion: laufendes Maximum der ausgeglichenen Werte links von der Zelle.
+            let mut best = i16::MIN / 2;
+            for r in &mut run[..len] {
+                let own = *r;
+                *r = best;
+                best = best.max(own);
+            }
+            // 3. Zelle fertig: H(i, j).
+            for c in (0..width).step_by(LANES) {
+                let (x, r, up) = (lanes(&top[c..]), lanes(&run[c..]), lanes(&ramp[c..]));
+                let mut o = [0i16; LANES];
+                for l in 0..LANES {
+                    o[l] = x[l].max(r[l] - up[l] + e_ins).max(0);
+                }
+                out[c..c + LANES].copy_from_slice(&o);
+            }
+            // 4. Zurückschreiben: H um eins versetzt als Diagonale der nächsten Zeile.
+            h[b + 1..=n].copy_from_slice(&out[..len]);
+            e[b..n].copy_from_slice(&del[..len]);
+            h[b] = first;
+            // 5. Höchster Wert der Zeile und die letzte Spalte, in der er steht.
+            let row = &h[b + 1..=n];
+            m = row.iter().copied().fold(0, i16::max);
+            mj = (b + row.iter().rposition(|&x| x == m).unwrap_or(len - 1)) as i32;
+            h1 = row[len - 1];
+        } else {
+            h[end as usize] = h1;
+        }
+        e[end as usize] = 0;
+        let (h1, m) = (i32::from(h1), i32::from(m));
+        if end.max(beg) == qlen {
+            if gscore <= h1 {
+                max_ie = i;
+            }
+            gscore = gscore.max(h1);
+        }
+        if m == 0 {
+            break;
+        }
+        if m > max {
+            max = m;
+            max_i = i;
+            max_j = mj;
+            max_off = max_off.max((mj - i).abs());
+        } else if sc.zdrop > 0 {
+            let (di, dj) = (i - max_i, mj - max_j);
+            let gap = if di > dj {
+                (di - dj) * sc.e_del
+            } else {
+                (dj - di) * sc.e_ins
+            };
+            if max - m - gap > sc.zdrop {
+                break;
+            }
+        }
+        if stop_early && gscore >= 0 {
+            let rest = (qlen - 1 - mj) * sc.matching;
+            let bound = max.min(gscore - 1);
+            if (rest == 0 || m + rest <= bound)
+                && nothing_left_to_gain(
+                    &h,
+                    &e,
+                    (beg as usize, end as usize),
+                    n_q,
+                    sc.matching,
+                    (max, gscore),
+                )
+            {
+                break;
+            }
+        }
+        // Band für die nächste Zeile auf die noch lebenden Spalten einengen.
+        let mut j = beg;
+        while j < end && h[j as usize] == 0 && e[j as usize] == 0 {
+            j += 1;
+        }
+        beg = j;
+        let mut j = end;
+        while j >= beg && h[j as usize] == 0 && e[j as usize] == 0 {
+            j -= 1;
+        }
+        end = (j + 2).min(qlen);
+    }
+    Extension {
+        score: max,
+        query_len: max_j + 1,
+        target_len: max_i + 1,
+        global_score: gscore,
+        global_target_len: max_ie + 1,
+        max_off,
+    }
+}
+
+/// Obergrenze für alles, was nach der fertigen Zeile noch kommen kann, gegen das schon
+/// Erreichte. Jeder Pfad in spätere Zeilen kommt aus einer lebenden Zelle dieser Zeile: schräg
+/// aus `h[j]` in die Spalte `j` oder senkrecht über `e[j]`. Von dort kann er höchstens noch für
+/// jede übrige Base des Reads einen Treffer bekommen; Lücken und Fehltreffer kosten nur, und eine
+/// Zelle, die auf 0 gefallen ist, lebt nicht wieder auf. Liegt diese Grenze für alle Zellen nicht
+/// über dem bisherigen Maximum und unter dem besten Score am Read-Ende, dann ändert sich keine
+/// der gemeldeten Größen mehr: Ein neues Maximum bräuchte einen höheren Score, ein neues Ende
+/// einen mindestens gleichen.
+#[inline]
+fn nothing_left_to_gain<T: Copy + Into<i32>>(
+    h: &[T],
+    e: &[T],
+    (beg, end): (usize, usize),
+    qlen: usize,
+    matching: i32,
+    (max, gscore): (i32, i32),
+) -> bool {
+    let limit = max.min(gscore - 1);
+    // h[qlen] wäre der Weg in eine Spalte hinter dem Read-Ende, die es nicht gibt.
+    for j in beg..=end.min(qlen.saturating_sub(1)) {
+        let left = (qlen - j) as i32;
+        let (hj, ej): (i32, i32) = (h[j].into(), e[j].into());
+        if hj > 0 && hj + left * matching > limit {
+            return false;
+        }
+        if ej > 0 && ej + (left - 1) * matching > limit {
+            return false;
+        }
+    }
+    true
+}
+
+fn extend_cells(
+    query: &[u8],
+    target: &[u8],
+    sc: &Scoring,
+    end_bonus: i32,
+    h0: i32,
+    stop_early: bool,
+) -> Extension {
     let qlen = query.len() as i32;
     let tlen = target.len() as i32;
     let oe_del = sc.o_del + sc.e_del;
@@ -165,6 +444,23 @@ pub fn extend(query: &[u8], target: &[u8], sc: &Scoring, end_bonus: i32, h0: i32
                 (dj - di) * sc.e_ins
             };
             if max - m - gap > sc.zdrop {
+                break;
+            }
+        }
+        // Vorprüfung ohne Durchgang: Die beste Zelle der Zeile selbst könnte noch gewinnen.
+        if stop_early && gscore >= 0 {
+            let rest = (qlen - 1 - mj) * sc.matching;
+            let limit = max.min(gscore - 1);
+            if (rest == 0 || m + rest <= limit)
+                && nothing_left_to_gain(
+                    &h,
+                    &e,
+                    (beg as usize, end as usize),
+                    query.len(),
+                    sc.matching,
+                    (max, gscore),
+                )
+            {
                 break;
             }
         }
@@ -329,6 +625,77 @@ mod tests {
             }
         }
         assert!(reached_end > 1000);
+    }
+
+    #[test]
+    fn stopping_early_changes_nothing() {
+        let mut rng = 0x5EED_1234_ABCD_u64;
+        let (mut stopped_rows, mut cases) = (0, 0);
+        for round in 0..20_000u32 {
+            let sc = Scoring {
+                band_width: [100, 200, 3, 10][(round % 4) as usize],
+                zdrop: [100, 100, 0, 20][((round / 4) % 4) as usize],
+                matching: 1 + (round / 16 % 2) as i32,
+                ..Scoring::default()
+            };
+            // Referenz länger als der Read, wie im Aligner: Platz für Lücken.
+            let qlen = (xorshift(&mut rng) % 90) as usize;
+            let tlen = qlen + (xorshift(&mut rng) % 120) as usize;
+            let target: Vec<u8> = (0..tlen).map(|_| (xorshift(&mut rng) & 3) as u8).collect();
+            let mut query = match round % 3 {
+                // gleich, mit wenigen Fehlern, oder mit Lücken und N
+                0 => target.clone(),
+                1 => {
+                    let mut q = target.clone();
+                    for _ in 0..xorshift(&mut rng) % 4 {
+                        if !q.is_empty() {
+                            let at = (xorshift(&mut rng) as usize) % q.len();
+                            q[at] = (xorshift(&mut rng) & 3) as u8;
+                        }
+                    }
+                    q
+                }
+                _ => mutate(&mut rng, &target),
+            };
+            query.truncate(qlen);
+            let h0 = 1 + (xorshift(&mut rng) % 150) as i32;
+            let end_bonus = [5, 0, 10_000][(round % 3) as usize];
+            let plain = extend_cells(&query, &target, &sc, end_bonus, h0, false);
+            let early = extend_cells(&query, &target, &sc, end_bonus, h0, true);
+            assert_eq!(
+                early, plain,
+                "Runde {round} q={query:?} t={target:?} h0={h0} {sc:?}"
+            );
+            // Die Rechnung in Zeilen mit 16 Bit liefert dasselbe, mit und ohne frühes Ende.
+            assert!(fits_16_bit(query.len(), &sc, h0));
+            for stop in [false, true] {
+                assert_eq!(
+                    extend_rows(&query, &target, &sc, end_bonus, h0, stop),
+                    plain,
+                    "Zeilen, Runde {round} q={query:?} t={target:?} h0={h0} {sc:?}"
+                );
+            }
+            cases += 1;
+            stopped_rows += usize::from(plain.global_score > 0);
+        }
+        assert!(cases == 20_000 && stopped_rows > 5_000);
+    }
+
+    #[test]
+    fn large_numbers_take_the_cell_by_cell_path() {
+        let sc = Scoring::default();
+        assert!(fits_16_bit(250, &sc, 250));
+        assert!(!fits_16_bit(20_000, &sc, 19));
+        assert!(!fits_16_bit(100, &sc, 20_000));
+        let wide = Scoring {
+            matching: 2000,
+            ..Scoring::default()
+        };
+        assert!(!fits_16_bit(10, &wide, 19));
+        // Beide Wege geben dasselbe, wo beide gehen; der lange Read geht den Weg der Zellen.
+        let long: Vec<u8> = (0..9000).map(|i| (i * 7 % 4) as u8).collect();
+        let x = extend(&long, &long, &sc, 5, 19);
+        assert_eq!((x.score, x.query_len, x.target_len), (9019, 9000, 9000));
     }
 
     #[test]

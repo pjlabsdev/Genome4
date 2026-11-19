@@ -38,6 +38,23 @@ Vergleich beider entscheidet später das Alignment, ob das Read-Ende abgeschnitt
 
 Beides kann nur Ergebnisse wegnehmen, nie bessere erfinden.
 
+- **Frühes Ende:** Nach jeder Zeile, in der das Read-Ende schon einmal erreicht war, wird
+  geprüft, ob noch etwas zu gewinnen ist. Jeder Pfad in spätere Zeilen kommt aus einer lebenden
+  Zelle der fertigen Zeile und kann von dort höchstens noch für jede übrige Base des Reads einen
+  Treffer bekommen. Liegt diese Obergrenze für alle Zellen nicht über dem bisherigen Maximum und
+  unter dem besten Score am Read-Ende, ändert sich keine gemeldete Größe mehr, und die Rechnung
+  endet. bwa rechnet in dem Fall weiter bis zum Z-Drop und kommt zum selben Ergebnis.
+
+## Rechnung in Zeilen
+Passen die Zahlen in 16 Bit (bei Reads bis einige tausend Basen immer), wird jede Zeile in
+Blöcken von acht Zellen gerechnet (`extend_rows`), sonst Zelle für Zelle (`extend_cells`). In
+einer Zeile läuft nur die Insertion `F` von Zelle zu Zelle weiter: Sie ist das Maximum über alle
+Zellen links davon, je Schritt um die Verlängerungskosten gesunken. Mit einem Ausgleich von
+`k` mal Verlängerungskosten wird daraus ein laufendes Maximum; alles andere hängt nur von der
+vorigen Zeile ab und lässt sich für acht Zellen zugleich rechnen. Bei echten Reads sind die
+Zeilen schmal (rund 10 Zellen), der Gewinn ist deshalb begrenzt. Die Zeit ist noch nicht
+gemessen.
+
 ## Validierung
 
 | Prüfung | Ergebnis |
@@ -45,13 +62,14 @@ Beides kann nur Ergebnisse wegnehmen, nie bessere erfinden.
 | Ohne Band und ohne Abbruch gegen eine unabhängige Rechnung mit drei vollen Matrizen (M, E, F getrennt geführt): Score, Endpunkt, Score am Read-Ende und dessen Zeile; 3.000 Zufallspaare mit Fehltreffern, Insertionen, Deletionen und N | gleich |
 | Mit engem Band und Abbruch: Score nie höher als ohne, nie unter `h0` (1.000 Paare) | bestanden |
 | Gesetzte Fälle: gleiche Folgen, Fehltreffer am Ende, leere Referenz | bestanden |
+| Frühes Ende und Rechnung in Zeilen gegen die Rechnung Zelle für Zelle ohne frühes Ende: 20.000 Zufallspaare mit vier Bandbreiten, vier Abbruchgrenzen, zwei Punktzahlen je Treffer, gleichen Folgen, wenigen Fehlern, Lücken und N | alle sechs gemeldeten Größen gleich |
+| Echte Reads (2.000 Paare, chr20): ganze SAM-Ausgabe vorher und nachher | gleich |
 
 ## Grenzen
 - Kein direkter Vergleich mit `ksw_extend2` aus bwa; die Funktion ist dort nicht von außen
   aufrufbar. Ob Band und Abbruch in jedem Einzelfall wie bei bwa greifen, zeigt erst der Vergleich
   der fertigen Alignments.
-- Eine Zelle nach der anderen, kein SIMD (wie in bwa). Die Punkte je Referenzbase stehen vorab
-  in einer Tabelle. Tempo: [M3 Tempo](../../bench/M3-tempo.md).
+- Die Punkte je Referenzbase stehen vorab in einer Tabelle. Tempo: [M3 Tempo](../../bench/M3-tempo.md).
 
 ## Literatur
 Li 2013; Gotoh 1982 für affine Lücken, siehe [Literatur](../literatur.md).
