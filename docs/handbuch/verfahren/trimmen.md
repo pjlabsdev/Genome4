@@ -1,6 +1,6 @@
 # Trimmen von Read-Paaren (Ersatz für fastp)
 
-Stand: Regeln festgehalten und gebaut (`gc-io`, Modul `trim`), noch nicht gegen fastp geprüft und noch nicht in `fq2bam`. Die Seite beschreibt, was fastp 1.4.0 mit den
+Stand: gebaut (`gc-io`, Modul `trim`) und in `genome fq2bam --trimmen` eingebaut; noch nicht Read für Read gegen fastp geprüft. Die Seite beschreibt, was fastp 1.4.0 mit den
 Einstellungen der alten Kette tut. `genome fq2bam --trimmen` soll genau das tun (Absicht vom
 19.11.2026, pj: Trimmen ist eine Option, ohne sie bleiben die Reads unverändert).
 
@@ -107,6 +107,14 @@ nichts.
 `gc-io`, Modul `trim`: `two_color`, `detect_adapter`, `Trimmer::trim_pair`, Zähler `Counts`. Die
 Liste bekannter Adapter ist aus `knownadapters.h` erzeugt (MIT-Lizenz, Quelle im Kopf der Datei
 `known_adapters.rs`). Tests prüfen jede Regel an kleinen Beispielen, darunter die Eigenheiten.
+
+## In `fq2bam`
+Mit `--trimmen` (nur für Paare) liest `fq2bam` vor dem Laden des Index den Anfang beider Dateien
+für die Adaptersuche, wie fastp. Dann wird jedes Paar beim Lesen getrimmt; verworfene Paare werden
+nicht ausgerichtet und erscheinen nicht in der BAM (wie bei fastp, das sie nicht schreibt). Die
+Blöcke für die Schätzung der Insertgröße zählen die Basen nach dem Trimmen. Zwischendateien
+entstehen keine. Protokoll: `TRIM.ADAPTER`, `TRIM.POLYG`, `TRIM.FERTIG`; die Zähler stehen auch
+im Bericht unter `trimmen` (ohne die Option `null`).
 
 ## Was `genome` zusätzlich tut
 Jede Entscheidung wird gezählt: Paare gesamt, mit PolyG gekürzt (je Seite), über Überlappung
