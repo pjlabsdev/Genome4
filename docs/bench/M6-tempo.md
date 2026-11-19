@@ -132,6 +132,31 @@ Gemessen nach dem Einbau (GRCh38 ohne ALT, 421.564 echte Paare, 4 Kerne, je ein 
 allen 844.609 Datensätzen und im Kopf bis auf die `@PG`-Zeile gleich. Der Spitzenbedarf beim Bau
 des Index mit `standard` ist nicht gemessen.
 
+### Nachtrag: Tabelle für kurze Muster in der Seed-Suche
+Profil nach dem Einbau des Index `standard` (ganzes Genom, echte Reads, 161 Stichproben des
+Aufrufstapels beim Ausrichten): Seed-Suche 50 %, Ortung 15 %, Verlängern 12 %. Gezählt an 50.000
+Paaren laufen 42 % aller Schritte der Seed-Suche auf Bereichen mit mehr als 1.000 Zeilen, 30 %
+auf 9 bis 1.000, 11 % auf 2 bis 8 und 17 % auf genau einer Zeile.
+
+Die Bereiche aller Muster bis Länge 10 werden deshalb beim Laden einmal berechnet und in der
+Suche nachgeschlagen (siehe [Seed-Suche](../handbuch/verfahren/seed-suche.md)). GRCh38 mit dem
+Index `standard`, 50.000 echte Paare, Sekunden des Ausrichtens, zwei Messreihen zu je drei
+Läufen:
+
+| Kerne | vorher | nachher | Verhältnis der mittleren Läufe |
+|---|---|---|---|
+| 1 | 12,4 s, 12,5 s, 12,7 s | 11,1 s, 11,1 s, 11,4 s | 0,89 |
+| 1 (Wiederholung) | 12,4 s, 12,9 s, 13,1 s | 11,3 s, 11,7 s, 11,7 s | 0,91 |
+| 4 | 3,57 s, 3,65 s, 3,78 s | 3,04 s, 3,07 s, 3,08 s | 0,84 |
+
+Die erste Messreihe lief zum Teil neben einem Übersetzungslauf, die Wiederholung ungestört. Die
+Ausgabe ist in allen Läufen dieselbe (md5 ohne `@PG`). Die Tabelle braucht rund 34 MB, ihr Bau
+beim Laden ist in der Gesamtlaufzeit nicht messbar (10,4 s gegen 10,4 s für 2.000 Paare samt
+Laden des Index).
+
+Eine Tabelle bis Länge 12 (rund 540 MB) war nicht schneller (11,2 s, 11,7 s, 12,0 s auf einem
+Kern; 3,04 s, 3,08 s, 3,10 s auf vier) und verlängert das Laden um 2,5 s. Es bleibt bei 10.
+
 ### Versucht und verworfen
 - **Zählen ohne Verzweigung** (immer alle Wörter des Blocks, nicht gefragte Basen ausgeblendet):
   24 % mehr Befehle in der Seed-Suche und langsamer, wieder ausgebaut.

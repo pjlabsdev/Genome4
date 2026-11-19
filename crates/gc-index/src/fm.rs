@@ -98,6 +98,8 @@ pub struct FmIndex {
     /// Stichproben des Suffix-Arrays, je `SA_BYTES` Bytes little-endian.
     sa_samples: Vec<u8>,
     reference: Reference,
+    /// Bereiche aller kurzen Muster, beim Anlegen des Index berechnet (nicht in der Datei).
+    pub(crate) short: crate::smem::ShortTable,
 }
 
 const REP: [u64; 4] = [
@@ -255,7 +257,7 @@ impl Builder {
             *before = sum;
             sum += count;
         }
-        FmIndex {
+        let mut index = FmIndex {
             rows: self.rows,
             primary: self.primary,
             c_before,
@@ -266,7 +268,10 @@ impl Builder {
             blocks: self.blocks,
             sa_samples: self.sa_samples,
             reference,
-        }
+            short: crate::smem::ShortTable::default(),
+        };
+        index.short = crate::smem::ShortTable::build(&index);
+        index
     }
 }
 
@@ -991,7 +996,7 @@ impl FmIndex {
         reference.contigs = contigs;
         reference.holes = holes;
         reference.forward = Packed { len: l, words };
-        Ok(FmIndex {
+        let mut index = FmIndex {
             rows,
             primary,
             c_before,
@@ -1002,7 +1007,10 @@ impl FmIndex {
             blocks,
             sa_samples,
             reference,
-        })
+            short: crate::smem::ShortTable::default(),
+        };
+        index.short = crate::smem::ShortTable::build(&index);
+        Ok(index)
     }
 }
 
