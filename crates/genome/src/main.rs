@@ -75,6 +75,13 @@ enum Command {
         #[arg(long)]
         log: Option<PathBuf>,
     },
+    /// Datensätze einer BAM nach ihren Flags zählen (wie `samtools flagstat`).
+    Flagstat {
+        bam: PathBuf,
+        /// Kerne für BGZF (0 = alle)
+        #[arg(long, default_value_t = 0)]
+        kerne: usize,
+    },
     /// FM-Index über ein Referenzgenom bauen, prüfen und abfragen (Meilenstein M2).
     Index {
         #[command(subcommand)]
@@ -1409,6 +1416,63 @@ fn main() -> Result<()> {
                     return Err(e);
                 }
             }
+        }
+        Command::Flagstat { bam, kerne } => {
+            let started = std::time::Instant::now();
+            let (mut reader, _, _) = gc_io::bam::open_raw(&bam, kerne)
+                .with_context(|| format!("{} öffnen", bam.display()))?;
+            let mut stats = gc_bam::FlagStats::default();
+            let mut record = Vec::new();
+            loop {
+                record.clear();
+                if !gc_io::bam::read_encoded(&mut reader, &mut record)
+                    .with_context(|| format!("{} lesen", bam.display()))?
+                {
+                    break;
+                }
+                anyhow::ensure!(
+                    stats.add(&record[4..]),
+                    "{}: Datensatz ist kürzer als seine festen Felder",
+                    bam.display()
+                );
+            }
+            let group = |c: &gc_bam::Counts| {
+                let share = |part: u64, whole: u64| {
+                    if whole > 0 {
+                        json!(part as f64 / whole as f64)
+                    } else {
+                        json!(null)
+                    }
+                };
+                json!({
+                    "gesamt": c.total,
+                    "hauptzeilen": c.primary,
+                    "sekundaer": c.secondary,
+                    "ergaenzend": c.supplementary,
+                    "duplikate": c.duplicates,
+                    "duplikate_hauptzeilen": c.primary_duplicates,
+                    "mit_ort": c.mapped,
+                    "anteil_mit_ort": share(c.mapped, c.total),
+                    "hauptzeilen_mit_ort": c.primary_mapped,
+                    "anteil_hauptzeilen_mit_ort": share(c.primary_mapped, c.primary),
+                    "aus_paaren": c.paired,
+                    "read1": c.read1,
+                    "read2": c.read2,
+                    "richtiges_paar": c.properly_paired,
+                    "anteil_richtiges_paar": share(c.properly_paired, c.paired),
+                    "beide_mit_ort": c.both_mapped,
+                    "nur_selbst_mit_ort": c.singletons,
+                    "anteil_nur_selbst_mit_ort": share(c.singletons, c.paired),
+                    "partner_auf_anderem_contig": c.mate_on_other_contig,
+                    "partner_auf_anderem_contig_mapq5": c.mate_on_other_contig_mapq5,
+                })
+            };
+            let result = json!({
+                "bestanden": group(&stats.passed),
+                "nicht_bestanden": group(&stats.failed),
+                "sekunden": started.elapsed().as_secs_f64(),
+            });
+            println!("{}", Envelope::new("genome.flagstat.v1", result).to_json()?);
         }
         Command::Index { command } => match command {
             IndexCommand::Build {

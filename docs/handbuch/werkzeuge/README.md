@@ -11,6 +11,7 @@ Jedes Werkzeug hat eine Seite nach derselben [Vorlage](vorlage.md).
 | `genome sort` | BAM nach Ort sortieren, mit festem Speicher | gebaut und geprüft | [sort](sort.md) |
 | `genome markdup` | Duplikate markieren, Verfahren wie samtools | gebaut und geprüft | [markdup](markdup.md) |
 | `genome bam-index` | Index `.bai` zu einer sortierten BAM | gebaut und geprüft | [bam-index](bam-index.md) |
+| `genome flagstat` | Datensätze nach Flags zählen | gebaut und geprüft | [flagstat](flagstat.md) |
 | `genome index` | FM-Index bauen, prüfen, abfragen | gebaut und geprüft | [index](index.md) |
 
 ## Geplant

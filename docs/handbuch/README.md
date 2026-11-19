@@ -35,6 +35,7 @@ Auf keiner Seite steht eine Genauigkeits- oder Tempoaussage ohne Messung.
 - [`genome sort`](werkzeuge/sort.md)
 - [`genome markdup`](werkzeuge/markdup.md)
 - [`genome bam-index`](werkzeuge/bam-index.md)
+- [`genome flagstat`](werkzeuge/flagstat.md)
 - [`genome fq2bam`](werkzeuge/fq2bam.md) (geplant)
 - [Vorlage für neue Werkzeugseiten](werkzeuge/vorlage.md)
 
