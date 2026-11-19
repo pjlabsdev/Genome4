@@ -64,6 +64,16 @@ Zeilen im Index. Die Tabelle steht nicht in der Indexdatei, das Format bleibt gl
 Am Ergebnis ändert das nichts. Ein Test vergleicht jeden Eintrag mit der einfachen Suche und die
 Suche mit Tabelle gegen die Suche ohne Tabelle (`short_table_changes_nothing`).
 
+## Speicherzugriffe vorab anstoßen
+Beim Schritt nach links werden alle noch lebenden Bereiche um dieselbe Base verlängert, und diese
+Schritte hängen nicht voneinander ab. Am ganzen Genom liegt jeder Zählblock fast immer nicht im
+Cache, der Prozessor wartet also bei jedem Schritt auf den Hauptspeicher. Deshalb werden zuerst
+die Zählblöcke aller Bereiche dieses Schritts angefordert (`prefetch_row`, über `gc-sys`) und erst
+dann gezählt. Die Wartezeiten überlappen sich. Am Ergebnis ändert das nichts, es ist nur ein
+Hinweis an den Prozessor. Muster, die in der Tabelle für kurze Muster stehen, brauchen keinen
+Block und werden übersprungen. Der Schritt nach rechts kann das nicht nutzen: Dort hängt jeder
+Schritt vom vorigen ab.
+
 ## Was ein Treffer enthält
 Anfang und Ende im Read und den Doppelbereich. Die Zeilenzahl ist die rohe Häufigkeit im
 Indextext beider Stränge. Sie kann Fundstellen enthalten, die über eine Contig-Grenze, die

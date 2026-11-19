@@ -242,6 +242,7 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "gc-log",
+ "gc-sys",
  "serde_json",
  "thiserror",
 ]
@@ -269,6 +270,10 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "gc-sys"
+version = "0.1.0"
 
 [[package]]
 name = "genome"
