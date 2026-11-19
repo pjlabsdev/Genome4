@@ -1,6 +1,6 @@
 # Trimmen von Read-Paaren (Ersatz für fastp)
 
-Stand: Regeln festgehalten, noch nicht gebaut. Die Seite beschreibt, was fastp 1.4.0 mit den
+Stand: Regeln festgehalten und gebaut (`gc-io`, Modul `trim`), noch nicht gegen fastp geprüft und noch nicht in `fq2bam`. Die Seite beschreibt, was fastp 1.4.0 mit den
 Einstellungen der alten Kette tut. `genome fq2bam --trimmen` soll genau das tun (Absicht vom
 19.11.2026, pj: Trimmen ist eine Option, ohne sie bleiben die Reads unverändert).
 
@@ -55,7 +55,9 @@ aus dem SRA), entscheidet der neue Name.
    dem Durchschnitt) und um die häufigste Fortsetzung in beide Richtungen verlängern
    (`getAdapterWithSeed`, `NucleotideTree`). Passt das Ergebnis zu einem bekannten Adapter, gilt
    dieser, sonst die gefundene Folge, wenn die Verlängerung bis zum Ende eindeutig war.
-4. Höchstens 60 Basen.
+4. Eigenheit: fastp kürzt eine längere Folge mit `resize(0, 60)`, das setzt die Länge auf 0. Ein
+   erkannter bekannter Adapter über 60 Basen (139 der 234 bekannten) gilt deshalb als "kein
+   Adapter", ohne dass die zweite Suche läuft. Genau so nachgebaut.
 
 ## Je Paar, in dieser Reihenfolge (`PairEndProcessor::processPairEnd`)
 
@@ -65,6 +67,8 @@ aus dem SRA), entscheidet der neue Name.
    Stelle 10 oder später (vom Ende gezählt ab 0, die Abbruchbase eingeschlossen) oder erst am
    Read-Anfang, wird der Read ab dem am weitesten vorn gesehenen G abgeschnitten. Wurde gar kein
    G gesehen, fällt nur die letzte Base weg (Anfangswert in fastp).
+   Folge davon: Die Suche läuft oft ein paar Basen über das reine PolyG hinaus und schneidet am
+   letzten G davor. Beispiel `…ACGT` gefolgt von 15 G: fastp schneidet 17 Basen, nicht 15.
 2. **Überlappung** (`OverlapAnalysis::analyze`): R2 wird rückwärts komplementiert und gegen R1
    verschoben. Erst Verschiebungen 0, 1, 2 … (R2 beginnt weiter rechts), solange die Verschiebung
    kleiner als Länge R1 minus 30 ist; dann 0, −1, −2 … (Insert kürzer als der Read), solange größer
@@ -93,6 +97,16 @@ aus dem SRA), entscheidet der neue Name.
    laufen in dieser Reihenfolge, der erste Grund zählt.
 7. **Paar behalten** nur, wenn beide Reads bestehen. Sonst fällt das ganze Paar weg (die alte
    Kette schreibt keine Einzel-Reads).
+
+## Unterschied beim Lesen
+`genome` schreibt Basen beim Lesen groß und liest `.` als `N` ([FASTQ-Prüfung](fastq-pruefung.md)),
+fastp lässt sie, wie sie sind. Bei üblichen Daten (nur `ACGTN` in Großbuchstaben) ändert das
+nichts.
+
+## Umsetzung
+`gc-io`, Modul `trim`: `two_color`, `detect_adapter`, `Trimmer::trim_pair`, Zähler `Counts`. Die
+Liste bekannter Adapter ist aus `knownadapters.h` erzeugt (MIT-Lizenz, Quelle im Kopf der Datei
+`known_adapters.rs`). Tests prüfen jede Regel an kleinen Beispielen, darunter die Eigenheiten.
 
 ## Was `genome` zusätzlich tut
 Jede Entscheidung wird gezählt: Paare gesamt, mit PolyG gekürzt (je Seite), über Überlappung
