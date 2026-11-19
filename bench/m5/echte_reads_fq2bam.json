@@ -1,0 +1,51 @@
+{
+ "samtools": "1.24",
+ "A_einzelne_schritte": {
+  "zeilen": 844006,
+  "gleich_wie_einzelne_schritte": true,
+  "laeufe": {
+   "kerne4_speicher2048": {
+    "gleich_wie_hauptlauf": true,
+    "teile": 0,
+    "sekunden": 20.02
+   },
+   "kerne1_speicher2048": {
+    "gleich_wie_hauptlauf": true,
+    "teile": 0,
+    "sekunden": 68.11
+   },
+   "kerne4_speicher8": {
+    "gleich_wie_hauptlauf": true,
+    "teile": 34,
+    "sekunden": 20.68
+   }
+  }
+ },
+ "B_samtools_kette": {
+  "zeilen_samtools": 844006,
+  "zeilen_gleich_ohne_tlen": 844006,
+  "alle_gleich_ohne_tlen": true,
+  "zeilen_mit_anderem_tlen": 764,
+  "markiert_fq2bam": 7967,
+  "markiert_samtools": 7967
+ },
+ "C_index_und_zahlen": {
+  "quickcheck": true,
+  "idxstats_gleich_wie_samtools_index": true,
+  "flagstat_im_bericht_gleich": true,
+  "duplikat_statistik_gleich": true,
+  "kopf": [
+   "@HD\tVN:1.6\tSO:coordinate",
+   "@RG\tID:l1\tSM:p",
+   "@PG\tID:genome\tPN:genome\tVN:0.1.0\tCL:/home/user/genome4/targe"
+  ]
+ },
+ "bericht_sekunden_schritte": {
+  "ausrichten_und_teile": 17.901134534,
+  "bam_index": 0.240452296,
+  "index_laden": 0.100758689,
+  "zusammenfuehren_markieren_schreiben": 1.7567210549999999
+ },
+ "bericht_reads": 843128,
+ "alles_gleich": true
+}

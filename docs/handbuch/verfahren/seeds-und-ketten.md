@@ -16,7 +16,7 @@ Wie in BWA-MEM (`mem_collect_intv`), mit denselben Vorgaben:
    Muster länger als 19 Basen ist und seltener als 20-mal vorkommt; dann hinter dem Treffer
    weitermachen. Diese Seeds sind nicht nach links verlängert.
 
-Die Treffer aller Runden werden nach Anfang und Ende im Read geordnet, Doppelte entfallen.
+Die Treffer aller Runden werden nach Anfang und Ende im Read geordnet. Doppelte bleiben stehen, wie in bwa: In Wiederholungen entscheiden sie mit, welche Ketten entstehen ([Messung](../../bench/M5-echte-reads.md)).
 
 ## Orten
 Jede Zeile eines Treffers wird über die Suffix-Array-Stichproben in eine Textposition

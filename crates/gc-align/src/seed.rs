@@ -44,7 +44,7 @@ pub struct Seed {
 }
 
 /// Treffer aller drei Runden (SMEM, Nachsuche in langen Treffern, seltene Seeds von links nach
-/// rechts), nach Anfang und Ende geordnet, ohne Doppelte.
+/// rechts), nach Anfang und Ende geordnet. Doppelte bleiben erhalten.
 pub fn collect_intervals(index: &FmIndex, read: &[u8], opt: &SeedOptions) -> Vec<Smem> {
     let mut all = index.smems(read, opt.min_seed_len);
     // Nachsuche: Ein langer, seltener Treffer kann kürzere, häufigere Treffer verdecken, die zum
@@ -72,8 +72,10 @@ pub fn collect_intervals(index: &FmIndex, read: &[u8], opt: &SeedOptions) -> Vec
             x = next;
         }
     }
+    // Doppelte bleiben stehen, wie in bwa: Derselbe Treffer kann aus mehreren Runden kommen, und
+    // jeder ergibt eigene Seeds. In Wiederholungen (etwa einer langen Folge gleicher Basen)
+    // entscheidet das mit, welche Ketten entstehen.
     all.sort_unstable_by_key(|m| (m.start, m.end));
-    all.dedup_by_key(|m| (m.start, m.end));
     all
 }
 
@@ -227,5 +229,34 @@ mod tests {
         };
         let short: Vec<u8> = copy.iter().map(|&b| code(b)).collect();
         assert_eq!(collect_seeds(&index, &short, &thin).len(), 2);
+    }
+
+    /// In einer Folge gleicher Basen liefern mehrere Runden denselben Treffer. bwa behält die
+    /// Doppelten, und sie entscheiden mit, welche Ketten entstehen. Deshalb bleiben sie stehen.
+    #[test]
+    fn repeated_intervals_are_kept() {
+        let mut rng = 0x1234_5678_9ABC_DEF1u64;
+        let mut s: Vec<u8> = (0..4000)
+            .map(|_| b"CGT"[(xorshift(&mut rng) % 3) as usize])
+            .collect();
+        for at in [700, 1900, 3100] {
+            s[at..at + 60].fill(b'A');
+        }
+        let mut r = Reference::new();
+        r.push_contig("a", &s);
+        let index = FmIndex::build(r, Variant::Kompakt, 0).unwrap().0;
+        let code = |b: u8| gc_index::reference::encode(b).unwrap();
+        let mut read: Vec<u8> = s[660..700].iter().map(|&b| code(b)).collect();
+        read.extend(std::iter::repeat_n(code(b'A'), 75));
+        read.extend(s[760..790].iter().map(|&b| code(b)));
+        let intervals = collect_intervals(&index, &read, &SeedOptions::default());
+        assert!(intervals.is_sorted_by_key(|m| (m.start, m.end)));
+        let mut distinct: Vec<_> = intervals.iter().map(|m| (m.start, m.end)).collect();
+        distinct.dedup();
+        assert!(
+            distinct.len() < intervals.len(),
+            "kein doppelter Treffer unter {} Treffern",
+            intervals.len()
+        );
     }
 }

@@ -1,8 +1,9 @@
 # `genome fq2bam`
 
 Stand: erste lauffähige Fassung, auf chr20 ([Messung](../../bench/M5-fq2bam.md)) und auf dem
-ganzen Genom mit erzeugten Reads ([Messung](../../bench/M5-ganzes-genom.md)) geprüft. Ein Lauf mit
-echten Reads in voller Abdeckung, Trimmen, CRAM und die weitere Qualitätsauswertung sind offen.
+ganzen Genom mit erzeugten Reads ([Messung](../../bench/M5-ganzes-genom.md)) und mit echten
+Reads auf chr20 ([Messung](../../bench/M5-echte-reads.md)) geprüft. Ein Lauf mit echten Reads in
+voller Abdeckung, Trimmen, CRAM und die weitere Qualitätsauswertung sind offen.
 
 ## Zweck
 Ein Programm vom FASTQ bis zur sortierten, duplikatmarkierten, indizierten BAM mit ersten

@@ -175,7 +175,8 @@ pub fn quality_score(qual: &[u8]) -> i64 {
 /// Ergänzt bei den beiden Hauptzeilen eines Paares die Angaben zum Partner wie
 /// `samtools fixmate -m`: `ms` (Qualitätssumme des Partners) und, wo sie fehlt, `MC` (CIGAR des
 /// Partners; hat der Partner keinen Ort, schreibt bwa sie nicht und fixmate schreibt `*`). Zeilen ohne Qualitäten bekommen
-/// kein `ms`.
+/// kein `ms`. Ergänzende Zeilen (Flag 2048) übernehmen Ort, Strang, `MQ` und `MC` von der
+/// Hauptzeile des Partners.
 pub fn add_mate_tags(lines: &mut [Line]) {
     let main = |lines: &[Line], bit: u32| {
         lines
@@ -203,6 +204,52 @@ pub fn add_mate_tags(lines: &mut [Line]) {
         if let Some(score) = score {
             line.tags.push((*b"ms", TagValue::Int(score)));
         }
+    }
+    // Ergänzende Zeilen bekommen die Angaben der Hauptzeile des Partners (Ort, Strang, `MQ`,
+    // `MC`), wie fixmate es macht. bwa schreibt dort den Ort der eigenen Zeile, wenn der Partner
+    // keinen Ort hat, und `MC` mit hartem statt weichem Kürzen.
+    for (bit, mate) in [(0x40, b), (0x80, a)] {
+        let mate_line = &lines[mate];
+        let unmapped = mate_line.flag & 0x4 != 0;
+        let (contig, pos, reverse, mapq) = (
+            mate_line.contig,
+            mate_line.pos,
+            mate_line.flag & 0x10 != 0,
+            mate_line.mapq,
+        );
+        let mut cigar: String = mate_line
+            .cigar
+            .iter()
+            .map(|&(op, len)| format!("{len}{}", op as char))
+            .collect();
+        if cigar.is_empty() {
+            cigar.push('*');
+        }
+        for line in lines
+            .iter_mut()
+            .filter(|l| l.flag & bit != 0 && l.flag & 0x800 != 0)
+        {
+            line.mate_contig = contig;
+            line.mate_pos = pos;
+            line.flag = if reverse {
+                line.flag | 0x20
+            } else {
+                line.flag & !0x20
+            };
+            if unmapped {
+                line.flag |= 0x8;
+            } else {
+                set_tag(line, *b"MQ", TagValue::Int(i64::from(mapq)));
+            }
+            set_tag(line, *b"MC", TagValue::Text(cigar.clone()));
+        }
+    }
+}
+
+fn set_tag(line: &mut Line, tag: [u8; 2], value: TagValue) {
+    match line.tags.iter_mut().find(|(t, _)| *t == tag) {
+        Some(entry) => entry.1 = value,
+        None => line.tags.push((tag, value)),
     }
 }
 
@@ -938,5 +985,73 @@ mod tests {
         assert_eq!(l[3], here);
         assert!(l.contains(&"XS:i:100".to_string()));
         assert!(l.contains(&format!("XA:Z:a,+{there},100M,0;")));
+    }
+
+    /// Ergänzende Zeilen tragen nach `add_mate_tags` die Angaben der Hauptzeile des Partners.
+    #[test]
+    fn supplementary_lines_take_the_mate_primary() {
+        let line =
+            |flag: u32, pos: u64, cigar: Vec<(u8, u32)>, tags: Vec<([u8; 2], TagValue)>| Line {
+                name: "r".into(),
+                flag,
+                contig: Some(0),
+                pos,
+                mapq: 60,
+                cigar,
+                mate_contig: Some(0),
+                mate_pos: 0,
+                tlen: 0,
+                seq: vec![0; 4],
+                qual: b"IIII".to_vec(),
+                tags,
+            };
+        let text = |s: &str| TagValue::Text(s.into());
+        // Read 1: Hauptzeile vorwärts und eine ergänzende Zeile. Read 2: rückwärts, weich gekürzt.
+        let mut lines = vec![
+            line(
+                0x1 | 0x20 | 0x40,
+                100,
+                vec![(b'M', 4)],
+                vec![(*b"MC", text("1S3M"))],
+            ),
+            line(
+                0x1 | 0x40 | 0x800,
+                900,
+                vec![(b'H', 2), (b'M', 2)],
+                vec![(*b"MC", text("1H3M")), (*b"MQ", TagValue::Int(7))],
+            ),
+            line(
+                0x1 | 0x10 | 0x80,
+                300,
+                vec![(b'S', 1), (b'M', 3)],
+                vec![(*b"MC", text("4M"))],
+            ),
+        ];
+        lines[1].mate_pos = 900;
+        add_mate_tags(&mut lines);
+        let sup = &lines[1];
+        assert_eq!((sup.mate_contig, sup.mate_pos), (Some(0), 300));
+        assert_eq!(sup.flag, 0x1 | 0x20 | 0x40 | 0x800);
+        assert!(sup.tags.contains(&(*b"MC", text("1S3M"))));
+        assert!(sup.tags.contains(&(*b"MQ", TagValue::Int(60))));
+        assert!(!sup.tags.iter().any(|(t, _)| t == b"ms"));
+
+        // Partner ohne Ort: Bit 8 gesetzt, Bit 32 nach dem Strang seiner Hauptzeile, `MC:Z:*`.
+        let mut lines = vec![
+            line(0x1 | 0x8 | 0x40, 100, vec![(b'M', 4)], vec![]),
+            line(
+                0x1 | 0x8 | 0x20 | 0x40 | 0x800,
+                900,
+                vec![(b'H', 2), (b'M', 2)],
+                vec![],
+            ),
+            line(0x1 | 0x4 | 0x80, 100, vec![], vec![]),
+        ];
+        add_mate_tags(&mut lines);
+        let sup = &lines[1];
+        assert_eq!(sup.mate_pos, 100);
+        assert_eq!(sup.flag, 0x1 | 0x8 | 0x40 | 0x800);
+        assert!(sup.tags.contains(&(*b"MC", text("*"))));
+        assert!(!sup.tags.iter().any(|(t, _)| t == b"MQ"));
     }
 }
