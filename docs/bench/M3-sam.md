@@ -15,7 +15,7 @@ Stand: 18.11.2026. Verfahren: [Ausgabe als SAM](../handbuch/verfahren/sam-ausgab
 | | Satz A | Satz B |
 |---|---:|---:|
 | Reads | 200.000 | 200.000 |
-| alle Zeilen in allen Feldern gleich | 199.964 | 199.956 |
+| alle Zeilen in allen Feldern gleich | 199.964 | 199.955 |
 | andere Zahl von Zeilen | 0 | 0 |
 | Reads mit `XA` bei bwa | 5.281 | 5.366 |
 | Reads mit ergänzenden Zeilen bei bwa | 0 | 0 |
@@ -25,17 +25,18 @@ Abweichende Reads nach den Feldern, die sich unterscheiden:
 
 | Felder | Satz A | Satz B |
 |---|---:|---:|
-| XS | 25 | 27 |
+| XS | 24 | 28 |
 | pos | 7 | 8 |
-| XA | 1 | 4 |
-| XA, XS, mapq | 2 | 1 |
-| XS, mapq | 1 | 1 |
+| XA | 3 | 4 |
+| XA, XS, mapq | 1 | 1 |
+| XS, mapq | 1 | 0 |
 | mapq | 0 | 1 |
 | AS, MD, NM, XS, cigar, pos | 0 | 1 |
-| AS, MD, NM, cigar, pos | 0 | 1 |
+| AS, MD, pos | 0 | 1 |
+| MD, NM, cigar, pos | 0 | 1 |
 
 ## Einordnung
-- **Nur `XS`** (25 und 27 Reads), auch **`XS` mit MAPQ**: bwa findet einen Seed von 19 oder 20
+- **Nur `XS`** (24 und 28 Reads), auch **`XS` mit MAPQ**: bwa findet einen Seed von 19 oder 20
   Basen in einer mit Zufallsbasen gefüllten N-Strecke; Genome 4.0 verwirft solche Fundstellen
   bewusst. An einem Read nachvollzogen (`chr20:13337599:-:1`: bwa meldet einen Bereich von 20
   Basen bei chr20:64.334.606, dort stehen in der Referenz nur N), bei den übrigen nach dem
@@ -53,3 +54,10 @@ Abweichende Reads nach den Feldern, die sich unterscheiden:
 - Tempo: 81 s (Satz A) und 86 s (Satz B) für 200.000 Reads auf einem Kern, nichts optimiert.
 
 Rohdaten: `bench/m3/ergebnisse/sam_vergleich.json`, `sam_vergleich_indel.json`.
+
+## Nachtrag 19.11.2026: N-Stellen als unbekannt
+Seit diesem Stand sieht der Aligner an N-Stellen der Referenz "unbekannt" statt der Füllbase des
+Index ([Ausgabe als SAM](../handbuch/verfahren/sam-ausgabe.md)). Die Tabellen oben sind neu
+gemessen. Gegenüber vorher ändern sich in Satz A 5 von 200.000 Reads, alle in `XS`, `XA` oder
+der MAPQ (um höchstens 2 Punkte), keiner im Ort. Die Übereinstimmung mit bwa bleibt in Satz A
+bei 199.964 Reads und geht in Satz B von 199.956 auf 199.955.

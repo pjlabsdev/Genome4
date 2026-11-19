@@ -126,7 +126,7 @@ pub fn chain_to_regions(
     // Nie über Contig- oder Stranggrenze hinaus.
     let r0 = r0.max(c_beg as i64) as u64;
     let r1 = r1.min(c_end as i64) as u64;
-    let rseq: Vec<u8> = (r0..r1).map(|p| index.text_base(p)).collect();
+    let rseq = index.text_range(r0, r1);
 
     // Längste Seeds zuerst; bei gleicher Länge der spätere in der Kette zuerst (wie bwa).
     let mut order: Vec<usize> = (0..chain.seeds.len()).collect();

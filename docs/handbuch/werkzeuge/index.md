@@ -105,6 +105,7 @@ Zahlen stehen in den beiden Messdokumenten oben.
 - ALT-Contigs werden wie jedes andere Contig behandelt; die ALT-bewusste Behandlung gehört zum Aligner.
 - Die N-Füllung unterscheidet sich von der von bwa. Rohe Trefferzahlen können deshalb bei
   Wiederholungen neben Lücken um einzelne Fundstellen abweichen; gefilterte Treffer nicht.
+  Der Aligner liest N-Stellen als "unbekannt", nicht als Füllbase.
 
 ## Fehler und was zu tun ist
 `INDEX.CONTIG_FEHLT`, `INDEX.BAU_FEHLGESCHLAGEN`, `INDEX.PRUEFUNG_FEHLGESCHLAGEN`: siehe

@@ -165,3 +165,49 @@ fn output_is_the_same_for_any_core_count_and_as_bam() {
     }
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// N in der Referenz zählt als unbekannt: Abzug 1, `N` in `MD`, gezählt in `NM`. Das Ergebnis
+/// hängt nicht von der Füllbase ab, die der Index dort für die Suche führt.
+#[test]
+fn n_in_the_reference_is_unknown_not_a_filler_base() {
+    let dir = std::env::temp_dir().join(format!("genome-n-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut rng = Rng(0x1234_5678_9ABC_DEF1);
+    let mut contig: Vec<u8> = (0..3000).map(|_| b"ACGT"[rng.below(4) as usize]).collect();
+    let read = String::from_utf8(contig[1000..1100].to_vec()).unwrap();
+    contig[1050] = b'N';
+    contig[1051] = b'N';
+    let fasta = dir.join("ref.fa");
+    std::fs::write(
+        &fasta,
+        format!(">c\n{}\n", std::str::from_utf8(&contig).unwrap()),
+    )
+    .unwrap();
+    let fastq = dir.join("r.fq");
+    let rc = String::from_utf8(revcomp(read.as_bytes())).unwrap();
+    let qual = "I".repeat(100);
+    std::fs::write(
+        &fastq,
+        format!("@vor\n{read}\n+\n{qual}\n@rueck\n{rc}\n+\n{qual}\n"),
+    )
+    .unwrap();
+    let index = dir.join("ref.gcfm");
+    let s = |p: &Path| p.to_str().unwrap().to_string();
+    genome(&["index", "build", &s(&fasta), &s(&index)]);
+    let lines = records(&genome(&[
+        "index",
+        "sam",
+        &s(&index),
+        "--fastq",
+        &s(&fastq),
+    ]));
+    assert_eq!(lines.len(), 2);
+    for (line, flag) in lines.iter().zip(["0", "16"]) {
+        let f: Vec<&str> = line.split('\t').collect();
+        assert_eq!((f[1], f[3], f[5]), (flag, "1001", "100M"), "{line}");
+        for tag in ["NM:i:2", "MD:Z:50N0N48", "AS:i:96"] {
+            assert!(f[11..].contains(&tag), "{tag} fehlt: {line}");
+        }
+    }
+    std::fs::remove_dir_all(dir).ok();
+}
