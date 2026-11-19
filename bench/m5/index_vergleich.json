@@ -1,0 +1,57 @@
+{
+ "samtools": "1.24",
+ "dateien": [
+  {
+   "datei": "idx_chr20.bam",
+   "saetze": 260536,
+   "contigs": 1,
+   "faecher_genome": 384,
+   "faecher_samtools": 384,
+   "faecher_gleich": true,
+   "linearer_index_gleich": true,
+   "ohne_contig_gleich": true,
+   "dateien_bytegleich": false,
+   "bytes_index": 41376,
+   "abfragen": 2000,
+   "abfragen_verschieden": 0,
+   "datensaetze_geliefert": 8524230,
+   "ohne_ort_gleich": true,
+   "idxstats_gleich": true
+  },
+  {
+   "datei": "idx_7contigs.bam",
+   "saetze": 300000,
+   "contigs": 7,
+   "faecher_genome": 14,
+   "faecher_samtools": 14,
+   "faecher_gleich": true,
+   "linearer_index_gleich": true,
+   "ohne_contig_gleich": true,
+   "dateien_bytegleich": true,
+   "bytes_index": 576,
+   "abfragen": 2000,
+   "abfragen_verschieden": 0,
+   "datensaetze_geliefert": 1020970,
+   "ohne_ort_gleich": true,
+   "idxstats_gleich": true
+  },
+  {
+   "datei": "idx_samtools_sortiert.bam",
+   "saetze": 200000,
+   "contigs": 1,
+   "faecher_genome": 375,
+   "faecher_samtools": 375,
+   "faecher_gleich": true,
+   "linearer_index_gleich": true,
+   "ohne_contig_gleich": true,
+   "dateien_bytegleich": false,
+   "bytes_index": 40968,
+   "abfragen": 2000,
+   "abfragen_verschieden": 0,
+   "datensaetze_geliefert": 6548202,
+   "ohne_ort_gleich": true,
+   "idxstats_gleich": true
+  }
+ ],
+ "alles_gleich": true
+}

@@ -62,6 +62,19 @@ enum Command {
         #[arg(long)]
         log: Option<PathBuf>,
     },
+    /// Index `.bai` zu einer nach Ort sortierten BAM schreiben (wie `samtools index`).
+    BamIndex {
+        bam: PathBuf,
+        /// Indexdatei (Vorgabe: `<bam>.bai`)
+        #[arg(long)]
+        aus: Option<PathBuf>,
+        /// Kerne für BGZF (0 = alle)
+        #[arg(long, default_value_t = 0)]
+        kerne: usize,
+        /// Lauf-Protokoll als JSON-Zeilen in diese Datei
+        #[arg(long)]
+        log: Option<PathBuf>,
+    },
     /// FM-Index über ein Referenzgenom bauen, prüfen und abfragen (Meilenstein M2).
     Index {
         #[command(subcommand)]
@@ -585,6 +598,58 @@ fn markdup_bam(
         "saetze_je_sekunde": if seconds > 0.0 { stats.read as f64 / seconds } else { 0.0 },
     });
     gc_log::info("MARKDUP.FERTIG", "Duplikate markiert", result.clone());
+    Ok(result)
+}
+
+/// Schreibt den Index `.bai` zu einer nach Ort sortierten BAM.
+fn index_bam(
+    bam: &std::path::Path,
+    dst: &std::path::Path,
+    kerne: usize,
+) -> Result<serde_json::Value> {
+    let started = std::time::Instant::now();
+    let (mut reader, header, _) =
+        gc_io::bam::open_raw(bam, kerne).with_context(|| format!("{} öffnen", bam.display()))?;
+    let n_ref = header.reference_sequences().len();
+    // Stelle hinter dem zuletzt gelesenen Datensatz; am Anfang die Stelle hinter dem Kopf.
+    let mut position = gc_io::bam::virtual_position(&reader);
+    let mut builder = gc_bam::BaiBuilder::new(n_ref, position);
+    let mut st = gc_log::stage("bamindex.lesen", json!({ "contigs": n_ref }));
+    let mut record = Vec::new();
+    let mut records = 0u64;
+    loop {
+        record.clear();
+        if !gc_io::bam::read_encoded(&mut reader, &mut record)
+            .with_context(|| format!("{} lesen", bam.display()))?
+        {
+            break;
+        }
+        position = gc_io::bam::virtual_position(&reader);
+        builder.push_record(&record[4..], position)?;
+        records += 1;
+        st.heartbeat(30, || json!({ "saetze": records }));
+    }
+    st.finish(json!({ "saetze": records }));
+    // Nicht die Stelle nach dem Dateiende: Dort steht noch der leere Schlussblock der BAM.
+    let index = builder.finish(position);
+    let mut bytes = Vec::new();
+    index.write(&mut bytes)?;
+    let mut part = dst.as_os_str().to_owned();
+    part.push(".unfertig");
+    let part = PathBuf::from(part);
+    std::fs::write(&part, &bytes).with_context(|| format!("{} schreiben", part.display()))?;
+    std::fs::rename(&part, dst).with_context(|| format!("{} umbenennen", part.display()))?;
+    let seconds = started.elapsed().as_secs_f64();
+    let result = json!({
+        "saetze": records,
+        "ohne_contig": index.unplaced,
+        "contigs": n_ref,
+        "contigs_mit_daten": index.references.iter().filter(|r| !r.bins.is_empty()).count(),
+        "faecher": index.references.iter().map(|r| r.bins.len()).sum::<usize>(),
+        "bytes_index": bytes.len(),
+        "sekunden": seconds,
+    });
+    gc_log::info("BAMINDEX.FERTIG", "Index geschrieben", result.clone());
     Ok(result)
 }
 
@@ -1289,6 +1354,56 @@ fn main() -> Result<()> {
                         }),
                         cause: &format!("{e:#}"),
                         action: "Die Eingabe muss nach Ort sortiert sein (genome sort) und die Partner-Angaben MC und ms tragen (genome index sam --partner-angaben oder samtools fixmate -m)",
+                    });
+                    gc_log::run_end(false, json!({ "fehler": format!("{e:#}") }));
+                    return Err(e);
+                }
+            }
+        }
+        Command::BamIndex {
+            bam,
+            aus,
+            kerne,
+            log,
+        } => {
+            gc_log::init(gc_log::Config {
+                tool: "bam-index".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                level: gc_log::Level::Info,
+                jsonl: log,
+                stderr: true,
+            })?;
+            gc_log::install_panic_hook();
+            let dst = aus.unwrap_or_else(|| {
+                let mut name = bam.as_os_str().to_owned();
+                name.push(".bai");
+                PathBuf::from(name)
+            });
+            gc_log::run_header(json!({
+                "bam": bam.display().to_string(),
+                "index": dst.display().to_string(),
+                "kerne": kerne,
+            }));
+            gc_log::input_file("bam", &bam);
+            match index_bam(&bam, &dst, kerne) {
+                Ok(mut result) => {
+                    result["lauf"] = json!(gc_log::run_id());
+                    gc_log::run_end(true, result.clone());
+                    println!(
+                        "{}",
+                        Envelope::new("genome.bam-index.v1", result).to_json()?
+                    );
+                }
+                Err(e) => {
+                    gc_log::failure(gc_log::Failure {
+                        code: "BAMINDEX.FEHLGESCHLAGEN",
+                        what: "Der Index wurde nicht geschrieben",
+                        location: json!({
+                            "bam": bam.display().to_string(),
+                            "index": dst.display().to_string(),
+                        }),
+                        cause: &format!("{e:#}"),
+                        action: "Die BAM muss vollständig und nach Ort sortiert sein (genome sort); Contigs über 512 Mbp passen nicht in einen BAI-Index",
                     });
                     gc_log::run_end(false, json!({ "fehler": format!("{e:#}") }));
                     return Err(e);

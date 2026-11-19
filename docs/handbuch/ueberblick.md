@@ -27,6 +27,7 @@ fremden Programme auf (kein conda, Docker, Java, Python, Nextflow).
 | `gc-io` FASTA | lesen (auch gzip) | gebaut | [Werkzeug index](werkzeuge/index.md) |
 | `gc-io` BAM | lesen und schreiben, BGZF über alle Kerne | gebaut und geprüft | [Verfahren](verfahren/bam-schreiben.md) |
 | `gc-bam` Sortieren | nach Ort, fester Speicher, Reihenfolge wie samtools | gebaut und geprüft | [Verfahren](verfahren/sortieren.md) |
+| `gc-bam` Index | `.bai` wie samtools index, Inhalt gleich | gebaut und geprüft | [Verfahren](verfahren/bam-index.md) |
 | `gc-bam` Duplikate | markieren wie samtools markdup, ein Durchlauf mit Fenster | gebaut und geprüft | [Verfahren](verfahren/duplikate-markieren.md) |
 | `gc-schema` | Ergebnis-Hülle | gebaut | [Format](formate/ergebnis-huelle.md) |
 | `gc-log` | Lauf-Protokoll | gebaut | [Protokollierung](protokollierung.md) |
