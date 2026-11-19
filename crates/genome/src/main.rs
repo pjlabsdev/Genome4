@@ -144,6 +144,10 @@ enum IndexCommand {
         /// Als BAM in diese Datei schreiben statt als SAM-Text auf die Standardausgabe.
         #[arg(long)]
         bam: Option<PathBuf>,
+        /// Lesegruppe als Kopfzeile, Tabulatoren als \t geschrieben (wie bwa `-R`), zum Beispiel
+        /// '@RG\tID:lauf1\tSM:probe\tPL:ILLUMINA'. Jede Zeile bekommt die Kennung als `RG`.
+        #[arg(long)]
+        lesegruppe: Option<String>,
     },
 }
 
@@ -154,10 +158,15 @@ enum AlignOutput {
 }
 
 impl AlignOutput {
-    fn open(fm: &gc_index::FmIndex, bam: Option<&std::path::Path>, threads: usize) -> Result<Self> {
+    fn open(
+        fm: &gc_index::FmIndex,
+        read_group: Option<&gc_align::ReadGroup>,
+        bam: Option<&std::path::Path>,
+        threads: usize,
+    ) -> Result<Self> {
         use std::io::Write;
         let command_line = std::env::args().collect::<Vec<_>>().join(" ");
-        let header = gc_align::sam_header(fm, env!("CARGO_PKG_VERSION"), &command_line);
+        let header = gc_align::sam_header(fm, read_group, env!("CARGO_PKG_VERSION"), &command_line);
         Ok(match bam {
             Some(path) => AlignOutput::Bam(Box::new(
                 gc_io::bam::create_from_text(path, &header, threads)
@@ -220,9 +229,11 @@ fn index_sam(
     block_bases: u64,
     threads: usize,
     bam: Option<&std::path::Path>,
+    read_group: Option<&gc_align::ReadGroup>,
 ) -> Result<()> {
-    let opt = gc_align::AlignOptions::default();
-    let mut out = AlignOutput::open(fm, bam, threads)?;
+    let mut opt = gc_align::AlignOptions::default();
+    opt.sam.read_group = read_group.map(|rg| rg.id.clone());
+    let mut out = AlignOutput::open(fm, read_group, bam, threads)?;
     let mut reader1 = fastq::open(first)?;
     let mut reader2 = match second {
         Some(p) => Some(fastq::open(p)?),
@@ -1087,6 +1098,7 @@ fn main() -> Result<()> {
                 log,
                 kerne,
                 bam,
+                lesegruppe,
             } => {
                 let threads = if kerne == 0 {
                     std::thread::available_parallelism().map_or(1, usize::from)
@@ -1108,7 +1120,21 @@ fn main() -> Result<()> {
                     "block_basen": block_basen,
                     "kerne": threads,
                     "bam": bam.as_ref().map(|p| p.display().to_string()),
+                    "lesegruppe": lesegruppe,
                 }));
+                let read_group = match &lesegruppe {
+                    Some(text) => Some(gc_align::ReadGroup::parse(text).map_err(|cause| {
+                        gc_log::failure(gc_log::Failure {
+                            code: "ALIGN.LESEGRUPPE_UNGUELTIG",
+                            what: "Die Angabe bei --lesegruppe ist keine gültige @RG-Zeile",
+                            location: json!({ "angabe": text }),
+                            cause: &cause,
+                            action: "Form: '@RG\\tID:kennung\\tSM:probe', Tabulatoren als \\t geschrieben, ID ist Pflicht",
+                        });
+                        anyhow::anyhow!("--lesegruppe: {cause}")
+                    })?),
+                    None => None,
+                };
                 let fm = load_index(&index)?;
                 index_sam(
                     &fm,
@@ -1117,6 +1143,7 @@ fn main() -> Result<()> {
                     block_basen,
                     threads,
                     bam.as_deref(),
+                    read_group.as_ref(),
                 )?;
             }
             IndexCommand::Smem {

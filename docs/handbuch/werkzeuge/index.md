@@ -14,7 +14,7 @@ genome index build <referenz.fa[.gz]> <index.gcfm> [Optionen]
 genome index locate <index.gcfm> <SEQUENZ> [--limit N]
 genome index count <index.gcfm> <sequenzen.txt>
 genome index smem <index.gcfm> --sequenz <SEQUENZ> | --fastq <reads.fq[.gz]> [Optionen]
-genome index sam <index.gcfm> --fastq <reads.fq[.gz]> [--fastq2 <partner.fq[.gz]>] [--block-basen N] [--kerne N] [--bam aus.bam] [--log DATEI] > aus.sam
+genome index sam <index.gcfm> --fastq <reads.fq[.gz]> [--fastq2 <partner.fq[.gz]>] [--block-basen N] [--kerne N] [--bam aus.bam] [--lesegruppe '@RG\tID:..'] [--log DATEI] > aus.sam
 genome index ketten <index.gcfm> --fastq <reads.fq[.gz]> [--wahrheit-im-namen] [--max-orte N] [--fehlende DATEI] [--tabelle DATEI]
 ```
 
@@ -69,7 +69,8 @@ FASTA, unkomprimiert oder gzip. Groß- und Kleinbuchstaben gelten gleich. Alles 
   [BAM schreiben](../verfahren/bam-schreiben.md). `--kerne N` (Standard 0 = alle); die Ausgabe
   hängt nicht von der Zahl der Kerne ab
   ([Ausrichten auf mehreren Kernen](../verfahren/mehrere-kerne.md)). Am Ende steht
-  `ALIGN.FERTIG` im Protokoll. Mit `--fastq2` werden die Reads als Paare
+  `ALIGN.FERTIG` im Protokoll. `--lesegruppe '@RG\tID:lauf1\tSM:probe'` (Tabulatoren als
+  `\t` geschrieben, wie `bwa mem -R`) setzt die Kopfzeile `@RG` und `RG` in jeder Zeile. Mit `--fastq2` werden die Reads als Paare
   ausgerichtet ([Read-Paare](../verfahren/read-paare.md)); die Insertgröße wird je Block von
   `--block-basen` Basen geschätzt (Standard 10.000.000) und steht als `ALIGN.INSERTGROESSE` im
   Protokoll (Fehlerausgabe, mit `--log` zusätzlich als JSONL). Ein Prüfbefehl für die

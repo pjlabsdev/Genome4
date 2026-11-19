@@ -211,3 +211,79 @@ fn n_in_the_reference_is_unknown_not_a_filler_base() {
     }
     std::fs::remove_dir_all(dir).ok();
 }
+
+fn tiny_case(dir: &Path) -> (String, String) {
+    let mut rng = Rng(0x0BAD_CAFE_1234_0001);
+    let contig: Vec<u8> = (0..3000).map(|_| b"ACGT"[rng.below(4) as usize]).collect();
+    let fasta = dir.join("ref.fa");
+    std::fs::write(
+        &fasta,
+        format!(">c\n{}\n", std::str::from_utf8(&contig).unwrap()),
+    )
+    .unwrap();
+    let qual = "I".repeat(100);
+    let mut fq = String::new();
+    // ein Read mit Ort, einer aus Zufallsbasen ohne Ort
+    let read = std::str::from_utf8(&contig[500..600]).unwrap().to_string();
+    let other: String = (0..100)
+        .map(|_| b"ACGT"[rng.below(4) as usize] as char)
+        .collect();
+    writeln!(fq, "@a\n{read}\n+\n{qual}\n@b\n{other}\n+\n{qual}").unwrap();
+    let fastq = dir.join("r.fq");
+    std::fs::write(&fastq, fq).unwrap();
+    let index = dir.join("ref.gcfm");
+    let s = |p: &Path| p.to_str().unwrap().to_string();
+    genome(&["index", "build", &s(&fasta), &s(&index)]);
+    (s(&index), s(&fastq))
+}
+
+/// Lesegruppe: Kopfzeile `@RG` zwischen `@SQ` und `@PG`, `RG` in jeder Zeile (auch ohne Ort),
+/// in SAM und BAM gleich. Eine Angabe ohne ID wird mit festem Fehlercode abgelehnt.
+#[test]
+fn read_group_goes_into_header_and_every_line() {
+    let dir = std::env::temp_dir().join(format!("genome-rg-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (index, fastq) = tiny_case(&dir);
+    let rg = "@RG\\tID:lauf1\\tSM:probe\\tPL:ILLUMINA";
+    let base = [
+        "index",
+        "sam",
+        &index,
+        "--fastq",
+        &fastq,
+        "--lesegruppe",
+        rg,
+    ];
+    let text = String::from_utf8(genome(&base)).unwrap();
+    let head: Vec<&str> = text.lines().filter(|l| l.starts_with('@')).collect();
+    assert_eq!(head[0], "@SQ\tSN:c\tLN:3000");
+    assert_eq!(head[1], "@RG\tID:lauf1\tSM:probe\tPL:ILLUMINA");
+    assert!(head[2].starts_with("@PG\t"));
+    let lines = records(text.as_bytes());
+    assert_eq!(lines.len(), 2);
+    for line in &lines {
+        assert!(line.split('\t').any(|f| f == "RG:Z:lauf1"), "{line}");
+    }
+    // bei bwa steht RG hinter XS
+    assert!(lines[0].contains("\tXS:i:0\tRG:Z:lauf1"), "{}", lines[0]);
+
+    let bam = dir.join("aus.bam");
+    let mut args = base.to_vec();
+    let bam_path = bam.to_str().unwrap().to_string();
+    args.extend(["--bam", &bam_path]);
+    genome(&args);
+    assert_eq!(bam_records(&bam), lines);
+    let (_, header) = gc_io::bam::open(&bam, 1).unwrap();
+    assert_eq!(header.read_groups().len(), 1);
+
+    let bad = Command::new(env!("CARGO_BIN_EXE_genome"))
+        .args(["index", "sam", &index, "--fastq", &fastq])
+        .args(["--lesegruppe", "@RG\\tSM:probe"])
+        .output()
+        .unwrap();
+    assert!(!bad.status.success());
+    assert!(bad.stdout.is_empty(), "bei einem Fehler keine Ausgabe");
+    let err = String::from_utf8_lossy(&bad.stderr);
+    assert!(err.contains("ALIGN.LESEGRUPPE_UNGUELTIG"), "{err}");
+    std::fs::remove_dir_all(dir).ok();
+}

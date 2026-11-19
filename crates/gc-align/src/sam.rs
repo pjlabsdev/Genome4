@@ -39,6 +39,8 @@ pub struct SamOptions {
     pub xa_drop_ratio: f32,
     /// Gibt es mehr solche Bereiche als hier, entfällt `XA` ganz (`-h`).
     pub max_xa_hits: usize,
+    /// Kennung der Lesegruppe; jede Zeile bekommt sie als `RG` (`-R`).
+    pub read_group: Option<String>,
 }
 
 impl Default for SamOptions {
@@ -48,6 +50,7 @@ impl Default for SamOptions {
             drop_ratio: 0.5,
             xa_drop_ratio: 0.8,
             max_xa_hits: 5,
+            read_group: None,
         }
     }
 }
@@ -85,16 +88,88 @@ pub fn find_regions(index: &FmIndex, read: &[u8], opt: &AlignOptions) -> (Vec<Re
 }
 
 /// Kopfzeilen: je Contig eine `@SQ`-Zeile, dazu `@PG`.
-pub fn sam_header(index: &FmIndex, program_version: &str, command_line: &str) -> String {
+pub fn sam_header(
+    index: &FmIndex,
+    read_group: Option<&ReadGroup>,
+    program_version: &str,
+    command_line: &str,
+) -> String {
     let mut s = String::new();
     for c in &index.reference().contigs {
         let _ = writeln!(s, "@SQ\tSN:{}\tLN:{}", c.name, c.len);
+    }
+    if let Some(rg) = read_group {
+        let _ = writeln!(s, "{}", rg.line);
     }
     let _ = writeln!(
         s,
         "@PG\tID:genome\tPN:genome\tVN:{program_version}\tCL:{command_line}"
     );
     s
+}
+
+/// Eine Lesegruppe: die Kopfzeile `@RG` und ihre Kennung.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadGroup {
+    /// Die Kopfzeile mit echten Tabulatoren, ohne Zeilenende.
+    pub line: String,
+    /// Der Wert von `ID`.
+    pub id: String,
+}
+
+impl ReadGroup {
+    /// Liest die Angabe, wie bwa sie mit `-R` nimmt: `@RG\tID:x\tSM:y`, die Tabulatoren als
+    /// die zwei Zeichen `\t` geschrieben. Geprüft wird wie in bwa (`bwa_set_rg`), dazu, dass
+    /// jedes Feld die Form `XX:Wert` hat und kein Zeilenende vorkommt.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        if !text.starts_with("@RG") {
+            return Err("die Lesegruppe muss mit @RG beginnen".to_string());
+        }
+        if text.contains('\t') {
+            return Err(
+                "die Lesegruppe enthält echte Tabulatoren; bitte als \\t schreiben".to_string(),
+            );
+        }
+        let line = text.replace("\\t", "\t");
+        if line.contains(['\n', '\r']) || line.contains("\\n") || line.contains("\\r") {
+            return Err("die Lesegruppe darf kein Zeilenende enthalten".to_string());
+        }
+        let mut id = None;
+        for field in line.split('\t').skip(1) {
+            let bytes = field.as_bytes();
+            if bytes.len() < 4 || bytes[2] != b':' {
+                return Err(format!(
+                    "Feld \"{field}\" der Lesegruppe hat nicht die Form XX:Wert"
+                ));
+            }
+            if &field[..3] == "ID:" && id.is_none() {
+                id = Some(field[3..].to_string());
+            }
+        }
+        if line.split('\t').next() != Some("@RG") {
+            return Err("nach @RG muss ein \\t folgen".to_string());
+        }
+        let Some(id) = id else {
+            return Err("die Lesegruppe hat kein Feld ID".to_string());
+        };
+        if id.len() > 255 {
+            return Err("die Kennung der Lesegruppe ist länger als 255 Zeichen".to_string());
+        }
+        Ok(ReadGroup { line, id })
+    }
+}
+
+impl Line {
+    /// Trägt die Lesegruppe ein: `RG` steht wie bei bwa hinter `XS` und vor `SA` und `XA`.
+    pub fn set_read_group(&mut self, id: &str) {
+        let at = self
+            .tags
+            .iter()
+            .position(|(tag, _)| tag == b"SA" || tag == b"XA")
+            .unwrap_or(self.tags.len());
+        self.tags
+            .insert(at, (*b"RG", TagValue::Text(id.to_string())));
+    }
 }
 
 /// Ein Ausgabesatz, wie er in eine SAM-Zeile geht (bwa `mem_aln_t`).
@@ -637,14 +712,43 @@ pub fn read_lines(
     opt: &AlignOptions,
 ) -> Vec<Line> {
     let recs = regions_to_recs(index, read, regions, frac_rep, 0, opt);
-    (0..recs.len())
+    let mut lines: Vec<Line> = (0..recs.len())
         .map(|which| make_line(index, name, read, qual, &recs, which, None))
-        .collect()
+        .collect();
+    if let Some(id) = &opt.sam.read_group {
+        for line in &mut lines {
+            line.set_read_group(id);
+        }
+    }
+    lines
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_group_is_parsed_and_checked_like_bwa() {
+        let rg = ReadGroup::parse("@RG\\tID:lauf1\\tSM:probe 1\\tPL:ILLUMINA").unwrap();
+        assert_eq!(rg.id, "lauf1");
+        assert_eq!(rg.line, "@RG\tID:lauf1\tSM:probe 1\tPL:ILLUMINA");
+        // ID muss nicht vorn stehen
+        assert_eq!(ReadGroup::parse("@RG\\tSM:x\\tID:7").unwrap().id, "7");
+        for bad in [
+            "RG\\tID:a",           // beginnt nicht mit @RG
+            "@RG\tID:a",           // echter Tabulator
+            "@RG\\tSM:x",          // keine ID
+            "@RG ID:a",            // kein \t nach @RG
+            "@RG\\tID:a\\tfalsch", // Feld ohne XX:
+            "@RG\\tID:a\\nSM:x",   // Zeilenende
+            "@RG\\tID:",           // leere Kennung
+        ] {
+            assert!(ReadGroup::parse(bad).is_err(), "{bad:?}");
+        }
+        let long = format!("@RG\\tID:{}", "x".repeat(256));
+        assert!(ReadGroup::parse(&long).is_err());
+    }
+
     use gc_index::{Reference, Variant};
 
     fn xorshift(state: &mut u64) -> u64 {

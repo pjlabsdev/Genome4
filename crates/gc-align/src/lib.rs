@@ -32,8 +32,8 @@ pub use pair::{
 };
 pub use region::{Region, RegionOptions, chain_to_regions};
 pub use sam::{
-    AlignOptions, Line, SamOptions, TagValue, align_read, find_regions, read_lines, sam_header,
-    write_sam,
+    AlignOptions, Line, ReadGroup, SamOptions, TagValue, align_read, find_regions, read_lines,
+    sam_header, write_sam,
 };
 pub use seed::{
     Seed, SeedOptions, collect_intervals, collect_seeds, locate_seeds, repeat_fraction,
