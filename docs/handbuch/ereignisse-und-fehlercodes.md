@@ -29,6 +29,7 @@ Kennungen sind fest: sie ändern ihre Bedeutung nicht. Neue kommen hinzu.
 | `ALIGN.FERTIG` | info | Ausrichten beendet: Reads, geschriebene Zeilen, Blöcke, Kerne, Laufzeit, Reads je Sekunde | |
 | `INDEX.STICHPROBE.RUNDE` | debug | eine Verfeinerungsrunde der Stichproben-Ränge | |
 | `INDEX.PRUEFUNG.STAND` | debug | Fortschritt der Selbstprüfung | |
+| `ALIGN.LESEGRUPPE_UNGUELTIG` | error | die Angabe bei `--lesegruppe` ist keine gültige `@RG`-Zeile (kein `@RG` am Anfang, echte Tabulatoren, kein `ID`, Feld ohne `XX:Wert`, Zeilenende) | Form `'@RG\tID:kennung\tSM:probe'`, Tabulatoren als `\t` geschrieben |
 | `INDEX.CONTIG_FEHLT` | error | ein mit `--contig` gewähltes Contig steht nicht in der FASTA | Namen in der FASTA prüfen (z. B. `20` statt `chr20`) |
 | `INDEX.BAU_FEHLGESCHLAGEN` | error | Bau nicht möglich: leere Referenz, zu groß für das gewählte Verfahren, oder interner Fehler | steht im Feld `was_tun` |
 | `INDEX.PRUEFUNG_FEHLGESCHLAGEN` | error | Stichproben- oder Vollprüfung hat eine Abweichung gefunden | Index nicht verwenden, Protokoll aufbewahren und melden |

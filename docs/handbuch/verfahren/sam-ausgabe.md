@@ -3,7 +3,7 @@
 Stand: gebaut und geprüft (`gc-align`, `sam.rs`; Prüfbefehl `genome index sam`). Messung:
 [M3 SAM gegen bwa](../../bench/M3-sam.md). Paare: [Read-Paare](read-paare.md). Mehrere Kerne:
 [Ausrichten auf mehreren Kernen](mehrere-kerne.md). Als BAM:
-[BAM lesen und schreiben](bam-schreiben.md). Noch nicht gebaut: Lesegruppen (`@RG`), ALT-Contigs.
+[BAM lesen und schreiben](bam-schreiben.md). Noch nicht gebaut: ALT-Contigs.
 
 ## Was je Read geschrieben wird
 Wie `mem_reg2sam` und `mem_aln2sam` in bwa.
@@ -30,9 +30,22 @@ reverse Komplement des Reads und die Qualitäten umgedreht.
 | `AS` | Score des Alignments |
 | `XS` | Score des besten untergeordneten Bereichs, 0 wenn es keinen gibt |
 | `SA` | die anderen Zeilen desselben Reads: `Contig,Position,Strang,CIGAR,MAPQ,NM;` |
+| `RG` | Kennung der Lesegruppe, wenn eine angegeben ist; steht wie bei bwa hinter `XS` |
 | `XA` | fast gleich gute andere Orte, siehe oben |
 
-Kopf: je Contig eine `@SQ`-Zeile, dazu `@PG` mit Version und Aufruf.
+Kopf: je Contig eine `@SQ`-Zeile, dann die Lesegruppe `@RG`, wenn angegeben, dann `@PG` mit
+Version und Aufruf.
+
+## Lesegruppe
+Die Lesegruppe sagt, aus welchem Lauf und von welcher Probe ein Read stammt. Duplikat-Markierung
+und Varianten-Aufrufer brauchen sie (Probe `SM`, Bibliothek `LB`, Plattform `PL`). Angegeben wird
+sie als ganze Kopfzeile wie bei `bwa mem -R`: `--lesegruppe '@RG\tID:lauf1\tSM:probe\tPL:ILLUMINA'`,
+die Tabulatoren als die zwei Zeichen `\t`. Geprüft wird wie in bwa (`bwa_set_rg`): Die Zeile
+beginnt mit `@RG`, enthält keine echten Tabulatoren, hat ein Feld `ID` mit höchstens 255
+Zeichen. Zusätzlich muss jedes Feld die Form `XX:Wert` haben, und ein Zeilenende ist nicht
+erlaubt (bwa lässt beides durch und schreibt dann einen ungültigen Kopf). Jede Zeile, auch die
+eines Reads ohne Ort, bekommt `RG:Z:` mit der Kennung. Die Plattform wird nicht geraten: Was in
+`PL` steht, bestimmt der Aufruf.
 
 ## Zwei Feinheiten
 - **Die Schwelle für `XA`** steht in bwa in einer Zahl einfacher Genauigkeit; 0,8 ist dort
@@ -63,12 +76,15 @@ Kopf: je Contig eine `@SQ`-Zeile, dazu `@PG` mit Version und Aufruf.
 | Read ohne Ort: Flag 4, `*`-Felder | bestanden |
 | Geteilter Read: primäre und ergänzende Zeile, `90M60S` und `90H60M`, `SA` gegenseitig, MAPQ der ergänzenden nicht höher | bestanden |
 | Zwei gleich gute Orte: MAPQ 0, `XS` gleich `AS`, der andere Ort in `XA` | bestanden |
+| Lesegruppe: Kopfzeile zwischen `@SQ` und `@PG`, `RG` in jeder Zeile hinter `XS`, in SAM und BAM gleich; ungültige Angaben werden abgelehnt | bestanden |
 | Ganze Zeilen gegen bwa, chr20, 200.000 Reads: alle Felder gleich | 199.964 ohne Indels, 199.955 mit Indels; siehe Messung |
 
 ## Grenzen
 - Die Testsätze enthalten keine geteilten Reads. Ergänzende Zeilen und `SA` sind nur durch den
   eigenen Test belegt, nicht durch den Vergleich mit bwa.
 - Die BAM ist in der Reihenfolge der Eingabe, nicht sortiert und ohne Index.
+- Die Lesegruppe ist nicht gegen eine Ausgabe von bwa verglichen (pybwa kennt `-R` nicht), nur
+  gegen den Quelltext; eine Lesegruppe je Lauf.
 
 ## Literatur
 Li 2013; Li et al. 2009; SAM-Spezifikation, siehe [Literatur](../literatur.md).

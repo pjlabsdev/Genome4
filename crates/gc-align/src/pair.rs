@@ -438,6 +438,22 @@ pub fn pair_lines(
     s: &mut [PairedRead<'_>; 2],
     opt: &AlignOptions,
 ) -> (Vec<Line>, usize) {
+    let (mut lines, n) = pair_lines_plain(index, pes, id, s, opt);
+    if let Some(rg) = &opt.sam.read_group {
+        for line in &mut lines {
+            line.set_read_group(rg);
+        }
+    }
+    (lines, n)
+}
+
+fn pair_lines_plain(
+    index: &FmIndex,
+    pes: &[InsertStats; 4],
+    id: u64,
+    s: &mut [PairedRead<'_>; 2],
+    opt: &AlignOptions,
+) -> (Vec<Line>, usize) {
     let mut out: Vec<Line> = Vec::with_capacity(2);
     let sc = &opt.region.scoring;
     let l = index.reference().len() as i64;
