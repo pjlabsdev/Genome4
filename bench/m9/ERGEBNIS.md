@@ -33,3 +33,11 @@ Beide Werkzeuge erkennen in beiden Sätzen keine Adapterfolge (fastp: `unspecifi
 | PJ | 37,7 s, 1,33 GB | 9,0 s, 0,49 GB |
 
 fastp schreibt zusätzlich HTML und JSON; Eingabe für beide unkomprimiert, Ausgabe unkomprimiert.
+
+Achtung, kein Tempovergleich: Bei diesem kleinen Ausschnitt ist der feste Aufwand von fastp
+(Start, Berichte) der größte Teil. Für das ganze HG001 (355 Mio. Paare) brauchte fastp 14 min 17 s
+(Basismessung der alten Kette am 19.11.2026), also rund 2,4 s je Million Paare. `genome trim` brauchte hier
+rund 5 s für die Adaptersuche und 4 s je Million Paare auf einem Kern; nach dem schnelleren
+Vergleich (M10) sind es 4,4 s für 421.564 Paare samt Lesen und Schreiben, also rund 1,9 s je
+Million Paare, wieder auf einem Kern. In `fq2bam` läuft das Trimmen neben dem Ausrichten und
+kostet dort keine eigene Zeit.

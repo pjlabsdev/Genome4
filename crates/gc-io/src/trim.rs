@@ -124,7 +124,6 @@ fn known_name(seq: &str) -> Option<&'static str> {
         .map(|(_, n)| n.trim_start_matches('>'))
 }
 
-/// `Evaluator::checkKnownAdapters`: Folge, Treffer, geprüfte Reads.
 /// Zahl der Bytes, in denen sich `head` und die 8 Bytes von `window` unterscheiden.
 fn differing_bytes(head: u64, window: &[u8]) -> usize {
     let w = u64::from_le_bytes(window.try_into().expect("8 Bytes"));
@@ -135,6 +134,7 @@ fn differing_bytes(head: u64, window: &[u8]) -> usize {
     nonzero.count_ones() as usize
 }
 
+/// `Evaluator::checkKnownAdapters`: Folge, Treffer, geprüfte Reads.
 fn check_known_adapters(reads: &[Vec<u8>]) -> Option<(&'static str, u64, u64)> {
     const MAX_CHECK_READS: u64 = 100_000;
     const MAX_CHECK_BASES: u64 = MAX_CHECK_READS * 1000;
@@ -648,6 +648,23 @@ fn count_mismatches(a: &[u8], b: &[u8]) -> usize {
     a.iter().zip(b).filter(|(x, y)| x != y).count()
 }
 
+/// Haben `a` und `b` (gleich lang) höchstens `limit` Unterschiede? Vergleicht 8 Bytes auf
+/// einmal und hört auf, sobald die Grenze überschritten ist; das Ergebnis ist dasselbe wie
+/// `count_mismatches(a, b) <= limit`.
+fn within_mismatches(a: &[u8], b: &[u8], limit: usize) -> bool {
+    debug_assert_eq!(a.len(), b.len());
+    let mut diff = 0;
+    let (ca, ra) = a.as_chunks::<8>();
+    let (cb, rb) = b.as_chunks::<8>();
+    for (x, y) in ca.iter().zip(cb) {
+        diff += differing_bytes(u64::from_le_bytes(*x), y);
+        if diff > limit {
+            return false;
+        }
+    }
+    diff + count_mismatches(ra, rb) <= limit
+}
+
 /// `OverlapAnalysis::analyze` ohne Lücke: `(offset, overlap_len)` der ersten passenden
 /// Verschiebung.
 fn overlap(
@@ -663,7 +680,7 @@ fn overlap(
     let accept = |a: &[u8], b: &[u8], len: usize, limit: usize| {
         // Nur die ersten 50 Basen entscheiden; dahinter wird nur gezählt (fastp).
         let head = len.min(COMPLETE_COMPARE);
-        count_mismatches(&a[..head], &b[..head]) <= limit
+        within_mismatches(&a[..head], &b[..head], limit)
     };
     let limit_for = |len: usize| diff_limit.min((len as f64 * percent) as usize);
     let require = require as isize;
@@ -753,7 +770,7 @@ fn trim_by_sequence(r: &mut Record, adapter: &[u8], match_req: usize) -> bool {
         let n = (cmplen - skip) as usize;
         let a = &adapter[skip as usize..skip as usize + n];
         let b = &seq[(skip + pos) as usize..(skip + pos) as usize + n];
-        if count_mismatches(a, b) <= allowed {
+        if within_mismatches(a, b, allowed) {
             found = Some(pos);
             break;
         }
@@ -868,6 +885,30 @@ impl Counts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn within_mismatches_matches_count() {
+        let mut x: u64 = 0x2545_f491_4f6c_dd1d;
+        for _ in 0..5_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let len = (x % 70) as usize;
+            let a: Vec<u8> = (0..len)
+                .map(|i| b"ACGT"[((x >> (i % 60)) & 3) as usize])
+                .collect();
+            let mut b = a.clone();
+            for (i, c) in b.iter_mut().enumerate() {
+                if (x.rotate_left(i as u32 * 7) & 15) == 0 {
+                    *c = b'N';
+                }
+            }
+            let n = count_mismatches(&a, &b);
+            for limit in 0..8 {
+                assert_eq!(within_mismatches(&a, &b, limit), n <= limit);
+            }
+        }
+    }
 
     #[test]
     fn differing_bytes_counts_like_plain_loop() {
