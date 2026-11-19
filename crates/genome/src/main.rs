@@ -138,129 +138,210 @@ enum IndexCommand {
         /// Protokoll zusätzlich als JSONL in diese Datei (sonst nur lesbar auf der Fehlerausgabe).
         #[arg(long)]
         log: Option<PathBuf>,
+        /// Zahl der Kerne; 0 heißt alle. Die Ausgabe hängt nicht davon ab.
+        #[arg(long, default_value_t = 0)]
+        kerne: usize,
+        /// Als BAM in diese Datei schreiben statt als SAM-Text auf die Standardausgabe.
+        #[arg(long)]
+        bam: Option<PathBuf>,
     },
 }
 
-/// Richtet alle Reads einzeln aus und schreibt SAM.
-fn index_sam(fm: &gc_index::FmIndex, path: &std::path::Path) -> Result<()> {
-    use std::io::Write;
-    let opt = gc_align::AlignOptions::default();
-    let stdout = std::io::stdout();
-    let mut out = std::io::BufWriter::with_capacity(1 << 20, stdout.lock());
-    let command_line = std::env::args().collect::<Vec<_>>().join(" ");
-    out.write_all(gc_align::sam_header(fm, env!("CARGO_PKG_VERSION"), &command_line).as_bytes())?;
-    let mut reader = fastq::open(path)?;
-    let mut record = Record::default();
-    let mut line = String::new();
-    let mut read_id = 0u64;
-    while reader.read_record(&mut record)? {
-        let read = encode_read(&record.seq);
-        let (regions, frac_rep) = gc_align::align_read(fm, &read, read_id, &opt);
-        line.clear();
-        gc_align::write_sam(
-            &mut line,
-            fm,
-            &String::from_utf8_lossy(&record.name),
-            &read,
-            &record.qual,
-            &regions,
-            frac_rep,
-            &opt,
-        );
-        out.write_all(line.as_bytes())?;
-        read_id += 1;
-    }
-    out.flush()?;
-    Ok(())
+/// Wohin die Zeilen gehen: SAM-Text auf die Standardausgabe oder BAM in eine Datei.
+enum AlignOutput {
+    Sam(std::io::BufWriter<std::io::Stdout>),
+    Bam(Box<gc_io::bam::MtWriter>),
 }
 
-/// Richtet Read-Paare aus und schreibt SAM. Die Insertgröße wird je Block geschätzt.
-fn index_sam_pairs(
+impl AlignOutput {
+    fn open(fm: &gc_index::FmIndex, bam: Option<&std::path::Path>, threads: usize) -> Result<Self> {
+        use std::io::Write;
+        let command_line = std::env::args().collect::<Vec<_>>().join(" ");
+        let header = gc_align::sam_header(fm, env!("CARGO_PKG_VERSION"), &command_line);
+        Ok(match bam {
+            Some(path) => AlignOutput::Bam(Box::new(
+                gc_io::bam::create_from_text(path, &header, threads)
+                    .with_context(|| format!("{} nicht schreibbar", path.display()))?,
+            )),
+            None => {
+                let mut out = std::io::BufWriter::with_capacity(1 << 20, std::io::stdout());
+                out.write_all(header.as_bytes())?;
+                AlignOutput::Sam(out)
+            }
+        })
+    }
+
+    /// Schreibt die Zeilen eines Blocks; liefert ihre Zahl.
+    fn write(&mut self, fm: &gc_index::FmIndex, block: &[Vec<gc_align::Line>]) -> Result<u64> {
+        use std::io::Write;
+        let lines = block.iter().flatten();
+        match self {
+            AlignOutput::Sam(out) => {
+                let mut text = String::new();
+                for line in lines {
+                    line.write_sam(&mut text, fm);
+                }
+                out.write_all(text.as_bytes())?;
+            }
+            AlignOutput::Bam(writer) => {
+                let mut bytes = Vec::new();
+                for line in lines {
+                    // Das Längenfeld des Namens in BAM hat ein Byte (SAM-Spezifikation: 254 Zeichen).
+                    anyhow::ensure!(
+                        line.name.len() <= 254,
+                        "Read-Name mit {} Zeichen ist für BAM zu lang (höchstens 254): {}",
+                        line.name.len(),
+                        line.name
+                    );
+                    line.write_bam(&mut bytes);
+                }
+                gc_io::bam::write_encoded(writer, &bytes)?;
+            }
+        }
+        Ok(block.iter().map(|l| l.len() as u64).sum())
+    }
+
+    fn finish(self) -> Result<()> {
+        use std::io::Write;
+        match self {
+            AlignOutput::Sam(mut out) => out.flush()?,
+            AlignOutput::Bam(writer) => gc_io::bam::finish(*writer)?,
+        }
+        Ok(())
+    }
+}
+
+/// Richtet Reads aus, einzeln oder als Paare, Block für Block auf `threads` Kernen.
+/// Bei Paaren wird die Insertgröße je Block geschätzt.
+fn index_sam(
     fm: &gc_index::FmIndex,
     first: &std::path::Path,
-    second: &std::path::Path,
+    second: Option<&std::path::Path>,
     block_bases: u64,
+    threads: usize,
+    bam: Option<&std::path::Path>,
 ) -> Result<()> {
-    use std::io::Write;
     let opt = gc_align::AlignOptions::default();
-    let stdout = std::io::stdout();
-    let mut out = std::io::BufWriter::with_capacity(1 << 20, stdout.lock());
-    let command_line = std::env::args().collect::<Vec<_>>().join(" ");
-    out.write_all(gc_align::sam_header(fm, env!("CARGO_PKG_VERSION"), &command_line).as_bytes())?;
-    let mut reader = fastq::PairedReader::new(fastq::open(first)?, fastq::open(second)?);
-    let mut pair_id = 0u64;
-    let mut block_nr = 0u64;
-    let mut line = String::new();
+    let mut out = AlignOutput::open(fm, bam, threads)?;
+    let mut reader1 = fastq::open(first)?;
+    let mut reader2 = match second {
+        Some(p) => Some(fastq::open(p)?),
+        None => None,
+    };
+    let paired = reader2.is_some();
+    let started = std::time::Instant::now();
+    let (mut n_reads, mut n_lines, mut block_nr) = (0u64, 0u64, 0u64);
     loop {
-        // Einen Block lesen: Paare, bis die Zahl der Basen erreicht ist.
+        // Einen Block lesen, bis die Zahl der Basen erreicht ist.
         let mut records: Vec<Record> = Vec::new();
         let mut bases = 0u64;
         while bases < block_bases {
-            let (mut a, mut b) = (Record::default(), Record::default());
-            if !reader.read_pair(&mut a, &mut b)? {
-                break;
+            let mut a = Record::default();
+            let more = reader1.read_record(&mut a)?;
+            match reader2.as_mut() {
+                Some(r2) => {
+                    let mut b = Record::default();
+                    let more2 = r2.read_record(&mut b)?;
+                    if more != more2 {
+                        anyhow::bail!(
+                            "die beiden FASTQ-Dateien haben verschieden viele Reads ({} und {})",
+                            first.display(),
+                            r2.path().display()
+                        );
+                    }
+                    if !more {
+                        break;
+                    }
+                    if a.pair_key() != b.pair_key() {
+                        anyhow::bail!(
+                            "Paar {}: Namen passen nicht zusammen ({} und {})",
+                            n_reads / 2 + records.len() as u64 / 2 + 1,
+                            String::from_utf8_lossy(&a.name),
+                            String::from_utf8_lossy(&b.name)
+                        );
+                    }
+                    bases += (a.seq.len() + b.seq.len()) as u64;
+                    records.push(a);
+                    records.push(b);
+                }
+                None => {
+                    if !more {
+                        break;
+                    }
+                    bases += a.seq.len() as u64;
+                    records.push(a);
+                }
             }
-            bases += (a.seq.len() + b.seq.len()) as u64;
-            records.push(a);
-            records.push(b);
         }
         if records.is_empty() {
             break;
         }
-        let reads: Vec<Vec<u8>> = records.iter().map(|r| encode_read(&r.seq)).collect();
-        let mut regions = Vec::with_capacity(reads.len());
-        let mut frac_rep = Vec::with_capacity(reads.len());
-        for read in &reads {
-            let (r, f) = gc_align::find_regions(fm, read, &opt);
-            regions.push(r);
-            frac_rep.push(f);
-        }
-        let pes = gc_align::estimate_insert(fm, &regions, &opt);
-        let used: Vec<&str> = (0..4)
-            .filter(|&d| !pes[d].failed)
-            .map(|d| gc_align::DIRECTIONS[d])
+        let seqs: Vec<Vec<u8>> = records.iter().map(|r| encode_read(&r.seq)).collect();
+        let names: Vec<String> = records
+            .iter()
+            .map(|r| {
+                let name = if paired { r.pair_key() } else { &r.name[..] };
+                String::from_utf8_lossy(name).into_owned()
+            })
             .collect();
-        gc_log::decision(
-            "ALIGN.INSERTGROESSE",
-            &if used.is_empty() {
-                "keine Richtung".to_string()
-            } else {
-                used.join(", ")
-            },
-            "aus den eindeutig liegenden Paaren dieses Blocks geschätzt",
-            json!({
-                "block": block_nr,
-                "paare": records.len() / 2,
-                "richtungen": (0..4).map(|d| json!({
-                    "richtung": gc_align::DIRECTIONS[d],
-                    "paare": pes[d].n,
-                    "benutzt": !pes[d].failed,
-                    "perzentile_25_50_75": pes[d].percentiles,
-                    "mittel": pes[d].avg,
-                    "streuung": pes[d].std,
-                    "richtiges_paar_von": pes[d].low,
-                    "richtiges_paar_bis": pes[d].high,
-                })).collect::<Vec<_>>(),
-            }),
-        );
-        let mut regions = regions.into_iter();
-        for (i, pair) in records.as_chunks::<2>().0.iter().enumerate() {
-            let name = String::from_utf8_lossy(pair[0].pair_key()).into_owned();
-            let mut s = [0, 1].map(|k| gc_align::PairedRead {
-                name: &name,
-                read: &reads[2 * i + k],
-                qual: &pair[k].qual,
-                regions: regions.next().unwrap_or_default(),
-                frac_rep: frac_rep[2 * i + k],
-            });
-            line.clear();
-            gc_align::write_sam_pair(&mut line, fm, &pes, pair_id, &mut s, &opt);
-            out.write_all(line.as_bytes())?;
-            pair_id += 1;
-        }
+        let inputs: Vec<gc_align::ReadInput<'_>> = (0..records.len())
+            .map(|i| gc_align::ReadInput {
+                name: &names[i],
+                seq: &seqs[i],
+                qual: &records[i].qual,
+            })
+            .collect();
+        let lines = if paired {
+            let (lines, pes) = gc_align::align_pairs(fm, &inputs, n_reads / 2, &opt, threads);
+            let used: Vec<&str> = (0..4)
+                .filter(|&d| !pes[d].failed)
+                .map(|d| gc_align::DIRECTIONS[d])
+                .collect();
+            gc_log::decision(
+                "ALIGN.INSERTGROESSE",
+                &if used.is_empty() {
+                    "keine Richtung".to_string()
+                } else {
+                    used.join(", ")
+                },
+                "aus den eindeutig liegenden Paaren dieses Blocks geschätzt",
+                json!({
+                    "block": block_nr,
+                    "paare": records.len() / 2,
+                    "richtungen": (0..4).map(|d| json!({
+                        "richtung": gc_align::DIRECTIONS[d],
+                        "paare": pes[d].n,
+                        "benutzt": !pes[d].failed,
+                        "perzentile_25_50_75": pes[d].percentiles,
+                        "mittel": pes[d].avg,
+                        "streuung": pes[d].std,
+                        "richtiges_paar_von": pes[d].low,
+                        "richtiges_paar_bis": pes[d].high,
+                    })).collect::<Vec<_>>(),
+                }),
+            );
+            lines
+        } else {
+            gc_align::align_reads(fm, &inputs, n_reads, &opt, threads)
+        };
+        n_lines += out.write(fm, &lines)?;
+        n_reads += records.len() as u64;
         block_nr += 1;
     }
-    out.flush()?;
+    out.finish()?;
+    let seconds = started.elapsed().as_secs_f64();
+    gc_log::info(
+        "ALIGN.FERTIG",
+        "Ausrichten beendet",
+        json!({
+            "reads": n_reads,
+            "zeilen": n_lines,
+            "bloecke": block_nr,
+            "kerne": threads,
+            "sekunden": seconds,
+            "reads_je_sekunde": if seconds > 0.0 { n_reads as f64 / seconds } else { 0.0 },
+        }),
+    );
     Ok(())
 }
 
@@ -1004,7 +1085,14 @@ fn main() -> Result<()> {
                 fastq2,
                 block_basen,
                 log,
+                kerne,
+                bam,
             } => {
+                let threads = if kerne == 0 {
+                    std::thread::available_parallelism().map_or(1, usize::from)
+                } else {
+                    kerne
+                };
                 gc_log::init(gc_log::Config {
                     tool: "index.sam".to_string(),
                     version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1018,12 +1106,18 @@ fn main() -> Result<()> {
                     "fastq": fastq.display().to_string(),
                     "fastq2": fastq2.as_ref().map(|p| p.display().to_string()),
                     "block_basen": block_basen,
+                    "kerne": threads,
+                    "bam": bam.as_ref().map(|p| p.display().to_string()),
                 }));
                 let fm = load_index(&index)?;
-                match fastq2 {
-                    Some(second) => index_sam_pairs(&fm, &fastq, &second, block_basen)?,
-                    None => index_sam(&fm, &fastq)?,
-                }
+                index_sam(
+                    &fm,
+                    &fastq,
+                    fastq2.as_deref(),
+                    block_basen,
+                    threads,
+                    bam.as_deref(),
+                )?;
             }
             IndexCommand::Smem {
                 index,

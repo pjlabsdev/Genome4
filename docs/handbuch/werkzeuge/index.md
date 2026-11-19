@@ -14,7 +14,7 @@ genome index build <referenz.fa[.gz]> <index.gcfm> [Optionen]
 genome index locate <index.gcfm> <SEQUENZ> [--limit N]
 genome index count <index.gcfm> <sequenzen.txt>
 genome index smem <index.gcfm> --sequenz <SEQUENZ> | --fastq <reads.fq[.gz]> [Optionen]
-genome index sam <index.gcfm> --fastq <reads.fq[.gz]> [--fastq2 <partner.fq[.gz]>] [--block-basen N] [--log DATEI] > aus.sam
+genome index sam <index.gcfm> --fastq <reads.fq[.gz]> [--fastq2 <partner.fq[.gz]>] [--block-basen N] [--kerne N] [--bam aus.bam] [--log DATEI] > aus.sam
 genome index ketten <index.gcfm> --fastq <reads.fq[.gz]> [--wahrheit-im-namen] [--max-orte N] [--fehlende DATEI] [--tabelle DATEI]
 ```
 
@@ -64,8 +64,12 @@ FASTA, unkomprimiert oder gzip. Groß- und Kleinbuchstaben gelten gleich. Alles 
   gemeldeter Score, Read-Anfang, Read-Ende, `sub`, `sub_n`, Anteil in sehr häufigen Seeds,
   CIGAR, `NM`, `MD`. Die Position ist die des fertigen Alignments.
   Ein Prüfbefehl für die Entwicklung; er entfällt, wenn `fq2bam` steht.
-- `sam`: SAM auf der Standardausgabe, ein Kern; siehe
-  [Ausgabe als SAM](../verfahren/sam-ausgabe.md). Mit `--fastq2` werden die Reads als Paare
+- `sam`: SAM auf der Standardausgabe oder mit `--bam DATEI` eine BAM (unsortiert, Reihenfolge
+  der Eingabe); siehe [Ausgabe als SAM](../verfahren/sam-ausgabe.md) und
+  [BAM schreiben](../verfahren/bam-schreiben.md). `--kerne N` (Standard 0 = alle); die Ausgabe
+  hängt nicht von der Zahl der Kerne ab
+  ([Ausrichten auf mehreren Kernen](../verfahren/mehrere-kerne.md)). Am Ende steht
+  `ALIGN.FERTIG` im Protokoll. Mit `--fastq2` werden die Reads als Paare
   ausgerichtet ([Read-Paare](../verfahren/read-paare.md)); die Insertgröße wird je Block von
   `--block-basen` Basen geschätzt (Standard 10.000.000) und steht als `ALIGN.INSERTGROESSE` im
   Protokoll (Fehlerausgabe, mit `--log` zusätzlich als JSONL). Ein Prüfbefehl für die

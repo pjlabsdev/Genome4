@@ -1,0 +1,38 @@
+{
+  "eingabe": [
+    "sim150.fq"
+  ],
+  "paare": false,
+  "kerne_im_rechner": 4,
+  "laeufe": [
+    {
+      "kerne": 1,
+      "sekunden": 72.1,
+      "zeilen": 200000,
+      "sha256_ohne_pg": "94ebb4e1c5337ecffd3782541e750df04854a5fddefc249afc76dd885b6826c1",
+      "gleich_wie_erster_lauf": true
+    },
+    {
+      "kerne": 2,
+      "sekunden": 36.4,
+      "zeilen": 200000,
+      "sha256_ohne_pg": "94ebb4e1c5337ecffd3782541e750df04854a5fddefc249afc76dd885b6826c1",
+      "gleich_wie_erster_lauf": true
+    },
+    {
+      "kerne": 4,
+      "sekunden": 15.3,
+      "zeilen": 200000,
+      "sha256_ohne_pg": "94ebb4e1c5337ecffd3782541e750df04854a5fddefc249afc76dd885b6826c1",
+      "gleich_wie_erster_lauf": true
+    }
+  ],
+  "bam": {
+    "kerne": 4,
+    "sekunden": 15.1,
+    "bytes": 15237901,
+    "samtools_quickcheck": "bestanden",
+    "zeilen_gleich_wie_sam": true,
+    "abweichende_zeilen": 0
+  }
+}

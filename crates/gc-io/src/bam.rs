@@ -131,6 +131,25 @@ pub fn create_raw(
     Ok(writer)
 }
 
+/// Legt eine BAM an; der Kopf kommt als SAM-Text (`@SQ`-Zeilen usw.) und wird unverändert
+/// geschrieben.
+pub fn create_from_text(
+    path: impl AsRef<Path>,
+    header_text: &str,
+    threads: usize,
+) -> io::Result<MtWriter> {
+    let header: sam::Header = header_text
+        .parse()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    create_raw(path, &header, header_text.as_bytes(), threads)
+}
+
+/// Schreibt fertig kodierte BAM-Sätze (jeder mit seinem Längenfeld vorn) unverändert.
+pub fn write_encoded(writer: &mut MtWriter, records: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    writer.get_mut().write_all(records)
+}
+
 /// Liest eine BAM und schreibt Kopf und alle Datensätze unverändert neu.
 /// Grundlage des Rundreise-Tests gegen samtools (M1).
 pub fn roundtrip(src: impl AsRef<Path>, dst: impl AsRef<Path>, threads: usize) -> io::Result<u64> {

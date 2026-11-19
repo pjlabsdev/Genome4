@@ -38,6 +38,7 @@ Auf keiner Seite steht eine Genauigkeits- oder Tempoaussage ohne Messung.
 ### Verfahren
 - [FASTQ-Prüfung und Herkunft der Lesungen](verfahren/fastq-pruefung.md)
 - [BAM lesen und schreiben](verfahren/bam-schreiben.md)
+- [Ausrichten auf mehreren Kernen](verfahren/mehrere-kerne.md)
 - [Suffix-Array nach SA-IS](verfahren/suffix-array-sais.md)
 - [FM-Index](verfahren/fm-index.md)
 - [Blockweiser Index-Bau für das ganze Genom](verfahren/blockweiser-bau.md)

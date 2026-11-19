@@ -1,6 +1,7 @@
 # BAM lesen und schreiben
 
-Stand: gebaut und geprüft (`gc-io`, `bam.rs`; [Messung](../../bench/M1-bam-rundreise.md)).
+Stand: gebaut und geprüft (`gc-io`, `bam.rs`; [Messung](../../bench/M1-bam-rundreise.md);
+Ausgabe des Aligners: `gc-align`, `sam.rs`, [Messung](../../bench/M3-kerne-bam.md)).
 
 ## Grundlage
 Die Crate `noodles` (reines Rust) für BAM und BGZF, Kompression über `flate2` mit `zlib-rs`
@@ -17,6 +18,28 @@ Byte erhalten bleiben. Deshalb gibt es zwei Wege:
   (Kennung, Textlänge, Text, Referenzliste von Hand nach der SAM-Spezifikation).
 
 Der Test `roundtrip_keeps_header_line_order` hält das fest.
+
+## Zeilen des Aligners direkt als BAM
+`genome index sam --bam` schreibt die Zeilen des Aligners ohne Umweg über SAM-Text. Jede Zeile
+wird in `gc-align` (`Line::write_bam`) nach Abschnitt 4.2 der SAM-Spezifikation kodiert und als
+fertiger Satz an den BGZF-Schreiber gegeben (`write_encoded`). Der Kopf ist derselbe Text wie
+bei der SAM-Ausgabe (`create_from_text`).
+
+| Feld | Kodierung |
+|---|---|
+| Position, Partnerposition | 0-basiert; -1 ohne Ort |
+| Behälter (`bin`) | aus Position und Länge auf der Referenz (Abschnitt 5.3); ohne Ort 4680 wie bei samtools |
+| CIGAR | je Schritt 32 Bit: Länge und Art (M, I, D, S, H) |
+| Basen | 4 Bit je Base (A=1, C=2, G=4, T=8, N=15) |
+| Qualitäten | Phred-Wert (ASCII minus 33); ohne Qualitäten 0xFF |
+| Zusatzangaben | Text als `Z`; ganze Zahlen im kleinsten passenden Typ, wie samtools |
+
+Ein Read-Name über 254 Zeichen passt nicht in das Längenfeld; der Lauf endet dann mit einer
+Meldung statt einer beschädigten Datei.
+
+Geprüft wird die Kodierung von außen: samtools liest die BAM zurück, und das Ergebnis ist Zeile
+für Zeile die SAM-Ausgabe desselben Laufs ([Messung](../../bench/M3-kerne-bam.md)). Im CI
+macht dasselbe ein Test mit noodles als Leser (`crates/genome/tests/ausrichten.rs`).
 
 ## Abschluss
 `finish` schreibt die letzten Blöcke und die BGZF-Endmarke. Ohne sie gilt eine BAM als abgeschnitten.

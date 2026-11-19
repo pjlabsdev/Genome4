@@ -9,7 +9,7 @@
 use crate::finalize::{hash_64, mapq, mark_primary, sort_dedup};
 use crate::local::local_align;
 use crate::region::Region;
-use crate::sam::{AlignOptions, Rec, gen_xa, regions_to_recs, write_rec};
+use crate::sam::{AlignOptions, Line, Rec, gen_xa, make_line, regions_to_recs};
 use gc_index::FmIndex;
 
 /// Einstellungen für Paare. Die Vorgaben sind die von BWA-MEM.
@@ -408,13 +408,7 @@ pub struct PairedRead<'a> {
     pub frac_rep: f32,
 }
 
-/// Schreibt die SAM-Zeilen eines Paares nach `out`, erst Read 1, dann Read 2 (bwa
-/// `mem_sam_pe`). Liefert die Zahl der Fenster, in denen ein Partner gesucht wurde.
-///
-/// Ablauf: Partnersuche für die guten Bereiche beider Reads, Rangfolge je Read, dann das
-/// beste Paar. Ist das Paar besser als die beiden besten Einzelorte abzüglich `pen_unpaired`,
-/// werden die Orte des Paares gemeldet, sonst die besten Einzelorte. Hat ein Read mehrere
-/// Teile an verschiedenen Orten, wird er wie ein einzelner Read gemeldet.
+/// Schreibt die SAM-Zeilen eines Paares nach `out`; siehe [`pair_lines`].
 pub fn write_sam_pair(
     out: &mut String,
     index: &FmIndex,
@@ -423,6 +417,28 @@ pub fn write_sam_pair(
     s: &mut [PairedRead<'_>; 2],
     opt: &AlignOptions,
 ) -> usize {
+    let (lines, n) = pair_lines(index, pes, id, s, opt);
+    for line in &lines {
+        line.write_sam(out, index);
+    }
+    n
+}
+
+/// Die Ausgabezeilen eines Paares, erst Read 1, dann Read 2 (bwa `mem_sam_pe`), und die
+/// Zahl der Fenster, in denen ein Partner gesucht wurde.
+///
+/// Ablauf: Partnersuche für die guten Bereiche beider Reads, Rangfolge je Read, dann das
+/// beste Paar. Ist das Paar besser als die beiden besten Einzelorte abzüglich `pen_unpaired`,
+/// werden die Orte des Paares gemeldet, sonst die besten Einzelorte. Hat ein Read mehrere
+/// Teile an verschiedenen Orten, wird er wie ein einzelner Read gemeldet.
+pub fn pair_lines(
+    index: &FmIndex,
+    pes: &[InsertStats; 4],
+    id: u64,
+    s: &mut [PairedRead<'_>; 2],
+    opt: &AlignOptions,
+) -> (Vec<Line>, usize) {
+    let mut out: Vec<Line> = Vec::with_capacity(2);
     let sc = &opt.region.scoring;
     let l = index.reference().len() as i64;
     let mut n = 0;
@@ -539,8 +555,7 @@ pub fn write_sam_pair(
             h.push(rec);
         }
         for i in 0..2 {
-            write_rec(
-                out,
+            out.push(make_line(
                 index,
                 s[i].name,
                 s[i].read,
@@ -548,9 +563,9 @@ pub fn write_sam_pair(
                 std::slice::from_ref(&h[i]),
                 0,
                 Some(&h[1 - i]),
-            );
+            ));
         }
-        return n;
+        return (out, n);
     }
 
     // Kein Paar: jeder Read wie ein einzelner, mit den Feldern des Partners.
@@ -580,8 +595,7 @@ pub fn write_sam_pair(
         let flag = (0x40 << i) | 1 | extra_flag;
         let recs = regions_to_recs(index, p.read, &p.regions, p.frac_rep, flag, opt);
         for which in 0..recs.len() {
-            write_rec(
-                out,
+            out.push(make_line(
                 index,
                 p.name,
                 p.read,
@@ -589,10 +603,10 @@ pub fn write_sam_pair(
                 &recs,
                 which,
                 Some(&h[1 - i]),
-            );
+            ));
         }
     }
-    n
+    (out, n)
 }
 
 #[cfg(test)]

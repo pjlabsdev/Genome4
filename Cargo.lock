@@ -274,6 +274,7 @@ dependencies = [
  "gc-io",
  "gc-log",
  "gc-schema",
+ "noodles",
  "serde_json",
 ]
 
