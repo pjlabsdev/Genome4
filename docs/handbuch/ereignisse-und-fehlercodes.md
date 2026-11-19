@@ -31,12 +31,14 @@ Kennungen sind fest: sie ändern ihre Bedeutung nicht. Neue kommen hinzu.
 | `SORT.FERTIG` | info | Sortieren beendet: Datensätze, Bytes, Teile, Laufzeit, Datensätze je Sekunde | |
 | `MARKDUP.FERTIG` | info | Duplikate markiert: gelesen, bewertet, Duplikate mit und ohne Partner, Anteil, geschätzte Bibliotheksgröße, Spitze des Fensters, Laufzeit | |
 | `BAMINDEX.FERTIG` | info | BAM-Index geschrieben: Datensätze, davon ohne Contig, Contigs mit Daten, Fächer, Größe des Index, Laufzeit | |
+| `FQ2BAM.FERTIG` | info | `fq2bam` beendet: der ganze Bericht (Reads, Sortieren, Duplikate, Zählung nach Flags, Index, Zeiten je Schritt) | |
 | `INDEX.STICHPROBE.RUNDE` | debug | eine Verfeinerungsrunde der Stichproben-Ränge | |
 | `INDEX.PRUEFUNG.STAND` | debug | Fortschritt der Selbstprüfung | |
 | `ALIGN.LESEGRUPPE_UNGUELTIG` | error | die Angabe bei `--lesegruppe` ist keine gültige `@RG`-Zeile (kein `@RG` am Anfang, echte Tabulatoren, kein `ID`, Feld ohne `XX:Wert`, Zeilenende) | Form `'@RG\tID:kennung\tSM:probe'`, Tabulatoren als `\t` geschrieben |
 | `SORT.FEHLGESCHLAGEN` | error | Sortieren abgebrochen (Eingabe nicht lesbar oder abgeschnitten, Platte voll, Teil beschädigt); es gibt keine Ausgabedatei | Eingabe mit `samtools quickcheck` prüfen, freien Platz im Temp-Ordner und am Ziel prüfen, neu starten |
 | `MARKDUP.FEHLGESCHLAGEN` | error | Markieren abgebrochen (Eingabe nicht nach Ort sortiert, Partner-Angaben `MC` oder `ms` fehlen, Eingabe abgeschnitten, Platte voll); es gibt keine Ausgabedatei | erst `genome sort`; Partner-Angaben mit `genome index sam --partner-angaben` oder `samtools fixmate -m` |
 | `BAMINDEX.FEHLGESCHLAGEN` | error | BAM-Index nicht geschrieben (BAM nicht nach Ort sortiert, abgeschnitten, Position über 512 Mbp) | erst `genome sort`; die BAM mit `samtools quickcheck` prüfen |
+| `FQ2BAM.FEHLGESCHLAGEN` | error | `fq2bam` abgebrochen (FASTQ fehlerhaft oder ungleich lang, Lesegruppe ungültig, Index nicht lesbar, Platte voll); es gibt keine Ausgabe-BAM | Ursache im Feld `ursache`; FASTQ mit `genome fastq-check` prüfen, Platz im Temp-Ordner und am Ziel prüfen |
 | `INDEX.CONTIG_FEHLT` | error | ein mit `--contig` gewähltes Contig steht nicht in der FASTA | Namen in der FASTA prüfen (z. B. `20` statt `chr20`) |
 | `INDEX.BAU_FEHLGESCHLAGEN` | error | Bau nicht möglich: leere Referenz, zu groß für das gewählte Verfahren, oder interner Fehler | steht im Feld `was_tun` |
 | `INDEX.PRUEFUNG_FEHLGESCHLAGEN` | error | Stichproben- oder Vollprüfung hat eine Abweichung gefunden | Index nicht verwenden, Protokoll aufbewahren und melden |
@@ -47,7 +49,8 @@ Bau); `index.stichprobe`, `index.faecher`, `index.bloecke`, `index.stichprobenpr
 (blockweiser Bau); `index.vollpruefung`, `index.schreiben`.
 
 Stufen des Sortierens: `sort.lesen` (lesen, im Speicher sortieren, Teile schreiben),
-`sort.schreiben` (zusammenführen und BAM schreiben). Stufe des Markierens: `markdup.durchlauf`. Stufe des BAM-Index: `bamindex.lesen`.
+`sort.schreiben` (zusammenführen und BAM schreiben). Stufe des Markierens: `markdup.durchlauf`. Stufe des BAM-Index: `bamindex.lesen`. Stufen von `fq2bam`: `fq2bam.index_laden`,
+`fq2bam.ausrichten`, `fq2bam.zusammenfuehren`, danach `bamindex.lesen`.
 
 ## Nur in Tests
 

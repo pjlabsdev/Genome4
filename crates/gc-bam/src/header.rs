@@ -8,6 +8,16 @@
 /// - Die neue `@PG`-Zeile verweist mit `PP` auf die letzte vorhandene, wie bei samtools. Ihre
 ///   Kennung ist `id`; ist die schon vergeben, wird `.1`, `.2` und so weiter angehängt.
 pub fn sorted_header(text: &str, id: &str, program_version: &str, command_line: &str) -> String {
+    with_program_line(
+        &with_coordinate_order(text),
+        id,
+        program_version,
+        command_line,
+    )
+}
+
+/// Setzt im Kopftext nur die Sortierung auf "nach Ort" (siehe [`sorted_header`]).
+pub fn with_coordinate_order(text: &str) -> String {
     let mut lines: Vec<String> = text
         .lines()
         .filter(|l| !l.is_empty())
@@ -30,7 +40,7 @@ pub fn sorted_header(text: &str, id: &str, program_version: &str, command_line: 
     }
     let mut out = lines.join("\n");
     out.push('\n');
-    with_program_line(&out, id, program_version, command_line)
+    out
 }
 
 /// Hängt an den Kopftext eine `@PG`-Zeile für diesen Lauf an. Sie verweist mit `PP` auf die
