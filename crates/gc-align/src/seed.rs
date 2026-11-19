@@ -100,10 +100,12 @@ pub fn repeat_fraction(intervals: &[Smem], max_occ: u64, read_len: usize) -> f32
     }
 }
 
-/// Ortet die Fundstellen der Treffer, siehe [`collect_seeds`].
+/// Ortet die Fundstellen der Treffer, siehe [`collect_seeds`]. Erst werden die Zeilen aller
+/// Treffer des Reads gesammelt, dann gemeinsam geortet (`FmIndex::locate_many`): Die Wege durch
+/// den Index laufen so im Gleichschritt statt nacheinander.
 pub fn locate_seeds(index: &FmIndex, intervals: &[Smem], opt: &SeedOptions) -> Vec<Seed> {
-    let mut seeds = Vec::new();
-    for m in intervals {
+    let (mut rows, mut owner) = (Vec::new(), Vec::new());
+    for (i, m) in intervals.iter().enumerate() {
         let iv = m.interval;
         let step = if iv.size > opt.max_occ {
             iv.size / opt.max_occ
@@ -113,18 +115,25 @@ pub fn locate_seeds(index: &FmIndex, intervals: &[Smem], opt: &SeedOptions) -> V
         let mut k = 0;
         let mut count = 0;
         while k < iv.size && count < opt.max_occ {
-            let rbeg = index.locate(iv.k + k);
-            if let Some(hit) = index.hit_at(rbeg, u64::from(m.len())) {
-                seeds.push(Seed {
-                    rbeg,
-                    qbeg: m.start,
-                    len: m.len(),
-                    contig: hit.contig,
-                    occurrences: iv.size,
-                });
-            }
+            rows.push(iv.k + k);
+            owner.push(i);
             k += step;
             count += 1;
+        }
+    }
+    let mut positions = Vec::with_capacity(rows.len());
+    index.locate_many(&rows, &mut positions);
+    let mut seeds = Vec::with_capacity(rows.len());
+    for (&rbeg, &i) in positions.iter().zip(&owner) {
+        let m = &intervals[i];
+        if let Some(hit) = index.hit_at(rbeg, u64::from(m.len())) {
+            seeds.push(Seed {
+                rbeg,
+                qbeg: m.start,
+                len: m.len(),
+                contig: hit.contig,
+                occurrences: m.interval.size,
+            });
         }
     }
     seeds

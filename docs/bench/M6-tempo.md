@@ -1,0 +1,106 @@
+# M6: Tempo des Aligners, zweiter Schritt (Index)
+
+Stand: 19.11.2026. Verfahren: [FM-Index](../handbuch/verfahren/fm-index.md),
+[Seeds und Ketten](../handbuch/verfahren/seeds-und-ketten.md). Erster Schritt:
+[M3 Tempo](M3-tempo.md).
+
+## Fragen
+1. Wo bleibt die Zeit bei echten Reads und beim ganzen Genom?
+2. Was bringen die Änderungen am Index, und bleibt die Ausgabe gleich?
+3. Was wurde versucht und verworfen?
+
+## Aufbau
+- Reads: GIAB HG002, Paare zu 148 Basen aus chr20:10 bis 12 Mb wie in
+  [M5 Echte Reads](M5-echte-reads.md); dazu die 100.000 erzeugten Paare aus [M3](M3-paare.md).
+- Index: GRCh38 ohne ALT (`grch38.kompakt.gcfm`, 4,84 GB) und chr20 in beiden Varianten.
+- Vorher: Stand von main (8714a75). Nachher: dieser Stand. Beide mit denselben Einstellungen
+  gebaut, im Wechsel gemessen.
+- Messung: `bench/m6/measure_tempo.py`, je Programm drei Läufe; Zeit ist die des Ausrichtens aus
+  dem Protokoll (`ALIGN.FERTIG`), ohne Laden des Index. Die Tabelle nennt den mittleren der drei
+  Läufe. Rohdaten: `bench/m6/tempo.json`.
+- Wo die Zeit bleibt: Der laufende Prozess wurde 200- bis 300-mal angehalten und der Ort
+  notiert (ein Kern, ganzes Genom). Das misst Zeit samt Warten auf den Arbeitsspeicher, anders
+  als das Zählen der Befehle in M3. Ungenau auf einige Prozentpunkte.
+- Rechner: Cloud-Maschine mit 4 virtuellen Kernen (Intel Xeon, 2,1 GHz), 15 GB RAM, geteilt mit
+  anderen. Der Rechner, auf dem die Läufe am Ende stattfinden (Apple M5), wurde nicht gemessen.
+
+## Ergebnis
+
+### Wo die Zeit blieb (echte Paare, ganzes Genom, ein Kern)
+
+| Teil | vorher | nachher |
+|---|---|---|
+| Seed-Suche (SMEM, Nachsuche, dritte Runde) | 28 % | 39 % |
+| Orten der Seeds | 28 % | 24 % |
+| Lokales Alignment der Partnersuche | 18 % | 15 % |
+| Verlängern der Seeds | 17 % | 17 % |
+| Rest | 9 % | 5 % |
+
+Mit dem ganzen Genom verschiebt sich das Bild gegenüber chr20: Der Index ist größer als jeder
+Zwischenspeicher des Prozessors, die Arbeit im Index macht mehr als die Hälfte der Zeit aus.
+Ein Read hat im Mittel 12 Treffer und 27 Seeds, die Seed-Suche braucht je Read rund 570
+(chr20) bis 730 (ganzes Genom) Verlängerungen.
+
+### Was geändert wurde
+- **Schieben statt Dividieren.** Der Block und die Stelle im Block wurden bei jedem Zugriff mit
+  einer Division durch den Abstand der Zählstände berechnet. Der Abstand steht in der Datei, der
+  Übersetzer konnte daraus nichts Billigeres machen. Beide Abstände sind Zweierpotenzen; jetzt
+  wird geschoben und maskiert. Das war der größte einzelne Gewinn beim Orten.
+- **Orten im Gleichschritt.** Alle Seeds eines Reads werden gemeinsam geortet
+  (`locate_many`): Die Wege von bis zu 32 Zeilen laufen nebeneinander, der Prozessor wartet auf
+  mehrere Stellen des Arbeitsspeichers zugleich.
+- **Beide Enden in einem Zugriff.** Liegen beide Enden eines Bereichs im selben Wort der BWT,
+  wird nur einmal gezählt und das Stück dazwischen dazu (`occ4_pair`).
+- **Zählen mit gesammelten Teilsummen** statt einer vollen Zählung je Wort.
+
+In den Teilen für sich gemessen (50.000 Reads, ganzes Genom, ein Kern, mit einem
+Hilfsprogramm, das nur für diese Messung bestand): Orten 2,04 s auf rund 1,55 s, Seed-Suche
+3,0 s auf rund 2,7 s. Ausgeführte Befehle der Seed-Suche (callgrind, 3.000 Reads): 11 % weniger.
+
+### Ausgabe
+Unverändert. Die Prüfsumme der ganzen SAM-Ausgabe ohne `@PG` ist in jedem der sechs Sätze der
+Tabelle vorher und nachher dieselbe. Der Stand vorher ist der, der in
+[M5 Echte Reads](M5-echte-reads.md) Zeile für Zeile mit bwa mem verglichen wurde.
+
+### Laufzeit
+
+| Satz | Index | Kerne | vorher | nachher | Zeit nachher zu vorher |
+|---|---|---|---|---|---|
+| 50.000 echte Paare | GRCh38 kompakt | 1 | 17,1 s | 14,4 s | 0,84 |
+| 50.000 echte Paare | GRCh38 kompakt | 4 | 4,88 s | 3,87 s | 0,79 |
+| 100.000 echte Paare | chr20 kompakt | 1 | 16,5 s | 14,7 s | 0,89 |
+| 100.000 echte Paare | chr20 schnell | 1 | 12,5 s | 12,0 s | 0,96 |
+| 421.564 echte Paare | chr20 kompakt | 4 | 18,8 s | 17,1 s | 0,91 |
+| 100.000 erzeugte Paare | chr20 kompakt | 1 | 84,6 s | 77,7 s | 0,92 |
+
+Am ganzen Genom, dem Fall, auf den es ankommt, braucht das Ausrichten rund ein Fünftel weniger
+Zeit. Auf chr20 ist der Gewinn kleiner, weil der kleine Index zum guten Teil im
+Zwischenspeicher liegt. Gegen bwa mem (pybwa, 16.600 Reads je Sekunde und Kern auf chr20,
+[M5 Echte Reads](M5-echte-reads.md)): mit dem kompakten Index jetzt 13.600 Reads je Sekunde, also
+rund 1,2-mal die Zeit von bwa statt 1,3-mal. Am ganzen Genom gibt es noch keine Messung von bwa.
+
+### Versucht und verworfen
+- **Zählblöcke an Speicherzeilen ausrichten** (64 Bytes, ein Block der Variante kompakt in genau
+  einer Zeile): kein messbarer Unterschied, wieder ausgebaut.
+- **Seed-Suche mehrerer Reads abwechselnd führen** (je Schritt erst für 16 Reads die Blöcke
+  anfassen, dann rechnen), geprüft gegen die einfache Suche und mit gleicher Ausgabe: 10 bis
+  25 % langsamer als die einfache Suche, wieder ausgebaut. Die Suche hängt auf diesem Rechner am
+  Rechnen (rund 470 Befehle je Verlängerung), und die beiden Zugriffe einer Verlängerung laufen
+  schon von selbst nebeneinander. Die Verwaltung der unterbrechbaren Suche kostete mehr, als das
+  Warten einbrachte.
+- **Orten über mehrere Reads hinweg bündeln** statt je Read: höchstens 7 % des Ortens, im
+  ganzen Lauf nicht messbar, weil ein Read mit im Mittel 27 Seeds die Wege schon füllt. Nicht
+  übernommen.
+- **Bau nur für den Prozessor des Messrechners** (unter anderem mit dessen Befehl zum Zählen von
+  Bits): rund 4 % auf chr20. Nicht übernommen, das Programm soll auf jedem Rechner dasselbe sein.
+
+## Grenzen
+- Gemessen auf einer geteilten Cloud-Maschine mit kleinen Speicherseiten. Auf dem Mac kann das
+  Verhältnis von Rechnen zu Warten auf den Speicher anders sein; dort steht eine Messung aus.
+- Große Speicherseiten des Betriebssystems für den Index wurden nicht untersucht. Ein kurzer
+  Versuch mit der Systemeinstellung dafür war nicht eindeutig.
+- 50.000 Paare am ganzen Genom sind ein kleiner Satz aus einem Ausschnitt von chr20. Ein Lauf
+  mit voller Abdeckung steht aus.
+- Die Seed-Suche ist jetzt der größte Teil. Verlängern und lokales Alignment (zusammen rund ein
+  Drittel) sind unverändert; das Rechnen mehrerer Verlängerungen zugleich mit Vektorbefehlen ist
+  der nächste Schritt.

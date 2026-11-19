@@ -10,8 +10,8 @@ Alle Zahlen little-endian. `u64` = 8 Bytes, `u32` = 4 Bytes.
 | 2 | Formatversion (2) | u32 |
 | 3 | Zeilen der BWT (2L + 1) | u64 |
 | 4 | Primärzeile | u64 |
-| 5 | Basen je Zählblock `b` (Vielfaches von 32) | u64 |
-| 6 | Abstand der Suffix-Array-Stichproben `s` | u64 |
+| 5 | Basen je Zählblock `b` (32, 64 oder 128) | u64 |
+| 6 | Abstand der Suffix-Array-Stichproben `s` (Zweierpotenz bis 1024) | u64 |
 | 7 | `c_before` für A, C, G, T | 4 × u64 |
 | 8 | Zahl der Contigs, dann je Contig: Länge des Namens, Name (UTF-8), Länge, Anfang im Vorwärtsstrang | u64, dann u64 + Bytes + u64 + u64 |
 | 9 | Zahl der N-Strecken, dann je Strecke: Anfang, Länge | u64, dann 2 × u64 |
@@ -26,7 +26,8 @@ G = 2, T = 3. Die Zahl der Zählblöcke ist Zeilen / b + 1 (abgerundet), die der
 Zeilen / s (aufgerundet).
 
 ## Prüfung beim Lesen
-Kennung, Formatversion, zulässige Abstände, Zeilenzahl, Größe jeder Tabelle und die CRC-32 werden
+Kennung, Formatversion, zulässige Abstände (beide Zweierpotenzen, `b` von 32 bis 128, `s` bis
+1024; die beiden Varianten des Programms schreiben 128 und 32 oder 64 und 8), Zeilenzahl, Größe jeder Tabelle und die CRC-32 werden
 geprüft. Eine abgeschnittene oder beschädigte Datei wird abgelehnt.
 
 ## Änderungen

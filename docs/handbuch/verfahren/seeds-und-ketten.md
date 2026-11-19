@@ -24,6 +24,8 @@ umgerechnet. Kommt ein Treffer öfter als 500-mal vor, wird gleichmäßig ausged
 (Anzahl / 500)-te Zeile, höchstens 500. Fundstellen über eine Contig- oder Stranggrenze oder in
 einer gefüllten N-Strecke fallen weg. (bwa verwirft Fundstellen über Contig-Grenzen ebenfalls,
 kennt aber keinen Filter für N-Strecken; dort können sich die Seeds unterscheiden.)
+Die Zeilen aller Treffer eines Reads werden gemeinsam geortet (`locate_many`, siehe
+[FM-Index](fm-index.md), Ortung); Reihenfolge und Ergebnis sind dieselben wie einzeln.
 
 ## Verketten
 Eine Kette ist eine Folge von Seeds auf demselben Strang desselben Contigs, die im Read und in

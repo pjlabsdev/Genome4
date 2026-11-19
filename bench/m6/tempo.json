@@ -1,0 +1,27 @@
+{
+  "stand": "2026-11-19",
+  "rechner": "Cloud-Maschine, 4 virtuelle Kerne (Intel Xeon 2,1 GHz), 15 GB RAM, geteilt mit anderen",
+  "skript": "bench/m6/measure_tempo.py",
+  "vorher": "main 8714a75",
+  "sekunden": "nur Ausrichten (ALIGN.FERTIG), ohne Laden des Index",
+  "messungen": [
+    {"satz": "HG002 chr20:10-12 Mb, erste 50.000 Paare", "index": "GRCh38 kompakt", "kerne": 1,
+     "vorher": [16.768, 17.111, 17.136], "nachher": [13.868, 14.436, 14.660],
+     "md5_ohne_pg": "0b691d02ae11", "ausgabe_gleich": true},
+    {"satz": "HG002 chr20:10-12 Mb, erste 50.000 Paare", "index": "GRCh38 kompakt", "kerne": 4,
+     "vorher": [4.880, 4.896, 4.861], "nachher": [3.867, 4.084, 3.834],
+     "md5_ohne_pg": "0b691d02ae11", "ausgabe_gleich": true},
+    {"satz": "HG002 chr20:10-12 Mb, erste 100.000 Paare", "index": "chr20 kompakt", "kerne": 1,
+     "vorher": [16.451, 16.396, 16.792], "nachher": [14.788, 14.571, 14.690],
+     "md5_ohne_pg": "40893a964c5f", "ausgabe_gleich": true},
+    {"satz": "HG002 chr20:10-12 Mb, erste 100.000 Paare", "index": "chr20 schnell", "kerne": 1,
+     "vorher": [12.615, 12.533, 12.298], "nachher": [12.028, 12.037, 12.072],
+     "md5_ohne_pg": "40893a964c5f", "ausgabe_gleich": true},
+    {"satz": "HG002 chr20:10-12 Mb, alle 421.564 Paare", "index": "chr20 kompakt", "kerne": 4,
+     "vorher": [21.193, 18.676, 18.773], "nachher": [17.650, 17.113, 16.919],
+     "md5_ohne_pg": "1247a966afdd", "ausgabe_gleich": true},
+    {"satz": "100.000 erzeugte Paare (M3)", "index": "chr20 kompakt", "kerne": 1,
+     "vorher": [84.735, 84.616, 84.220], "nachher": [75.647, 78.724, 77.670],
+     "md5_ohne_pg": "38f610849b1c", "ausgabe_gleich": true}
+  ]
+}

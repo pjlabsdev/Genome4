@@ -84,6 +84,10 @@ pub struct FmIndex {
     c_before: [u64; 4],
     occ_interval: u32,
     sa_interval: u32,
+    /// Beide Abstände sind Zweierpotenzen; geteilt wird durch Schieben um so viele Stellen.
+    /// Eine echte Division je Zugriff kostete mehr als das Zählen selbst.
+    occ_shift: u32,
+    sa_shift: u32,
     /// Je Block: 4 Zählstände, dann `occ_interval / 32` Wörter BWT.
     blocks: Vec<u64>,
     /// Stichproben des Suffix-Arrays, je `SA_BYTES` Bytes little-endian.
@@ -98,32 +102,77 @@ const REP: [u64; 4] = [
     0xFFFF_FFFF_FFFF_FFFF,
 ];
 
-/// Anzahl der Base `c` unter den ersten `r` Basen des Wortes (`r` höchstens 32).
+/// Die unteren Bits aller 32 Basen eines Wortes.
+const EVEN: u64 = 0x5555_5555_5555_5555;
+
+/// Maske der unteren Bits der ersten `r` Basen eines Wortes (`r` von 1 bis 31).
 #[inline]
-fn count_in_word(w: u64, c: u8, r: u32) -> u64 {
-    if r == 0 {
-        return 0;
-    }
-    let x = w ^ REP[c as usize];
-    let mut m = !(x | x >> 1) & 0x5555_5555_5555_5555;
-    if r < 32 {
-        m &= (1u64 << (2 * r)) - 1;
-    }
-    u64::from(m.count_ones())
+fn low_bases(r: u32) -> u64 {
+    EVEN & ((1u64 << (2 * r)) - 1)
 }
 
-/// Anzahl jeder der vier Basen unter den ersten `r` Basen des Wortes (`r` von 1 bis 32).
+/// Je Base des Wortes ein Bit (das untere ihrer zwei), gesetzt, wo die Base `c` steht.
 #[inline]
-fn counts_in_word(w: u64, r: u32) -> [u64; 4] {
-    let mut m = 0x5555_5555_5555_5555u64;
-    if r < 32 {
-        m &= (1u64 << (2 * r)) - 1;
+fn matches_of(w: u64, c: u8) -> u64 {
+    let x = w ^ REP[c as usize];
+    !(x | x >> 1) & EVEN
+}
+
+/// Zählen über mehrere Wörter, ohne jedes Wort einzeln fertig zu zählen: `pairs` verdichtet ein
+/// Wort nur bis zu Summen je Halbbyte, diese Summen werden addiert, und erst am Ende zählt
+/// `fold` einmal ganz zusammen. Das braucht weniger Rechenschritte als eine volle Zählung je
+/// Wort und keinen besonderen Befehl des Prozessors. Gilt für Wörter, in denen nur die Bits an
+/// geraden Stellen gesetzt sein können (eines je Base): Je Halbbyte kommen dann höchstens 2
+/// dazu, sieben Wörter passen in eine Summe. Ein Block hat deshalb höchstens
+/// `MAX_OCC_INTERVAL` Basen.
+#[inline]
+fn pairs(bits: u64) -> u64 {
+    const P: u64 = 0x3333_3333_3333_3333;
+    (bits & P) + ((bits >> 2) & P)
+}
+
+#[inline]
+fn fold(sums: u64) -> u64 {
+    const B: u64 = 0x0F0F_0F0F_0F0F_0F0F;
+    ((sums & B) + ((sums >> 4) & B)).wrapping_mul(0x0101_0101_0101_0101) >> 56
+}
+
+/// Größter Abstand der Zählstände: sieben Wörter BWT je Block, als Zweierpotenz also vier.
+pub(crate) const MAX_OCC_INTERVAL: u32 = 128;
+
+/// Je Base C, G und T in den ersten `within` Basen der Wörter (A ist der Rest).
+#[inline]
+fn count_cgt(words: &[u64], within: u32) -> [u64; 3] {
+    let (full, rest) = ((within / 32) as usize, within % 32);
+    let (mut c, mut g, mut t) = (0u64, 0u64, 0u64);
+    let mut add = |w: u64, keep: u64| {
+        let (low, high) = (w & keep, (w >> 1) & keep);
+        let both = low & high;
+        c += pairs(low ^ both);
+        g += pairs(high ^ both);
+        t += pairs(both);
+    };
+    for &w in &words[..full] {
+        add(w, EVEN);
     }
-    let (low, high) = (w & m, (w >> 1) & m);
-    let c1 = u64::from((low & !high).count_ones());
-    let c2 = u64::from((high & !low).count_ones());
-    let c3 = u64::from((low & high).count_ones());
-    [u64::from(r) - c1 - c2 - c3, c1, c2, c3]
+    if rest != 0 {
+        add(words[full], low_bases(rest));
+    }
+    [fold(c), fold(g), fold(t)]
+}
+
+/// Base `c` in den ersten `within` Basen der Wörter.
+#[inline]
+fn count_one(words: &[u64], c: u8, within: u32) -> u64 {
+    let (full, rest) = ((within / 32) as usize, within % 32);
+    let mut sum = 0;
+    for &w in &words[..full] {
+        sum += pairs(matches_of(w, c));
+    }
+    if rest != 0 {
+        sum += pairs(matches_of(words[full], c) & low_bases(rest));
+    }
+    fold(sum)
 }
 
 /// Zeichen vor Textposition 0: das Endzeichen.
@@ -144,6 +193,12 @@ pub(crate) struct Builder {
 
 impl Builder {
     pub(crate) fn new(rows: u64, occ_interval: u32, sa_interval: u32) -> Self {
+        assert!(
+            (32..=MAX_OCC_INTERVAL).contains(&occ_interval)
+                && occ_interval.is_power_of_two()
+                && sa_interval.is_power_of_two(),
+            "Abstände müssen Zweierpotenzen sein, der der Zählstände höchstens 128"
+        );
         let stride = 4 + (occ_interval / 32) as usize;
         let n_blocks = (rows / u64::from(occ_interval)) as usize + 1;
         Builder {
@@ -201,6 +256,8 @@ impl Builder {
             c_before,
             occ_interval: self.occ_interval,
             sa_interval: self.sa_interval,
+            occ_shift: self.occ_interval.trailing_zeros(),
+            sa_shift: self.sa_interval.trailing_zeros(),
             blocks: self.blocks,
             sa_samples: self.sa_samples,
             reference,
@@ -443,22 +500,17 @@ impl FmIndex {
     pub fn occ(&self, c: u8, i: u64) -> u64 {
         let interval = u64::from(self.occ_interval);
         let stride = 4 + (self.occ_interval / 32) as usize;
-        let base = (i / interval) as usize * stride;
-        let within = (i % interval) as u32;
-        let mut n = self.blocks[base + c as usize];
-        let full = (within / 32) as usize;
-        for w in 0..full {
-            n += count_in_word(self.blocks[base + 4 + w], c, 32);
-        }
-        if !within.is_multiple_of(32) {
-            n += count_in_word(self.blocks[base + 4 + full], c, within % 32);
-        }
+        let base = (i >> self.occ_shift) as usize * stride;
+        let within = (i & (interval - 1)) as u32;
+        let block = &self.blocks[base..base + stride];
+        let n = block[c as usize] + count_one(&block[4..], c, within);
         // Das Endzeichen ist als Code 0 gespeichert, zählt aber nicht als A.
         let block_start = i - u64::from(within);
         if c == 0 && self.primary >= block_start && self.primary < i {
-            n -= 1;
+            n - 1
+        } else {
+            n
         }
-        n
     }
 
     /// Anzahl jeder der vier Basen in den BWT-Zeilen `0..i`, in einem Durchgang durch den
@@ -467,37 +519,58 @@ impl FmIndex {
     pub fn occ4(&self, i: u64) -> [u64; 4] {
         let interval = u64::from(self.occ_interval);
         let stride = 4 + (self.occ_interval / 32) as usize;
-        let base = (i / interval) as usize * stride;
-        let within = (i % interval) as u32;
-        let block = &self.blocks[base..];
-        let mut n = [block[0], block[1], block[2], block[3]];
-        let full = (within / 32) as usize;
-        let mut add = |w: u64, r: u32| {
-            let c = counts_in_word(w, r);
-            for (total, part) in n.iter_mut().zip(c) {
-                *total += part;
-            }
-        };
-        for &w in &block[4..4 + full] {
-            add(w, 32);
-        }
-        if !within.is_multiple_of(32) {
-            add(block[4 + full], within % 32);
-        }
+        let base = (i >> self.occ_shift) as usize * stride;
+        let within = (i & (interval - 1)) as u32;
+        let block = &self.blocks[base..base + stride];
+        let [c, g, t] = count_cgt(&block[4..], within);
+        let mut a = u64::from(within) - c - g - t;
         // Das Endzeichen ist als Code 0 gespeichert, zählt aber nicht als A.
         let block_start = i - u64::from(within);
         if self.primary >= block_start && self.primary < i {
-            n[0] -= 1;
+            a -= 1;
         }
-        n
+        [block[0] + a, block[1] + c, block[2] + g, block[3] + t]
+    }
+
+    /// `occ4` für beide Enden eines Zeilenbereichs `[k, l)` (bwa: `bwt_2occ4`). Bei der
+    /// Seed-Suche sind die Bereiche nach wenigen Basen eng, beide Enden liegen dann fast immer
+    /// im selben Wort der BWT. In dem Fall wird nur bis `k` gezählt und das kurze Stück bis `l`
+    /// dazu, statt den Block zweimal von vorn durchzugehen.
+    #[inline]
+    pub fn occ4_pair(&self, k: u64, l: u64) -> ([u64; 4], [u64; 4]) {
+        let lo = self.occ4(k);
+        if k >> 5 != l >> 5 || l < k {
+            return (lo, self.occ4(l));
+        }
+        // Gleiches Wort, also auch derselbe Block.
+        let interval = u64::from(self.occ_interval);
+        let stride = 4 + (self.occ_interval / 32) as usize;
+        let base = (k >> self.occ_shift) as usize * stride;
+        let within = (k & (interval - 1)) as usize;
+        let (from, to) = ((k & 31) as u32, (l & 31) as u32);
+        let keep = EVEN & ((1u64 << (2 * to)) - 1) & !((1u64 << (2 * from)) - 1);
+        let w = self.blocks[base + 4 + within / 32];
+        let (low, high) = (w & keep, (w >> 1) & keep);
+        let both = low & high;
+        let (c, g, t) = (
+            fold(pairs(low ^ both)),
+            fold(pairs(high ^ both)),
+            fold(pairs(both)),
+        );
+        let mut a = l - k - c - g - t;
+        // Das Endzeichen ist als Code 0 gespeichert, zählt aber nicht als A.
+        if self.primary >= k && self.primary < l {
+            a -= 1;
+        }
+        (lo, [lo[0] + a, lo[1] + c, lo[2] + g, lo[3] + t])
     }
 
     #[inline]
     fn bwt(&self, row: u64) -> u8 {
         let interval = u64::from(self.occ_interval);
         let stride = 4 + (self.occ_interval / 32) as usize;
-        let base = (row / interval) as usize * stride;
-        let within = row % interval;
+        let base = (row >> self.occ_shift) as usize * stride;
+        let within = row & (interval - 1);
         (self.blocks[base + 4 + (within / 32) as usize] >> (2 * (within % 32)) & 3) as u8
     }
 
@@ -528,12 +601,68 @@ impl FmIndex {
             if row == self.primary {
                 return steps;
             }
-            if row.is_multiple_of(interval) {
-                return self.sa_sample((row / interval) as usize) + steps;
+            if row & (interval - 1) == 0 {
+                return self.sa_sample((row >> self.sa_shift) as usize) + steps;
             }
             let c = self.bwt(row);
             row = self.c_before[c as usize] + self.occ(c, row);
             steps += 1;
+        }
+    }
+
+    /// Textpositionen vieler Zeilen auf einmal, angehängt an `out` in der Reihenfolge von `rows`.
+    /// Dasselbe Ergebnis wie `locate` je Zeile, aber die Wege mehrerer Zeilen laufen im
+    /// Gleichschritt: In jeder Runde wird erst für alle offenen Zeilen der Block der BWT gelesen,
+    /// dann für alle gezählt. Die Zugriffe einer Runde hängen nicht voneinander ab, der Prozessor
+    /// kann also auf mehrere Speicherzeilen gleichzeitig warten statt nacheinander. Bei einem
+    /// ganzen Genom liegt fast jeder Schritt außerhalb des Zwischenspeichers, dort zählt das.
+    pub fn locate_many(&self, rows: &[u64], out: &mut Vec<u64>) {
+        const LANES: usize = 32;
+        let start = out.len();
+        out.resize(start + rows.len(), 0);
+        let out = &mut out[start..];
+        let interval = u64::from(self.sa_interval);
+        let mut row = [0u64; LANES];
+        let mut steps = [0u64; LANES];
+        let mut slot = [0usize; LANES];
+        let mut code = [0u8; LANES];
+        let (mut live, mut next) = (0, 0);
+        loop {
+            while live < LANES && next < rows.len() {
+                (row[live], steps[live], slot[live]) = (rows[next], 0, next);
+                live += 1;
+                next += 1;
+            }
+            if live == 0 {
+                break;
+            }
+            // Fertige Zeilen abschließen; die letzte offene rückt auf den frei gewordenen Platz.
+            let mut i = 0;
+            while i < live {
+                let r = row[i];
+                let done = if r == self.primary {
+                    Some(steps[i])
+                } else if r & (interval - 1) == 0 {
+                    Some(self.sa_sample((r >> self.sa_shift) as usize) + steps[i])
+                } else {
+                    None
+                };
+                match done {
+                    Some(pos) => {
+                        out[slot[i]] = pos;
+                        live -= 1;
+                        (row[i], steps[i], slot[i]) = (row[live], steps[live], slot[live]);
+                    }
+                    None => i += 1,
+                }
+            }
+            for i in 0..live {
+                code[i] = self.bwt(row[i]);
+            }
+            for i in 0..live {
+                row[i] = self.c_before[code[i] as usize] + self.occ(code[i], row[i]);
+                steps[i] += 1;
+            }
         }
     }
 
@@ -786,9 +915,10 @@ impl FmIndex {
         let primary = read_u64(&mut r)?;
         let occ_interval = read_u64(&mut r)?;
         let sa_interval = read_u64(&mut r)?;
-        if !(32..=1024).contains(&occ_interval)
-            || occ_interval % 32 != 0
+        if !(32..=u64::from(MAX_OCC_INTERVAL)).contains(&occ_interval)
+            || !occ_interval.is_power_of_two()
             || !(1..=1024).contains(&sa_interval)
+            || !sa_interval.is_power_of_two()
         {
             return Err(bad("unzulässige Abstände"));
         }
@@ -862,6 +992,8 @@ impl FmIndex {
             c_before,
             occ_interval: occ_interval as u32,
             sa_interval: sa_interval as u32,
+            occ_shift: occ_interval.trailing_zeros(),
+            sa_shift: sa_interval.trailing_zeros(),
             blocks,
             sa_samples,
             reference,
@@ -1105,10 +1237,45 @@ mod tests {
             }
         }
         assert_eq!(counts.iter().sum::<u64>(), index.rows() - 1);
+        // beide Enden eines Bereichs auf einmal, in beiden Varianten, auch über das Endzeichen
+        for variant in [Variant::Kompakt, Variant::Schnell] {
+            let index = build(&contigs, variant);
+            for k in 0..=index.rows() {
+                for l in (k..=index.rows()).take(140) {
+                    assert_eq!(
+                        index.occ4_pair(k, l),
+                        (index.occ4(k), index.occ4(l)),
+                        "occ4_pair({k}, {l})"
+                    );
+                }
+            }
+        }
         // leeres Muster trifft jede Zeile; ein Muster länger als das Genom trifft nie
         assert_eq!(index.count(&[]), index.rows());
         assert_eq!(index.count(&vec![0u8; 10_000]), 0);
         assert!(index.hits(&[], 10).is_empty());
+    }
+
+    #[test]
+    fn locate_many_equals_locate() {
+        for variant in [Variant::Kompakt, Variant::Schnell] {
+            let index = build(&random_genome(5), variant);
+            let mut rng = Rng(9);
+            // Alle Zeilen der Reihe nach, dann zufällige Mengen mit Wiederholungen, auch leere.
+            let all: Vec<u64> = (0..index.rows()).collect();
+            let mut sets = vec![all, Vec::new()];
+            for n in [1usize, 2, 15, 16, 17, 100] {
+                sets.push((0..n).map(|_| rng.next() % index.rows()).collect());
+            }
+            sets.push(vec![index.primary; 40]);
+            for rows in sets {
+                let mut got = vec![7u64]; // vorhandener Inhalt bleibt stehen
+                index.locate_many(&rows, &mut got);
+                let mut want = vec![7u64];
+                want.extend(rows.iter().map(|&r| index.locate(r)));
+                assert_eq!(got, want);
+            }
+        }
     }
 
     #[test]
