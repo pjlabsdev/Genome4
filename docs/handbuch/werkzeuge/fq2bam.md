@@ -28,6 +28,7 @@ genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.
 | `--block-basen` | Paare: Basen je Block, aus dem die Insertgröße geschätzt wird | 10.000.000 |
 | `--max-laenge` | längster erwarteter Read für das Markieren der Duplikate | 300 |
 | `--log` | Lauf-Protokoll | `<aus>.log.jsonl` |
+| `--trimmen` | Paare vor dem Ausrichten trimmen wie fastp 1.4.0 in der alten Kette (Adapter, PolyG, Qualität, Länge); verworfene Paare werden nicht ausgerichtet, siehe [Trimmen](../verfahren/trimmen.md). Nur für Paare | aus |
 
 ## Ablauf
 1. Index laden ([FM-Index](../verfahren/fm-index.md)).

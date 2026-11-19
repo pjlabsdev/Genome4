@@ -116,6 +116,29 @@ enum Command {
         /// Lauf-Protokoll als JSON-Zeilen in diese Datei
         #[arg(long)]
         log: Option<PathBuf>,
+        /// Paare vor dem Ausrichten trimmen wie fastp 1.4.0 (Adapter, PolyG, Qualität, Länge).
+        /// Ohne die Option bleiben die Reads unverändert.
+        #[arg(long)]
+        trimmen: bool,
+    },
+    /// Paare trimmen wie fastp 1.4.0 und als FASTQ schreiben (für den Vergleich mit fastp;
+    /// in der Kette trimmt `fq2bam --trimmen` ohne Zwischendateien).
+    Trim {
+        /// FASTQ mit Read 1
+        #[arg(long)]
+        fastq: PathBuf,
+        /// FASTQ mit Read 2
+        #[arg(long)]
+        fastq2: PathBuf,
+        /// Ausgabe Read 1 (FASTQ, unkomprimiert)
+        #[arg(long)]
+        aus: PathBuf,
+        /// Ausgabe Read 2 (FASTQ, unkomprimiert)
+        #[arg(long)]
+        aus2: PathBuf,
+        /// Lauf-Protokoll als JSON-Zeilen (Vorgabe: `<aus>.log.jsonl`)
+        #[arg(long)]
+        log: Option<PathBuf>,
     },
     /// FM-Index über ein Referenzgenom bauen, prüfen und abfragen (Meilenstein M2).
     Index {
@@ -342,6 +365,8 @@ struct SamRun<'a> {
     bam: Option<&'a std::path::Path>,
     read_group: Option<&'a gc_align::ReadGroup>,
     mate_tags: bool,
+    /// Paare vor dem Ausrichten trimmen; verworfene Paare werden nicht ausgerichtet.
+    trimmer: Option<&'a gc_io::trim::Trimmer>,
 }
 
 /// Richtet Reads aus, einzeln oder als Paare, Block für Block auf `threads` Kernen.
@@ -371,14 +396,16 @@ fn align_into(
     second: Option<&std::path::Path>,
     run: &SamRun<'_>,
     out: &mut AlignOutput,
-) -> Result<(u64, u64)> {
+) -> Result<(u64, u64, gc_io::trim::Counts)> {
     let SamRun {
         block_bases,
         threads,
         read_group,
         mate_tags,
+        trimmer,
         ..
     } = *run;
+    let mut trim_counts = gc_io::trim::Counts::default();
     let mut opt = gc_align::AlignOptions::default();
     opt.sam.read_group = read_group.map(|rg| rg.id.clone());
     opt.sam.mate_tags = mate_tags;
@@ -418,6 +445,13 @@ fn align_into(
                             String::from_utf8_lossy(&a.name),
                             String::from_utf8_lossy(&b.name)
                         );
+                    }
+                    if let Some(t) = trimmer {
+                        let report = t.trim_pair(&mut a, &mut b);
+                        trim_counts.add(&report);
+                        if !report.kept() {
+                            continue;
+                        }
                     }
                     bases += (a.seq.len() + b.seq.len()) as u64;
                     records.push(a);
@@ -500,7 +534,7 @@ fn align_into(
             "reads_je_sekunde": if seconds > 0.0 { n_reads as f64 / seconds } else { 0.0 },
         }),
     );
-    Ok((n_reads, n_lines))
+    Ok((n_reads, n_lines, trim_counts))
 }
 
 /// Einstellungen eines Laufs von `genome fq2bam`.
@@ -515,6 +549,7 @@ struct Fq2bamRun<'a> {
     threads: usize,
     block_bases: u64,
     max_length: i64,
+    trim: bool,
 }
 
 /// Zahlen von `flagstat` als JSON, für eine der beiden Gruppen.
@@ -569,6 +604,157 @@ fn dup_stats_json(stats: &gc_bam::DupStats) -> serde_json::Value {
     })
 }
 
+/// Entscheidungen vor dem Trimmen wie fastp 1.4.0: PolyG nach dem Namen des ersten Reads, je
+/// Seite die Adapterfolge aus dem Anfang der Datei. Beide stehen mit Grund im Protokoll.
+fn plan_trimming(
+    first: &std::path::Path,
+    second: &std::path::Path,
+) -> Result<gc_io::trim::Trimmer> {
+    use gc_io::trim;
+    let st = gc_log::stage("fq2bam.trimmen_vorbereiten", json!({}));
+    let mut adapters: [Option<Vec<u8>>; 2] = [None, None];
+    // Beide Seiten werden gleichzeitig gelesen und untersucht; das Ergebnis hängt
+    // nicht davon ab, nur die Wartezeit.
+    let first_name_slot = std::sync::Mutex::new(Vec::new());
+    let read_side =
+        |side: usize, path: &std::path::Path| -> Result<(usize, Result<trim::Adapter, String>)> {
+            let mut reader = fastq::open(path)?;
+            let (mut reads, mut bases) = (Vec::new(), 0usize);
+            let mut rec = Record::default();
+            while reads.len() < trim::DETECT_READS && bases < trim::DETECT_BASES {
+                if !reader.read_record(&mut rec)? {
+                    break;
+                }
+                if side == 0 && reads.is_empty() {
+                    *first_name_slot.lock().expect("Sperre") = rec.name.clone();
+                }
+                bases += rec.seq.len();
+                reads.push(rec.seq.clone());
+            }
+            let found = trim::detect_adapter(&reads);
+            Ok((reads.len(), found))
+        };
+    let results = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| read_side(0, first));
+        let h2 = scope.spawn(|| read_side(1, second));
+        [h1.join(), h2.join()]
+    });
+    let first_name = first_name_slot.into_inner().expect("Sperre");
+    for (side, result) in results.into_iter().enumerate() {
+        let (n_reads, found) = result.map_err(|_| anyhow::anyhow!("Adaptersuche abgestürzt"))??;
+        let label = if side == 0 { "read1" } else { "read2" };
+        match found {
+            Ok(a) => {
+                let how = match &a.found {
+                    trim::Found::Known { hits, checked } => json!({
+                        "weg": "bekannter_adapter", "treffer": hits, "gepruefte_reads": checked,
+                    }),
+                    trim::Found::Seed { seed, known } => json!({
+                        "weg": "haeufigste_teilfolge", "keim": seed, "bekannt": known,
+                    }),
+                };
+                gc_log::decision(
+                    "TRIM.ADAPTER",
+                    &String::from_utf8_lossy(&a.seq),
+                    "aus dem Anfang der Datei erkannt wie fastp 1.4.0",
+                    json!({
+                        "seite": label,
+                        "name": a.name,
+                        "reads_angesehen": n_reads,
+                        "erkennung": how,
+                    }),
+                );
+                adapters[side] = Some(a.seq);
+            }
+            Err(reason) => gc_log::decision(
+                "TRIM.ADAPTER",
+                "keiner",
+                &reason,
+                json!({ "seite": label, "reads_angesehen": n_reads }),
+            ),
+        }
+    }
+    let prefix = trim::two_color(&first_name);
+    gc_log::decision(
+        "TRIM.POLYG",
+        if prefix.is_some() { "an" } else { "aus" },
+        &match prefix {
+            Some(p) => format!("erster Read-Name beginnt mit {p}: Gerät mit zweifarbiger Chemie"),
+            None => "erster Read-Name passt zu keinem Gerät mit zweifarbiger Chemie".to_string(),
+        },
+        json!({ "erster_name": String::from_utf8_lossy(&first_name) }),
+    );
+    st.finish(json!({}));
+    Ok(trim::Trimmer {
+        settings: trim::Settings::default(),
+        poly_g: prefix.is_some(),
+        adapters,
+    })
+}
+
+/// Zähler des Trimmens als JSON.
+/// Liest beide Dateien, trimmt jedes Paar und schreibt die behaltenen Paare als FASTQ.
+fn trim_to_fastq(
+    trimmer: &gc_io::trim::Trimmer,
+    first: &std::path::Path,
+    second: &std::path::Path,
+    out1: &std::path::Path,
+    out2: &std::path::Path,
+) -> Result<gc_io::trim::Counts> {
+    use std::io::Write;
+    let create = |p: &std::path::Path| -> Result<std::io::BufWriter<std::fs::File>> {
+        Ok(std::io::BufWriter::with_capacity(
+            1 << 20,
+            std::fs::File::create(p).with_context(|| format!("{} anlegen", p.display()))?,
+        ))
+    };
+    let (mut w1, mut w2) = (create(out1)?, create(out2)?);
+    let write = |w: &mut std::io::BufWriter<std::fs::File>, r: &Record| -> std::io::Result<()> {
+        w.write_all(b"@")?;
+        w.write_all(&r.name)?;
+        if !r.comment.is_empty() {
+            w.write_all(b" ")?;
+            w.write_all(&r.comment)?;
+        }
+        w.write_all(b"\n")?;
+        w.write_all(&r.seq)?;
+        w.write_all(b"\n+\n")?;
+        w.write_all(&r.qual)?;
+        w.write_all(b"\n")
+    };
+    let mut reader = PairedReader::new(fastq::open(first)?, fastq::open(second)?);
+    let (mut a, mut b) = (Record::default(), Record::default());
+    let mut counts = gc_io::trim::Counts::default();
+    while reader.read_pair(&mut a, &mut b)? {
+        let report = trimmer.trim_pair(&mut a, &mut b);
+        counts.add(&report);
+        if report.kept() {
+            write(&mut w1, &a)?;
+            write(&mut w2, &b)?;
+        }
+    }
+    w1.flush()?;
+    w2.flush()?;
+    Ok(counts)
+}
+
+fn trim_counts_json(c: &gc_io::trim::Counts) -> serde_json::Value {
+    json!({
+        "paare": c.pairs,
+        "behalten": c.kept,
+        "verworfen_qualitaet": c.dropped_quality,
+        "verworfen_zu_kurz": c.dropped_length,
+        "verworfen_zu_viele_n": c.dropped_n,
+        "verworfen_adapter_dimer": c.dropped_dimer,
+        "polyg_reads": c.poly_g_reads,
+        "polyg_basen": c.poly_g_bases,
+        "ueberlappung_gekuerzt_paare": c.overlap_pairs,
+        "adapterfolge_gekuerzt_read1": c.sequence_reads[0],
+        "adapterfolge_gekuerzt_read2": c.sequence_reads[1],
+        "adapter_basen": c.adapter_bases,
+    })
+}
+
 /// Die ganze Kette in einem Lauf: ausrichten (mit Partner-Angaben) direkt in den Sortierer,
 /// beim Zusammenführen Duplikate markieren und nach Flags zählen, dann den Index schreiben.
 /// Zwischen den Schritten entsteht keine BAM; auf der Platte liegen nur die Teile des Sortierens.
@@ -582,6 +768,14 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<serde_json::Value> {
                 .map_err(|cause| anyhow::anyhow!("--lesegruppe: {cause}"))?,
         ),
         None => None,
+    };
+    let trimmer = if run.trim {
+        let Some(second) = run.fastq2 else {
+            anyhow::bail!("--trimmen gibt es nur für Paare (--fastq2 fehlt)");
+        };
+        Some(plan_trimming(run.fastq, second)?)
+    } else {
+        None
     };
     let st = gc_log::stage("fq2bam.index_laden", json!({}));
     let fm = load_index(run.index)?;
@@ -601,8 +795,17 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<serde_json::Value> {
         bam: None,
         read_group: read_group.as_ref(),
         mate_tags: true,
+        trimmer: trimmer.as_ref(),
     };
-    let (reads, lines) = align_into(&fm, run.fastq, run.fastq2, &sam_run, &mut out)?;
+    let (reads, lines, trim_counts) = align_into(&fm, run.fastq, run.fastq2, &sam_run, &mut out)?;
+    let trim_json = trimmer.as_ref().map(|_| trim_counts_json(&trim_counts));
+    if let Some(j) = &trim_json {
+        anyhow::ensure!(
+            trim_counts.balanced(),
+            "Zähler des Trimmens gehen nicht auf: {j}"
+        );
+        gc_log::info("TRIM.FERTIG", "Trimmen beendet", j.clone());
+    }
     let AlignOutput::Sorter(sorter) = out else {
         unreachable!("oben als Sortierer angelegt")
     };
@@ -668,6 +871,7 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<serde_json::Value> {
         "reads": reads,
         "saetze": sort_stats.records,
         "paare": run.fastq2.is_some(),
+        "trimmen": trim_json,
         "kerne": run.threads,
         "sortieren": {
             "bytes_saetze": sort_stats.bytes,
@@ -1717,6 +1921,60 @@ fn main() -> Result<()> {
             });
             println!("{}", Envelope::new("genome.flagstat.v1", result).to_json()?);
         }
+        Command::Trim {
+            fastq,
+            fastq2,
+            aus,
+            aus2,
+            log,
+        } => {
+            let log = log.unwrap_or_else(|| {
+                let mut name = aus.as_os_str().to_owned();
+                name.push(".log.jsonl");
+                PathBuf::from(name)
+            });
+            gc_log::init(gc_log::Config {
+                tool: "trim".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                level: gc_log::Level::Info,
+                jsonl: Some(log),
+                stderr: true,
+            })?;
+            gc_log::install_panic_hook();
+            gc_log::run_header(json!({
+                "fastq": fastq.display().to_string(),
+                "fastq2": fastq2.display().to_string(),
+                "ausgabe": aus.display().to_string(),
+                "ausgabe2": aus2.display().to_string(),
+            }));
+            gc_log::input_file("fastq", &fastq);
+            gc_log::input_file("fastq2", &fastq2);
+            let started = std::time::Instant::now();
+            let run = || -> Result<serde_json::Value> {
+                let trimmer = plan_trimming(&fastq, &fastq2)?;
+                let st = gc_log::stage("trim.schreiben", json!({}));
+                let counts = trim_to_fastq(&trimmer, &fastq, &fastq2, &aus, &aus2)?;
+                let j = trim_counts_json(&counts);
+                anyhow::ensure!(
+                    counts.balanced(),
+                    "Zähler des Trimmens gehen nicht auf: {j}"
+                );
+                st.finish(j.clone());
+                gc_log::info("TRIM.FERTIG", "Trimmen beendet", j.clone());
+                Ok(json!({ "trimmen": j, "sekunden": started.elapsed().as_secs_f64() }))
+            };
+            let result = match run() {
+                Ok(r) => {
+                    gc_log::run_end(true, r.clone());
+                    r
+                }
+                Err(e) => {
+                    gc_log::run_end(false, json!({ "fehler": format!("{e:#}") }));
+                    return Err(e);
+                }
+            };
+            println!("{}", Envelope::new("genome.trim.v1", result).to_json()?);
+        }
         Command::Fq2bam {
             index,
             fastq,
@@ -1729,6 +1987,7 @@ fn main() -> Result<()> {
             block_basen,
             max_laenge,
             log,
+            trimmen,
         } => {
             let threads = if kerne == 0 {
                 std::thread::available_parallelism().map_or(1, usize::from)
@@ -1763,6 +2022,7 @@ fn main() -> Result<()> {
                 "kerne": threads,
                 "block_basen": block_basen,
                 "max_laenge": max_laenge,
+                "trimmen": trimmen,
             }));
             gc_log::input_file("fastq", &fastq);
             if let Some(p) = &fastq2 {
@@ -1780,6 +2040,7 @@ fn main() -> Result<()> {
                 threads,
                 block_bases: block_basen,
                 max_length: max_laenge,
+                trim: trimmen,
             };
             match fq2bam(&run) {
                 Ok(mut result) => {
@@ -1984,6 +2245,7 @@ fn main() -> Result<()> {
                         bam: bam.as_deref(),
                         read_group: read_group.as_ref(),
                         mate_tags: partner_angaben,
+                        trimmer: None,
                     },
                 )?;
             }

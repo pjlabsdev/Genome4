@@ -31,6 +31,9 @@ Kennungen sind fest: sie ändern ihre Bedeutung nicht. Neue kommen hinzu.
 | `SORT.FERTIG` | info | Sortieren beendet: Datensätze, Bytes, Teile, Laufzeit, Datensätze je Sekunde | |
 | `MARKDUP.FERTIG` | info | Duplikate markiert: gelesen, bewertet, Duplikate mit und ohne Partner, Anteil, geschätzte Bibliotheksgröße, Spitze des Fensters, Laufzeit | |
 | `BAMINDEX.FERTIG` | info | BAM-Index geschrieben: Datensätze, davon ohne Contig, Contigs mit Daten, Fächer, Größe des Index, Laufzeit | |
+| `TRIM.ADAPTER` | info | `fq2bam --trimmen` und `trim`: je Seite (`read1`, `read2`) die erkannte Adapterfolge oder `keiner`, mit Grund, Name des bekannten Adapters, Weg der Erkennung und Zahl der angesehenen Reads ([Trimmen](verfahren/trimmen.md)) | |
+| `TRIM.POLYG` | info | `fq2bam --trimmen` und `trim`: PolyG kürzen `an` oder `aus`, mit dem ersten Read-Namen, nach dem fastp entscheidet | |
+| `TRIM.FERTIG` | info | `fq2bam --trimmen` und `trim`: Paare gesamt, behalten, verworfen nach Grund (Qualität, zu kurz, zu viele N, Adapter-Dimer), PolyG und Adapter gekürzt; behalten plus verworfen ergibt die Paare | |
 | `FQ2BAM.FERTIG` | info | `fq2bam` beendet: der ganze Bericht (Reads, Sortieren, Duplikate, Zählung nach Flags, Index, Zeiten je Schritt) | |
 | `INDEX.STICHPROBE.RUNDE` | debug | eine Verfeinerungsrunde der Stichproben-Ränge | |
 | `INDEX.PRUEFUNG.STAND` | debug | Fortschritt der Selbstprüfung | |
@@ -49,8 +52,9 @@ Bau); `index.stichprobe`, `index.faecher`, `index.bloecke`, `index.stichprobenpr
 (blockweiser Bau); `index.vollpruefung`, `index.schreiben`.
 
 Stufen des Sortierens: `sort.lesen` (lesen, im Speicher sortieren, Teile schreiben),
-`sort.schreiben` (zusammenführen und BAM schreiben). Stufe des Markierens: `markdup.durchlauf`. Stufe des BAM-Index: `bamindex.lesen`. Stufen von `fq2bam`: `fq2bam.index_laden`,
-`fq2bam.ausrichten`, `fq2bam.zusammenfuehren`, danach `bamindex.lesen`.
+`sort.schreiben` (zusammenführen und BAM schreiben). Stufe des Markierens: `markdup.durchlauf`. Stufe des BAM-Index: `bamindex.lesen`. Stufen von `fq2bam`: `fq2bam.trimmen_vorbereiten` (nur mit `--trimmen`), `fq2bam.index_laden`,
+`fq2bam.ausrichten`, `fq2bam.zusammenfuehren`, danach `bamindex.lesen`. Stufen von `trim`:
+`fq2bam.trimmen_vorbereiten`, `trim.schreiben`.
 
 ## Nur in Tests
 
