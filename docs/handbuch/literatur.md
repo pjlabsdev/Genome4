@@ -18,6 +18,7 @@ noch einmal gegen die Originale geprüft.
 | Farrar 2007 | Farrar M. Striped Smith-Waterman speeds database searches six times over other SIMD implementations. Bioinformatics 23:156-161, 2007. | lokales Alignment in gestreifter Anordnung (Partnersuche bei Paaren) |
 | Li 2013 | Li H. Aligning sequence reads, clone sequences and assembly contigs with BWA-MEM. arXiv:1303.3997, 2013. | BWA-MEM (ab M3) |
 | Vasimuddin et al. 2019 | Vasimuddin M, Misra S, Li H, Aluru S. Efficient architecture-aware acceleration of BWA-MEM for multicore systems. IPDPS 2019. | BWA-MEM2 als Tempo-Vergleich |
+| Chen et al. 2018 | Chen S, Zhou Y, Chen Y, Gu J. fastp: an ultra-fast all-in-one FASTQ preprocessor. Bioinformatics 34:i884-i890, 2018. | Trimmen wie fastp |
 | Knuth 1998 | Knuth DE. The Art of Computer Programming, Volume 3: Sorting and Searching. 2. Auflage, Addison-Wesley, 1998. Abschnitt 5.4 (externes Sortieren). | Sortieren in Teilen |
 | Danecek et al. 2021 | Danecek P, Bonfield JK, Liddle J, et al. Twelve years of SAMtools and BCFtools. GigaScience 10(2):giab008, 2021. | samtools sort, fixmate, markdup |
 | Lander und Waterman 1988 | Lander ES, Waterman MS. Genomic mapping by fingerprinting random clones: a mathematical analysis. Genomics 2:231-239, 1988. | Schätzung der Bibliotheksgröße |
