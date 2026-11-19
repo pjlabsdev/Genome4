@@ -29,6 +29,24 @@ enum Command {
         #[arg(short, long, default_value_t = 0)]
         threads: usize,
     },
+    /// BAM nach Ort sortieren (Contig, Position, Strang; ohne Ort zuletzt), mit festem Speicher.
+    Sort {
+        src: PathBuf,
+        dst: PathBuf,
+        /// Speicher für die Datensätze in MB; was nicht hineinpasst, geht sortiert in Teilen
+        /// auf die Platte.
+        #[arg(long, default_value_t = 2048)]
+        speicher_mb: usize,
+        /// Ordner für die Teile (Vorgabe: der Ordner der Ausgabe)
+        #[arg(long)]
+        temp: Option<PathBuf>,
+        /// Kerne für BGZF (0 = alle)
+        #[arg(long, default_value_t = 0)]
+        kerne: usize,
+        /// Lauf-Protokoll als JSON-Zeilen in diese Datei
+        #[arg(long)]
+        log: Option<PathBuf>,
+    },
     /// FM-Index über ein Referenzgenom bauen, prüfen und abfragen (Meilenstein M2).
     Index {
         #[command(subcommand)]
@@ -354,6 +372,102 @@ fn index_sam(
         }),
     );
     Ok(())
+}
+
+/// Sortiert eine BAM nach Ort. Die Ausgabe entsteht unter einem vorläufigen Namen und bekommt
+/// ihren Namen erst, wenn alles geschrieben ist; nach einem Abbruch liegt also nie eine halbe
+/// Datei unter dem Zielnamen.
+fn sort_bam(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+    speicher_mb: usize,
+    temp: &std::path::Path,
+    kerne: usize,
+) -> Result<serde_json::Value> {
+    let started = std::time::Instant::now();
+    anyhow::ensure!(speicher_mb > 0, "--speicher-mb muss größer als 0 sein");
+    if let (Ok(a), Ok(b)) = (std::fs::canonicalize(src), std::fs::canonicalize(dst)) {
+        anyhow::ensure!(a != b, "Eingabe und Ausgabe sind dieselbe Datei");
+    }
+    let (mut reader, header, raw) =
+        gc_io::bam::open_raw(src, kerne).with_context(|| format!("{} öffnen", src.display()))?;
+    let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+    let text = std::str::from_utf8(&raw[..end]).context("Kopftext ist kein UTF-8")?;
+    let command_line = std::env::args().collect::<Vec<_>>().join(" ");
+    let new_text = gc_bam::sorted_header(
+        text,
+        "genome-sort",
+        env!("CARGO_PKG_VERSION"),
+        &command_line,
+    );
+
+    let mut sorter = gc_bam::Sorter::new(gc_bam::SortOptions {
+        memory_bytes: speicher_mb.saturating_mul(1 << 20),
+        temp_dir: temp.to_path_buf(),
+    });
+    let mut st = gc_log::stage("sort.lesen", json!({}));
+    let mut record = Vec::new();
+    let mut runs = 0;
+    loop {
+        record.clear();
+        if !gc_io::bam::read_encoded(&mut reader, &mut record)
+            .with_context(|| format!("{} lesen", src.display()))?
+        {
+            break;
+        }
+        sorter
+            .push(&record)
+            .with_context(|| format!("Teil in {} schreiben", temp.display()))?;
+        let now = sorter.stats();
+        if now.runs != runs {
+            runs = now.runs;
+            gc_log::info(
+                "SORT.TEIL",
+                "Speicher voll, sortierter Teil auf die Platte geschrieben",
+                json!({ "teile": now.runs, "bytes_auf_platte": now.run_bytes, "saetze_bisher": now.records }),
+            );
+        }
+        st.heartbeat(30, || json!({ "saetze": now.records, "teile": now.runs }));
+    }
+    let read = sorter.stats();
+    st.finish(json!({ "saetze": read.records, "bytes": read.bytes, "teile": read.runs }));
+    let seconds_read = started.elapsed().as_secs_f64();
+
+    let mut part = dst.as_os_str().to_owned();
+    part.push(".unfertig");
+    let part = PathBuf::from(part);
+    let st = gc_log::stage("sort.schreiben", json!({ "teile": read.runs }));
+    let written = (|| -> Result<gc_bam::SortStats> {
+        let mut writer = gc_io::bam::create_raw(&part, &header, new_text.as_bytes(), kerne)
+            .with_context(|| format!("{} anlegen", part.display()))?;
+        let stats = sorter
+            .finish(|rec| gc_io::bam::write_encoded(&mut writer, rec))
+            .context("Teile zusammenführen")?;
+        gc_io::bam::finish(writer).with_context(|| format!("{} abschließen", part.display()))?;
+        std::fs::rename(&part, dst).with_context(|| format!("{} umbenennen", part.display()))?;
+        Ok(stats)
+    })();
+    let stats = match written {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = std::fs::remove_file(&part);
+            return Err(e);
+        }
+    };
+    st.finish(json!({ "saetze": stats.records }));
+    let seconds = started.elapsed().as_secs_f64();
+    let result = json!({
+        "saetze": stats.records,
+        "bytes_saetze": stats.bytes,
+        "teile": stats.runs,
+        "bytes_teile": stats.run_bytes,
+        "speicher_mb": speicher_mb,
+        "sekunden": seconds,
+        "sekunden_lesen": seconds_read,
+        "saetze_je_sekunde": if seconds > 0.0 { stats.records as f64 / seconds } else { 0.0 },
+    });
+    gc_log::info("SORT.FERTIG", "Sortieren beendet", result.clone());
+    Ok(result)
 }
 
 /// Verkettet die Seeds aller Reads und fasst zusammen.
@@ -967,6 +1081,57 @@ fn main() -> Result<()> {
                 "{}",
                 Envelope::new("genome.bam-roundtrip.v1", result).to_json()?
             );
+        }
+        Command::Sort {
+            src,
+            dst,
+            speicher_mb,
+            temp,
+            kerne,
+            log,
+        } => {
+            gc_log::init(gc_log::Config {
+                tool: "sort".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                level: gc_log::Level::Info,
+                jsonl: log,
+                stderr: true,
+            })?;
+            gc_log::install_panic_hook();
+            let temp = temp.unwrap_or_else(|| match dst.parent() {
+                Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+                _ => PathBuf::from("."),
+            });
+            gc_log::run_header(json!({
+                "eingabe": src.display().to_string(),
+                "ausgabe": dst.display().to_string(),
+                "speicher_mb": speicher_mb,
+                "temp": temp.display().to_string(),
+                "kerne": kerne,
+            }));
+            gc_log::input_file("eingabe", &src);
+            match sort_bam(&src, &dst, speicher_mb, &temp, kerne) {
+                Ok(mut result) => {
+                    result["lauf"] = json!(gc_log::run_id());
+                    gc_log::run_end(true, result.clone());
+                    println!("{}", Envelope::new("genome.sort.v1", result).to_json()?);
+                }
+                Err(e) => {
+                    gc_log::failure(gc_log::Failure {
+                        code: "SORT.FEHLGESCHLAGEN",
+                        what: "Das Sortieren wurde abgebrochen, es gibt keine Ausgabedatei",
+                        location: json!({
+                            "eingabe": src.display().to_string(),
+                            "ausgabe": dst.display().to_string(),
+                            "temp": temp.display().to_string(),
+                        }),
+                        cause: &format!("{e:#}"),
+                        action: "Eingabe mit samtools quickcheck prüfen, freien Platz im Temp-Ordner und am Ziel prüfen, dann neu starten",
+                    });
+                    gc_log::run_end(false, json!({ "fehler": format!("{e:#}") }));
+                    return Err(e);
+                }
+            }
         }
         Command::Index { command } => match command {
             IndexCommand::Build {

@@ -26,6 +26,7 @@ fremden Programme auf (kein conda, Docker, Java, Python, Nextflow).
 | `gc-io` FASTQ | lesen, vollständig prüfen, Paare abgleichen | gebaut | [Verfahren](verfahren/fastq-pruefung.md) |
 | `gc-io` FASTA | lesen (auch gzip) | gebaut | [Werkzeug index](werkzeuge/index.md) |
 | `gc-io` BAM | lesen und schreiben, BGZF über alle Kerne | gebaut und geprüft | [Verfahren](verfahren/bam-schreiben.md) |
+| `gc-bam` Sortieren | nach Ort, fester Speicher, Reihenfolge wie samtools | gebaut und geprüft | [Verfahren](verfahren/sortieren.md) |
 | `gc-schema` | Ergebnis-Hülle | gebaut | [Format](formate/ergebnis-huelle.md) |
 | `gc-log` | Lauf-Protokoll | gebaut | [Protokollierung](protokollierung.md) |
 | `gc-index` SA-IS | Suffix-Array | gebaut und geprüft | [Verfahren](verfahren/suffix-array-sais.md) |

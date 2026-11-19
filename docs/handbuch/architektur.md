@@ -8,6 +8,7 @@ Stand: gebaut (Grundgerüst), Erweiterung nach Plan Abschnitt 4 und 12.
 |---|---|---|
 | `gc-io` | FASTQ, FASTA, BAM, BGZF lesen und schreiben | noodles, flate2 (zlib-rs) |
 | `gc-index` | Referenz als 2-Bit-Folge, Suffix-Array, FM-Index | `gc-log`, flate2 (nur CRC-32) |
+| `gc-bam` | BAM-Datensätze nach Ort sortieren, Kopf anpassen; später Duplikate und Index | flate2 |
 | `gc-align` | Seeds sammeln und orten, Ketten; später Alignment | `gc-index` |
 | `gc-log` | Ereignisstrom und Lauf-Protokoll | serde_json |
 | `gc-schema` | Ergebnis-Hülle | serde, serde_json |

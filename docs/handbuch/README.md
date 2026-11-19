@@ -32,6 +32,7 @@ Auf keiner Seite steht eine Genauigkeits- oder Tempoaussage ohne Messung.
 - [`genome fastq-check`](werkzeuge/fastq-check.md)
 - [`genome bam-roundtrip`](werkzeuge/bam-roundtrip.md)
 - [`genome index`](werkzeuge/index.md)
+- [`genome sort`](werkzeuge/sort.md)
 - [`genome fq2bam`](werkzeuge/fq2bam.md) (geplant)
 - [Vorlage für neue Werkzeugseiten](werkzeuge/vorlage.md)
 
@@ -51,11 +52,13 @@ Auf keiner Seite steht eine Genauigkeits- oder Tempoaussage ohne Messung.
 - [Reihenfolge bei Gleichstand: warum Genome 4.0 wie bwa sortiert](verfahren/reihenfolge-wie-bwa.md)
 - [Ausgabe als SAM (einzelne Reads)](verfahren/sam-ausgabe.md)
 - [Read-Paare: Insertgröße, Partnersuche, Paarbewertung](verfahren/read-paare.md)
+- [Sortieren nach Ort mit festem Speicher](verfahren/sortieren.md)
 
 ### Formate
 - [Ergebnis-Hülle `genome.<werkzeug>.vN`](formate/ergebnis-huelle.md)
 - [Lauf-Protokoll `genome.log.v1`](formate/genome-log-v1.md)
 - [Indexdatei `*.gcfm`](formate/gcfm.md)
+- [Sortier-Teil `*.gcsort`](formate/gcsort.md)
 
 ### Messungen
 - [Verzeichnis der Messungen](messungen.md)
