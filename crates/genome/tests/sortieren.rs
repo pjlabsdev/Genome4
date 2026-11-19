@@ -225,3 +225,26 @@ fn index_counts_match_the_file() {
     assert!(!dir.join("ein.bam.bai").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `genome flagstat` zählt die Datei aus `make_input` richtig.
+#[test]
+fn flagstat_counts_the_file() {
+    let dir = std::env::temp_dir().join(format!("genome-flagstat-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("ein.bam");
+    let input = make_input(&src);
+    let out = Command::new(env!("CARGO_BIN_EXE_genome"))
+        .args(["flagstat", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let text = String::from_utf8(out.stdout).unwrap();
+    let unplaced = input.iter().filter(|r| r[18] & 4 != 0).count();
+    assert!(text.contains("\"genome.flagstat.v1\""), "{text}");
+    assert!(text.contains("\"gesamt\": 60000"), "{text}");
+    assert!(
+        text.contains(&format!("\"mit_ort\": {}", 60000 - unplaced)),
+        "{text}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
