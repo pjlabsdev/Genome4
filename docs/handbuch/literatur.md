@@ -19,6 +19,9 @@ noch einmal gegen die Originale geprüft.
 | Li 2013 | Li H. Aligning sequence reads, clone sequences and assembly contigs with BWA-MEM. arXiv:1303.3997, 2013. | BWA-MEM (ab M3) |
 | Vasimuddin et al. 2019 | Vasimuddin M, Misra S, Li H, Aluru S. Efficient architecture-aware acceleration of BWA-MEM for multicore systems. IPDPS 2019. | BWA-MEM2 als Tempo-Vergleich |
 | Knuth 1998 | Knuth DE. The Art of Computer Programming, Volume 3: Sorting and Searching. 2. Auflage, Addison-Wesley, 1998. Abschnitt 5.4 (externes Sortieren). | Sortieren in Teilen |
+| Danecek et al. 2021 | Danecek P, Bonfield JK, Liddle J, et al. Twelve years of SAMtools and BCFtools. GigaScience 10(2):giab008, 2021. | samtools sort, fixmate, markdup |
+| Lander und Waterman 1988 | Lander ES, Waterman MS. Genomic mapping by fingerprinting random clones: a mathematical analysis. Genomics 2:231-239, 1988. | Schätzung der Bibliotheksgröße |
+| Picard | Broad Institute. Picard Toolkit, `MarkDuplicates` und `DuplicationMetrics`. https://broadinstitute.github.io/picard/ | Duplikate, Bibliotheksgröße |
 | Li et al. 2009 | Li H, Handsaker B, Wysoker A, et al. The Sequence Alignment/Map format and SAMtools. Bioinformatics 25:2078-2079, 2009. | SAM/BAM |
 | SAM-Spezifikation | The SAM/BAM Format Specification Working Group. Sequence Alignment/Map Format Specification. hts-specs. | BAM und BGZF im Einzelnen |
 

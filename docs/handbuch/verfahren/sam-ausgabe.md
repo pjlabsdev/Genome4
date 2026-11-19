@@ -47,6 +47,23 @@ erlaubt (bwa lässt beides durch und schreibt dann einen ungültigen Kopf). Jede
 eines Reads ohne Ort, bekommt `RG:Z:` mit der Kennung. Die Plattform wird nicht geraten: Was in
 `PL` steht, bestimmt der Aufruf.
 
+## Partner-Angaben
+Mit `--partner-angaben` tragen die beiden Hauptzeilen eines Paares dieselben Zusatzangaben wie
+nach `samtools fixmate -m`. Das Markieren der Duplikate braucht sie
+([Duplikate markieren](duplikate-markieren.md)), und der eigene Durchlauf von fixmate entfällt.
+
+- `ms`: Summe der Basenqualitäten ab 15 des Partners.
+- `MC`: CIGAR des Partners. bwa schreibt sie schon, außer wenn der Partner keinen Ort hat; dann
+  steht hier wie bei fixmate `MC:Z:*`.
+
+Zusätzliche Zeilen (Flags 256 und 2048) bekommen nichts. Ein Read ohne Qualitätswerte gibt
+seinem Partner kein `ms`.
+
+Gemessen ([M5 Duplikate](../../bench/M5-duplikate.md)): Auf 200.000 Zeilen sind alle
+Zusatzangaben gleich wie nach `samtools fixmate -m`. fixmate ändert außerdem TLEN bei Paaren, die
+voneinander weg zeigen (um 2) oder auf demselben Strang liegen (um 1); das waren 1.018 Zeilen,
+keine davon in einem richtigen Paar. Genome 4.0 behält dort den Wert von bwa.
+
 ## Zwei Feinheiten
 - **Die Schwelle für `XA`** steht in bwa in einer Zahl einfacher Genauigkeit; 0,8 ist dort
   geringfügig größer als 0,8. Ein Bereich mit genau 80 % des Scores kommt deshalb nicht in `XA`.

@@ -287,3 +287,118 @@ fn read_group_goes_into_header_and_every_line() {
     assert!(err.contains("ALIGN.LESEGRUPPE_UNGUELTIG"), "{err}");
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// Die ganze Kette bis zur markierten BAM: ausrichten mit Partner-Angaben, sortieren, Duplikate
+/// markieren. Jedes Paar kommt zweimal vor, die Kopie mit schlechterer Qualität.
+#[test]
+fn chain_to_marked_duplicates() {
+    let dir = std::env::temp_dir().join(format!("genome-duplikate-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (fasta, r1, r2) = make_data(&dir);
+    let index = dir.join("ref.gcfm");
+    let s = |p: &Path| p.to_str().unwrap().to_string();
+    genome(&["index", "build", &s(&fasta), &s(&index)]);
+    // Kopien anhängen: gleicher Inhalt, Name mit "k" davor, Qualität 5 Stufen tiefer.
+    for path in [&r1, &r2] {
+        let text = std::fs::read_to_string(path).unwrap();
+        let mut copy = String::new();
+        for (i, line) in text.lines().enumerate() {
+            match i % 4 {
+                0 => writeln!(copy, "@k{}", &line[1..]).unwrap(),
+                3 => writeln!(copy, "{}", "D".repeat(line.len())).unwrap(),
+                _ => writeln!(copy, "{line}").unwrap(),
+            }
+        }
+        std::fs::write(path, text + &copy).unwrap();
+    }
+    let (raw, sorted, marked) = (
+        dir.join("roh.bam"),
+        dir.join("sortiert.bam"),
+        dir.join("markiert.bam"),
+    );
+    let (i, a, b) = (s(&index), s(&r1), s(&r2));
+    genome(&[
+        "index",
+        "sam",
+        &i,
+        "--fastq",
+        &a,
+        "--fastq2",
+        &b,
+        "--bam",
+        &s(&raw),
+        "--partner-angaben",
+    ]);
+    genome(&["sort", &s(&raw), &s(&sorted)]);
+    let out = String::from_utf8(genome(&["markdup", &s(&sorted), &s(&marked)])).unwrap();
+    assert!(out.contains("\"genome.markdup.v1\""), "{out}");
+
+    let before = bam_records(&sorted);
+    let after = bam_records(&marked);
+    assert_eq!(before.len(), after.len());
+    let mut dup_originals = 0;
+    let mut dup_copies = 0;
+    for (x, y) in before.iter().zip(&after) {
+        let (fx, fy): (Vec<&str>, Vec<&str>) = (x.split('\t').collect(), y.split('\t').collect());
+        // Nur das Flag darf sich ändern, und nur um 1024.
+        let (flag_x, flag_y): (u32, u32) = (fx[1].parse().unwrap(), fy[1].parse().unwrap());
+        assert_eq!(flag_x, flag_y & !1024, "{x}\n{y}");
+        assert_eq!(fx[0], fy[0]);
+        assert_eq!(fx[2..], fy[2..]);
+        assert!(flag_y & 4 != 0 || y.contains("\tMC:Z:"), "{y}");
+        if flag_y & 1024 != 0 {
+            if fy[0].starts_with('k') {
+                dup_copies += 1;
+            } else {
+                dup_originals += 1;
+            }
+        }
+    }
+    // 400 Paare, 10 davon mit einem Read ohne Ort: Die Kopie verliert immer, das Original nie.
+    assert_eq!(dup_originals, 0);
+    assert!(dup_copies >= 780, "{dup_copies} Kopien markiert");
+
+    // Ohne Partner-Angaben: klarer Fehler, keine Ausgabe.
+    let plain = dir.join("ohne.bam");
+    let plain_sorted = dir.join("ohne-sortiert.bam");
+    genome(&["index", "sam", &i, "--fastq", &a, "--bam", &s(&plain)]);
+    genome(&["sort", &s(&plain), &s(&plain_sorted)]);
+    // einzelne Reads brauchen keine Partner-Angaben
+    genome(&[
+        "markdup",
+        &s(&plain_sorted),
+        &s(&dir.join("ohne-markiert.bam")),
+    ]);
+    let stripped = dir.join("paare-ohne-angaben.bam");
+    let stripped_sorted = dir.join("paare-ohne-angaben-sortiert.bam");
+    genome(&[
+        "index",
+        "sam",
+        &i,
+        "--fastq",
+        &a,
+        "--fastq2",
+        &b,
+        "--bam",
+        &s(&stripped),
+    ]);
+    genome(&["sort", &s(&stripped), &s(&stripped_sorted)]);
+    let log = dir.join("fehler.jsonl");
+    let target = dir.join("darf-nicht-entstehen.bam");
+    let failed = Command::new(env!("CARGO_BIN_EXE_genome"))
+        .args([
+            "markdup",
+            &s(&stripped_sorted),
+            &s(&target),
+            "--log",
+            &s(&log),
+        ])
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    assert!(!target.exists());
+    let log_text = std::fs::read_to_string(&log).unwrap();
+    assert!(log_text.contains("MARKDUP.FEHLGESCHLAGEN"), "{log_text}");
+    assert!(log_text.contains("ms"), "{log_text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

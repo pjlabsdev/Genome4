@@ -33,6 +33,7 @@ Auf keiner Seite steht eine Genauigkeits- oder Tempoaussage ohne Messung.
 - [`genome bam-roundtrip`](werkzeuge/bam-roundtrip.md)
 - [`genome index`](werkzeuge/index.md)
 - [`genome sort`](werkzeuge/sort.md)
+- [`genome markdup`](werkzeuge/markdup.md)
 - [`genome fq2bam`](werkzeuge/fq2bam.md) (geplant)
 - [Vorlage für neue Werkzeugseiten](werkzeuge/vorlage.md)
 
@@ -53,6 +54,7 @@ Auf keiner Seite steht eine Genauigkeits- oder Tempoaussage ohne Messung.
 - [Ausgabe als SAM (einzelne Reads)](verfahren/sam-ausgabe.md)
 - [Read-Paare: Insertgröße, Partnersuche, Paarbewertung](verfahren/read-paare.md)
 - [Sortieren nach Ort mit festem Speicher](verfahren/sortieren.md)
+- [Duplikate markieren](verfahren/duplikate-markieren.md)
 
 ### Formate
 - [Ergebnis-Hülle `genome.<werkzeug>.vN`](formate/ergebnis-huelle.md)

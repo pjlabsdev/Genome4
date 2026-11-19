@@ -28,6 +28,25 @@ pub fn sorted_header(text: &str, id: &str, program_version: &str, command_line: 
         }
         _ => lines.insert(0, "@HD\tVN:1.6\tSO:coordinate".to_string()),
     }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    with_program_line(&out, id, program_version, command_line)
+}
+
+/// Hängt an den Kopftext eine `@PG`-Zeile für diesen Lauf an. Sie verweist mit `PP` auf die
+/// letzte vorhandene, wie bei samtools. Ihre Kennung ist `id`; ist die schon vergeben, wird `.1`,
+/// `.2` und so weiter angehängt. Alle anderen Zeilen bleiben unverändert.
+pub fn with_program_line(
+    text: &str,
+    id: &str,
+    program_version: &str,
+    command_line: &str,
+) -> String {
+    let mut lines: Vec<String> = text
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
     let ids: Vec<&str> = lines
         .iter()
         .filter(|l| l.starts_with("@PG\t"))

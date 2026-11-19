@@ -444,6 +444,9 @@ pub fn pair_lines(
             line.set_read_group(rg);
         }
     }
+    if opt.sam.mate_tags {
+        crate::sam::add_mate_tags(&mut lines);
+    }
     (lines, n)
 }
 

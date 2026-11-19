@@ -41,6 +41,9 @@ pub struct SamOptions {
     pub max_xa_hits: usize,
     /// Kennung der Lesegruppe; jede Zeile bekommt sie als `RG` (`-R`).
     pub read_group: Option<String>,
+    /// Paare: Angaben zum Partner wie nach `samtools fixmate -m` (`ms` an beiden Hauptzeilen,
+    /// `MC` auch an einem Read ohne Ort). Voraussetzung für das Markieren von Duplikaten.
+    pub mate_tags: bool,
 }
 
 impl Default for SamOptions {
@@ -51,6 +54,7 @@ impl Default for SamOptions {
             xa_drop_ratio: 0.8,
             max_xa_hits: 5,
             read_group: None,
+            mate_tags: false,
         }
     }
 }
@@ -156,6 +160,49 @@ impl ReadGroup {
             return Err("die Kennung der Lesegruppe ist länger als 255 Zeichen".to_string());
         }
         Ok(ReadGroup { line, id })
+    }
+}
+
+/// Summe der Basenqualitäten ab 15 (ASCII wie in FASTQ), wie `samtools fixmate -m` sie als `ms`
+/// beim Partner einträgt und `samtools markdup` sie zum Auswählen des besten Paares benutzt.
+pub fn quality_score(qual: &[u8]) -> i64 {
+    qual.iter()
+        .map(|&q| i64::from(q.saturating_sub(33)))
+        .filter(|&q| q >= 15)
+        .sum()
+}
+
+/// Ergänzt bei den beiden Hauptzeilen eines Paares die Angaben zum Partner wie
+/// `samtools fixmate -m`: `ms` (Qualitätssumme des Partners) und, wo sie fehlt, `MC` (CIGAR des
+/// Partners; hat der Partner keinen Ort, schreibt bwa sie nicht und fixmate schreibt `*`). Zeilen ohne Qualitäten bekommen
+/// kein `ms`.
+pub fn add_mate_tags(lines: &mut [Line]) {
+    let main = |lines: &[Line], bit: u32| {
+        lines
+            .iter()
+            .position(|l| l.flag & bit != 0 && l.flag & (0x100 | 0x800) == 0)
+    };
+    let (Some(a), Some(b)) = (main(lines, 0x40), main(lines, 0x80)) else {
+        return;
+    };
+    for (me, mate) in [(a, b), (b, a)] {
+        let mut mate_cigar: String = lines[mate]
+            .cigar
+            .iter()
+            .map(|&(op, len)| format!("{len}{}", op as char))
+            .collect();
+        if mate_cigar.is_empty() {
+            // Partner ohne Ort: fixmate schreibt dann `MC:Z:*`.
+            mate_cigar.push('*');
+        }
+        let score = (!lines[mate].qual.is_empty()).then(|| quality_score(&lines[mate].qual));
+        let line = &mut lines[me];
+        if !line.tags.iter().any(|(t, _)| t == b"MC") {
+            line.tags.push((*b"MC", TagValue::Text(mate_cigar)));
+        }
+        if let Some(score) = score {
+            line.tags.push((*b"ms", TagValue::Int(score)));
+        }
     }
 }
 

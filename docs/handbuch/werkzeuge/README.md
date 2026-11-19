@@ -9,6 +9,7 @@ Jedes Werkzeug hat eine Seite nach derselben [Vorlage](vorlage.md).
 | `genome fastq-check` | FASTQ vollständig prüfen, Kennzahlen | gebaut | [fastq-check](fastq-check.md) |
 | `genome bam-roundtrip` | BAM lesen und unverändert neu schreiben | gebaut und geprüft | [bam-roundtrip](bam-roundtrip.md) |
 | `genome sort` | BAM nach Ort sortieren, mit festem Speicher | gebaut und geprüft | [sort](sort.md) |
+| `genome markdup` | Duplikate markieren, Verfahren wie samtools | gebaut und geprüft | [markdup](markdup.md) |
 | `genome index` | FM-Index bauen, prüfen, abfragen | gebaut und geprüft | [index](index.md) |
 
 ## Geplant
