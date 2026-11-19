@@ -37,6 +37,7 @@ zusammen 20 Bit.
 
 Am ganzen Genom (GRCh38 ohne ALT) ist die Datei mit standard 7,75 GB groß, mit kompakt 4,84 GB
 und mit schnell 9,3 GB (gerechnet). Der Index liegt beim Ausrichten ganz im Arbeitsspeicher.
+`genome fq2bam` braucht am ganzen Genom damit in der Spitze 8,07 GB statt 5,24 GB (gemessen).
 Standard ist die Vorgabe, weil die dichteren Stichproben das Ausrichten am ganzen Genom auf rund
 0,87-mal die Zeit von kompakt bringen (siehe [M6 Tempo](../../bench/M6-tempo.md)); die Ausgabe
 ist mit jeder Variante dieselbe. Wer wenig Arbeitsspeicher hat, baut mit `--variante kompakt`.
