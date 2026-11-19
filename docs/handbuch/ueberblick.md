@@ -34,7 +34,7 @@ fremden Programme auf (kein conda, Docker, Java, Python, Nextflow).
 | `gc-index` SA-IS | Suffix-Array | gebaut und geprüft | [Verfahren](verfahren/suffix-array-sais.md) |
 | `gc-index` FM-Index | Suche und Ortung | gebaut und geprüft (chr20) | [Verfahren](verfahren/fm-index.md) |
 | `gc-index` blockweise | Index für das ganze Genom | gebaut, Messung siehe Seite | [Verfahren](verfahren/blockweiser-bau.md) |
-| `genome fq2bam` | FASTQ zur fertigen BAM | geplant (M3 bis M6) | [Werkzeug](werkzeuge/fq2bam.md) |
+| `genome fq2bam` | FASTQ zur fertigen BAM | erste Fassung, auf chr20 geprüft; ganzes Genom offen | [Werkzeug](werkzeuge/fq2bam.md) |
 | `gc-sys` | Systemnahes je Betriebssystem | geplant | [Architektur](architektur.md) |
 | `gc-report` | Berichtsbaustein | geplant (M5) | [Berichte](berichte.md) |
 | alle weiteren Werkzeuge | siehe Plan Abschnitt 6 | geplant | [Übersicht](werkzeuge/README.md) |

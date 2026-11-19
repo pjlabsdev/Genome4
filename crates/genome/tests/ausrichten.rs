@@ -358,6 +358,58 @@ fn chain_to_marked_duplicates() {
     assert_eq!(dup_originals, 0);
     assert!(dup_copies >= 780, "{dup_copies} Kopien markiert");
 
+    // Der eine Befehl gibt dieselben Zeilen wie die einzelnen Schritte, auch mit wenig Speicher,
+    // und schreibt Index und Protokoll daneben.
+    for (name, memory) in [("ganz.bam", "2048"), ("ganz-klein.bam", "1")] {
+        let whole = dir.join(name);
+        let out = String::from_utf8(genome(&[
+            "fq2bam",
+            &i,
+            "--fastq",
+            &a,
+            "--fastq2",
+            &b,
+            "--aus",
+            &s(&whole),
+            "--speicher-mb",
+            memory,
+        ]))
+        .unwrap();
+        assert!(out.contains("\"genome.fq2bam.v1\""), "{out}");
+        assert!(
+            bam_records(&whole) == after,
+            "{name} weicht von den Schritten ab"
+        );
+        let bai = std::fs::read(dir.join(format!("{name}.bai"))).unwrap();
+        assert_eq!(&bai[..4], b"BAI\x01");
+        let log = std::fs::read_to_string(dir.join(format!("{name}.log.jsonl"))).unwrap();
+        assert!(log.contains("FQ2BAM.FERTIG"), "{log}");
+        assert!(!dir.join(format!("{name}.unfertig")).exists());
+    }
+    // Ungleich lange FASTQ-Dateien: Abbruch mit Fehlercode, keine BAM.
+    let short = dir.join("kurz.fq");
+    let text = std::fs::read_to_string(&r2).unwrap();
+    let cut: Vec<&str> = text.lines().take(40).collect();
+    std::fs::write(&short, cut.join("\n") + "\n").unwrap();
+    let broken = dir.join("kaputt.bam");
+    let failed = Command::new(env!("CARGO_BIN_EXE_genome"))
+        .args([
+            "fq2bam",
+            &i,
+            "--fastq",
+            &a,
+            "--fastq2",
+            &s(&short),
+            "--aus",
+            &s(&broken),
+        ])
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    assert!(!broken.exists());
+    let log = std::fs::read_to_string(dir.join("kaputt.bam.log.jsonl")).unwrap();
+    assert!(log.contains("FQ2BAM.FEHLGESCHLAGEN"), "{log}");
+
     // Ohne Partner-Angaben: klarer Fehler, keine Ausgabe.
     let plain = dir.join("ohne.bam");
     let plain_sorted = dir.join("ohne-sortiert.bam");

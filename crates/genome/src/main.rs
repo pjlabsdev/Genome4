@@ -82,6 +82,41 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         kerne: usize,
     },
+    /// Vom FASTQ zur sortierten, duplikatmarkierten, indizierten BAM in einem Lauf.
+    Fq2bam {
+        /// FM-Index des Referenzgenoms (`genome index build`)
+        index: PathBuf,
+        /// FASTQ mit den Reads (bei Paaren: Read 1)
+        #[arg(long)]
+        fastq: PathBuf,
+        /// FASTQ mit den Partnern (Read 2)
+        #[arg(long)]
+        fastq2: Option<PathBuf>,
+        /// Ausgabe-BAM; daneben entstehen `<aus>.bai` und, ohne `--log`, `<aus>.log.jsonl`
+        #[arg(long)]
+        aus: PathBuf,
+        /// Lesegruppe wie bei `bwa mem -R`, zum Beispiel '@RG\tID:lauf1\tSM:probe\tPL:ILLUMINA'
+        #[arg(long)]
+        lesegruppe: Option<String>,
+        /// Speicher für das Sortieren in MB
+        #[arg(long, default_value_t = 2048)]
+        speicher_mb: usize,
+        /// Ordner für die Teile des Sortierens (Vorgabe: der Ordner der Ausgabe)
+        #[arg(long)]
+        temp: Option<PathBuf>,
+        /// Kerne (0 = alle). Die Ausgabe hängt nicht davon ab.
+        #[arg(long, default_value_t = 0)]
+        kerne: usize,
+        /// Paare: Die Insertgröße wird je Block von so vielen Basen geschätzt (wie bwa `-K`)
+        #[arg(long, default_value_t = 10_000_000)]
+        block_basen: u64,
+        /// Längster erwarteter Read für das Markieren der Duplikate
+        #[arg(long, default_value_t = 300)]
+        max_laenge: i64,
+        /// Lauf-Protokoll als JSON-Zeilen in diese Datei
+        #[arg(long)]
+        log: Option<PathBuf>,
+    },
     /// FM-Index über ein Referenzgenom bauen, prüfen und abfragen (Meilenstein M2).
     Index {
         #[command(subcommand)]
@@ -212,6 +247,24 @@ enum IndexCommand {
 enum AlignOutput {
     Sam(std::io::BufWriter<std::io::Stdout>),
     Bam(Box<gc_io::bam::MtWriter>),
+    /// Direkt in den Sortierer, ohne Zwischendatei (`fq2bam`).
+    Sorter(Box<gc_bam::Sorter>),
+}
+
+/// Kodiert Zeilen als BAM-Sätze.
+fn encode_lines<'a>(lines: impl Iterator<Item = &'a gc_align::Line>) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    for line in lines {
+        // Das Längenfeld des Namens in BAM hat ein Byte (SAM-Spezifikation: 254 Zeichen).
+        anyhow::ensure!(
+            line.name.len() <= 254,
+            "Read-Name mit {} Zeichen ist für BAM zu lang (höchstens 254): {}",
+            line.name.len(),
+            line.name
+        );
+        line.write_bam(&mut bytes);
+    }
+    Ok(bytes)
 }
 
 impl AlignOutput {
@@ -250,18 +303,12 @@ impl AlignOutput {
                 out.write_all(text.as_bytes())?;
             }
             AlignOutput::Bam(writer) => {
-                let mut bytes = Vec::new();
-                for line in lines {
-                    // Das Längenfeld des Namens in BAM hat ein Byte (SAM-Spezifikation: 254 Zeichen).
-                    anyhow::ensure!(
-                        line.name.len() <= 254,
-                        "Read-Name mit {} Zeichen ist für BAM zu lang (höchstens 254): {}",
-                        line.name.len(),
-                        line.name
-                    );
-                    line.write_bam(&mut bytes);
-                }
-                gc_io::bam::write_encoded(writer, &bytes)?;
+                gc_io::bam::write_encoded(writer, &encode_lines(lines)?)?;
+            }
+            AlignOutput::Sorter(sorter) => {
+                sorter
+                    .push(&encode_lines(lines)?)
+                    .context("sortierten Teil auf die Platte schreiben")?;
             }
         }
         Ok(block.iter().map(|l| l.len() as u64).sum())
@@ -272,6 +319,7 @@ impl AlignOutput {
         match self {
             AlignOutput::Sam(mut out) => out.flush()?,
             AlignOutput::Bam(writer) => gc_io::bam::finish(*writer)?,
+            AlignOutput::Sorter(_) => {}
         }
         Ok(())
     }
@@ -296,16 +344,35 @@ fn index_sam(
     run: &SamRun<'_>,
 ) -> Result<()> {
     let SamRun {
-        block_bases,
         threads,
         bam,
         read_group,
+        ..
+    } = *run;
+    let mut out = AlignOutput::open(fm, read_group, bam, threads)?;
+    align_into(fm, first, second, run, &mut out)?;
+    out.finish()
+}
+
+/// Richtet aus und gibt die Zeilen Block für Block an `out`. Liefert die Zahl der Reads und
+/// der Zeilen.
+fn align_into(
+    fm: &gc_index::FmIndex,
+    first: &std::path::Path,
+    second: Option<&std::path::Path>,
+    run: &SamRun<'_>,
+    out: &mut AlignOutput,
+) -> Result<(u64, u64)> {
+    let SamRun {
+        block_bases,
+        threads,
+        read_group,
         mate_tags,
+        ..
     } = *run;
     let mut opt = gc_align::AlignOptions::default();
     opt.sam.read_group = read_group.map(|rg| rg.id.clone());
     opt.sam.mate_tags = mate_tags;
-    let mut out = AlignOutput::open(fm, read_group, bam, threads)?;
     let mut reader1 = fastq::open(first)?;
     let mut reader2 = match second {
         Some(p) => Some(fastq::open(p)?),
@@ -411,7 +478,6 @@ fn index_sam(
         n_reads += records.len() as u64;
         block_nr += 1;
     }
-    out.finish()?;
     let seconds = started.elapsed().as_secs_f64();
     gc_log::info(
         "ALIGN.FERTIG",
@@ -425,7 +491,202 @@ fn index_sam(
             "reads_je_sekunde": if seconds > 0.0 { n_reads as f64 / seconds } else { 0.0 },
         }),
     );
-    Ok(())
+    Ok((n_reads, n_lines))
+}
+
+/// Einstellungen eines Laufs von `genome fq2bam`.
+struct Fq2bamRun<'a> {
+    index: &'a std::path::Path,
+    fastq: &'a std::path::Path,
+    fastq2: Option<&'a std::path::Path>,
+    dst: &'a std::path::Path,
+    read_group: Option<&'a str>,
+    memory_mb: usize,
+    temp: &'a std::path::Path,
+    threads: usize,
+    block_bases: u64,
+    max_length: i64,
+}
+
+/// Zahlen von `flagstat` als JSON, für eine der beiden Gruppen.
+fn flag_counts_json(c: &gc_bam::Counts) -> serde_json::Value {
+    let share = |part: u64, whole: u64| {
+        if whole > 0 {
+            json!(part as f64 / whole as f64)
+        } else {
+            json!(null)
+        }
+    };
+    json!({
+        "gesamt": c.total,
+        "hauptzeilen": c.primary,
+        "sekundaer": c.secondary,
+        "ergaenzend": c.supplementary,
+        "duplikate": c.duplicates,
+        "duplikate_hauptzeilen": c.primary_duplicates,
+        "mit_ort": c.mapped,
+        "anteil_mit_ort": share(c.mapped, c.total),
+        "hauptzeilen_mit_ort": c.primary_mapped,
+        "anteil_hauptzeilen_mit_ort": share(c.primary_mapped, c.primary),
+        "aus_paaren": c.paired,
+        "read1": c.read1,
+        "read2": c.read2,
+        "richtiges_paar": c.properly_paired,
+        "anteil_richtiges_paar": share(c.properly_paired, c.paired),
+        "beide_mit_ort": c.both_mapped,
+        "nur_selbst_mit_ort": c.singletons,
+        "anteil_nur_selbst_mit_ort": share(c.singletons, c.paired),
+        "partner_auf_anderem_contig": c.mate_on_other_contig,
+        "partner_auf_anderem_contig_mapq5": c.mate_on_other_contig_mapq5,
+    })
+}
+
+/// Zahlen des Markierens als JSON.
+fn dup_stats_json(stats: &gc_bam::DupStats) -> serde_json::Value {
+    let duplicates = stats.duplicate_pair + stats.duplicate_single;
+    json!({
+        "gelesen": stats.read,
+        "geschrieben": stats.written,
+        "nicht_bewertet": stats.excluded,
+        "bewertet": stats.examined,
+        "mit_partner": stats.paired,
+        "ohne_partner": stats.single,
+        "duplikate_mit_partner": stats.duplicate_pair,
+        "duplikate_ohne_partner": stats.duplicate_single,
+        "duplikate": duplicates,
+        "anteil_duplikate": if stats.examined > 0 { duplicates as f64 / stats.examined as f64 } else { 0.0 },
+        "geschaetzte_bibliotheksgroesse": stats.estimated_library_size(),
+        "fenster_spitze_saetze": stats.window_peak,
+    })
+}
+
+/// Die ganze Kette in einem Lauf: ausrichten (mit Partner-Angaben) direkt in den Sortierer,
+/// beim Zusammenführen Duplikate markieren und nach Flags zählen, dann den Index schreiben.
+/// Zwischen den Schritten entsteht keine BAM; auf der Platte liegen nur die Teile des Sortierens.
+fn fq2bam(run: &Fq2bamRun<'_>) -> Result<serde_json::Value> {
+    let started = std::time::Instant::now();
+    anyhow::ensure!(run.memory_mb > 0, "--speicher-mb muss größer als 0 sein");
+    anyhow::ensure!(run.max_length > 0, "--max-laenge muss größer als 0 sein");
+    let read_group = match run.read_group {
+        Some(text) => Some(
+            gc_align::ReadGroup::parse(text)
+                .map_err(|cause| anyhow::anyhow!("--lesegruppe: {cause}"))?,
+        ),
+        None => None,
+    };
+    let st = gc_log::stage("fq2bam.index_laden", json!({}));
+    let fm = load_index(run.index)?;
+    st.finish(json!({}));
+    let seconds_load = started.elapsed().as_secs_f64();
+
+    // 1. Ausrichten, die Sätze gehen sofort in den Sortierer.
+    let t = std::time::Instant::now();
+    let st = gc_log::stage("fq2bam.ausrichten", json!({ "kerne": run.threads }));
+    let mut out = AlignOutput::Sorter(Box::new(gc_bam::Sorter::new(gc_bam::SortOptions {
+        memory_bytes: run.memory_mb.saturating_mul(1 << 20),
+        temp_dir: run.temp.to_path_buf(),
+    })));
+    let sam_run = SamRun {
+        block_bases: run.block_bases,
+        threads: run.threads,
+        bam: None,
+        read_group: read_group.as_ref(),
+        mate_tags: true,
+    };
+    let (reads, lines) = align_into(&fm, run.fastq, run.fastq2, &sam_run, &mut out)?;
+    let AlignOutput::Sorter(sorter) = out else {
+        unreachable!("oben als Sortierer angelegt")
+    };
+    let sorted = sorter.stats();
+    st.finish(json!({ "reads": reads, "zeilen": lines, "teile": sorted.runs }));
+    let seconds_align = t.elapsed().as_secs_f64();
+
+    // 2. Zusammenführen, dabei Duplikate markieren, zählen und schreiben.
+    let t = std::time::Instant::now();
+    let command_line = std::env::args().collect::<Vec<_>>().join(" ");
+    let header_text = gc_bam::with_coordinate_order(&gc_align::sam_header(
+        &fm,
+        read_group.as_ref(),
+        env!("CARGO_PKG_VERSION"),
+        &command_line,
+    ));
+    let mut part = run.dst.as_os_str().to_owned();
+    part.push(".unfertig");
+    let part = PathBuf::from(part);
+    let st = gc_log::stage("fq2bam.zusammenfuehren", json!({ "teile": sorted.runs }));
+    let written = (|| -> Result<(gc_bam::SortStats, gc_bam::DupStats, gc_bam::FlagStats)> {
+        let mut writer = gc_io::bam::create_from_text(&part, &header_text, run.threads)
+            .with_context(|| format!("{} anlegen", part.display()))?;
+        let mut marker = gc_bam::DupMarker::new(gc_bam::DupOptions {
+            max_length: run.max_length,
+        });
+        let mut flags = gc_bam::FlagStats::default();
+        let mut sink = |rec: &[u8]| {
+            flags.add(&rec[4..]);
+            gc_io::bam::write_encoded(&mut writer, rec)
+        };
+        let sort_stats = sorter
+            .finish(|rec| marker.push(rec, &mut sink))
+            .context("Teile zusammenführen und Duplikate markieren")?;
+        let dup_stats = marker.finish(&mut sink)?;
+        gc_io::bam::finish(writer).with_context(|| format!("{} abschließen", part.display()))?;
+        std::fs::rename(&part, run.dst)
+            .with_context(|| format!("{} umbenennen", part.display()))?;
+        Ok((sort_stats, dup_stats, flags))
+    })();
+    let (sort_stats, dup_stats, flags) = match written {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = std::fs::remove_file(&part);
+            return Err(e);
+        }
+    };
+    st.finish(json!({ "saetze": sort_stats.records, "duplikate": dup_stats.duplicate_pair + dup_stats.duplicate_single }));
+    let seconds_merge = t.elapsed().as_secs_f64();
+
+    // 3. Index.
+    let t = std::time::Instant::now();
+    let mut bai = run.dst.as_os_str().to_owned();
+    bai.push(".bai");
+    let bai = PathBuf::from(bai);
+    let index_result = index_bam(run.dst, &bai, run.threads)?;
+    let seconds_index = t.elapsed().as_secs_f64();
+
+    let seconds = started.elapsed().as_secs_f64();
+    let result = json!({
+        "bam": run.dst.display().to_string(),
+        "bai": bai.display().to_string(),
+        "reads": reads,
+        "saetze": sort_stats.records,
+        "paare": run.fastq2.is_some(),
+        "kerne": run.threads,
+        "sortieren": {
+            "bytes_saetze": sort_stats.bytes,
+            "teile": sort_stats.runs,
+            "bytes_teile": sort_stats.run_bytes,
+            "speicher_mb": run.memory_mb,
+        },
+        "duplikate": dup_stats_json(&dup_stats),
+        "flagstat": {
+            "bestanden": flag_counts_json(&flags.passed),
+            "nicht_bestanden": flag_counts_json(&flags.failed),
+        },
+        "index": {
+            "faecher": index_result["faecher"],
+            "bytes_index": index_result["bytes_index"],
+            "ohne_contig": index_result["ohne_contig"],
+        },
+        "sekunden": seconds,
+        "sekunden_schritte": {
+            "index_laden": seconds_load,
+            "ausrichten_und_teile": seconds_align,
+            "zusammenfuehren_markieren_schreiben": seconds_merge,
+            "bam_index": seconds_index,
+        },
+        "reads_je_sekunde": if seconds > 0.0 { reads as f64 / seconds } else { 0.0 },
+    });
+    gc_log::info("FQ2BAM.FERTIG", "fq2bam beendet", result.clone());
+    Ok(result)
 }
 
 /// Sortiert eine BAM nach Ort. Die Ausgabe entsteht unter einem vorläufigen Namen und bekommt
@@ -1436,43 +1697,100 @@ fn main() -> Result<()> {
                     bam.display()
                 );
             }
-            let group = |c: &gc_bam::Counts| {
-                let share = |part: u64, whole: u64| {
-                    if whole > 0 {
-                        json!(part as f64 / whole as f64)
-                    } else {
-                        json!(null)
-                    }
-                };
-                json!({
-                    "gesamt": c.total,
-                    "hauptzeilen": c.primary,
-                    "sekundaer": c.secondary,
-                    "ergaenzend": c.supplementary,
-                    "duplikate": c.duplicates,
-                    "duplikate_hauptzeilen": c.primary_duplicates,
-                    "mit_ort": c.mapped,
-                    "anteil_mit_ort": share(c.mapped, c.total),
-                    "hauptzeilen_mit_ort": c.primary_mapped,
-                    "anteil_hauptzeilen_mit_ort": share(c.primary_mapped, c.primary),
-                    "aus_paaren": c.paired,
-                    "read1": c.read1,
-                    "read2": c.read2,
-                    "richtiges_paar": c.properly_paired,
-                    "anteil_richtiges_paar": share(c.properly_paired, c.paired),
-                    "beide_mit_ort": c.both_mapped,
-                    "nur_selbst_mit_ort": c.singletons,
-                    "anteil_nur_selbst_mit_ort": share(c.singletons, c.paired),
-                    "partner_auf_anderem_contig": c.mate_on_other_contig,
-                    "partner_auf_anderem_contig_mapq5": c.mate_on_other_contig_mapq5,
-                })
-            };
+            let group = flag_counts_json;
             let result = json!({
                 "bestanden": group(&stats.passed),
                 "nicht_bestanden": group(&stats.failed),
                 "sekunden": started.elapsed().as_secs_f64(),
             });
             println!("{}", Envelope::new("genome.flagstat.v1", result).to_json()?);
+        }
+        Command::Fq2bam {
+            index,
+            fastq,
+            fastq2,
+            aus,
+            lesegruppe,
+            speicher_mb,
+            temp,
+            kerne,
+            block_basen,
+            max_laenge,
+            log,
+        } => {
+            let threads = if kerne == 0 {
+                std::thread::available_parallelism().map_or(1, usize::from)
+            } else {
+                kerne
+            };
+            let log = log.unwrap_or_else(|| {
+                let mut name = aus.as_os_str().to_owned();
+                name.push(".log.jsonl");
+                PathBuf::from(name)
+            });
+            gc_log::init(gc_log::Config {
+                tool: "fq2bam".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                level: gc_log::Level::Info,
+                jsonl: Some(log),
+                stderr: true,
+            })?;
+            gc_log::install_panic_hook();
+            let temp = temp.unwrap_or_else(|| match aus.parent() {
+                Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+                _ => PathBuf::from("."),
+            });
+            gc_log::run_header(json!({
+                "index": index.display().to_string(),
+                "fastq": fastq.display().to_string(),
+                "fastq2": fastq2.as_ref().map(|p| p.display().to_string()),
+                "ausgabe": aus.display().to_string(),
+                "lesegruppe": lesegruppe,
+                "speicher_mb": speicher_mb,
+                "temp": temp.display().to_string(),
+                "kerne": threads,
+                "block_basen": block_basen,
+                "max_laenge": max_laenge,
+            }));
+            gc_log::input_file("fastq", &fastq);
+            if let Some(p) = &fastq2 {
+                gc_log::input_file("fastq2", p);
+            }
+            gc_log::input_file("index", &index);
+            let run = Fq2bamRun {
+                index: &index,
+                fastq: &fastq,
+                fastq2: fastq2.as_deref(),
+                dst: &aus,
+                read_group: lesegruppe.as_deref(),
+                memory_mb: speicher_mb,
+                temp: &temp,
+                threads,
+                block_bases: block_basen,
+                max_length: max_laenge,
+            };
+            match fq2bam(&run) {
+                Ok(mut result) => {
+                    result["lauf"] = json!(gc_log::run_id());
+                    gc_log::run_end(true, result.clone());
+                    println!("{}", Envelope::new("genome.fq2bam.v1", result).to_json()?);
+                }
+                Err(e) => {
+                    gc_log::failure(gc_log::Failure {
+                        code: "FQ2BAM.FEHLGESCHLAGEN",
+                        what: "fq2bam wurde abgebrochen, es gibt keine Ausgabe-BAM",
+                        location: json!({
+                            "fastq": fastq.display().to_string(),
+                            "ausgabe": aus.display().to_string(),
+                            "temp": temp.display().to_string(),
+                        }),
+                        cause: &format!("{e:#}"),
+                        action: "Ursache im Feld ursache lesen; FASTQ mit genome fastq-check prüfen, freien Platz im Temp-Ordner und am Ziel prüfen, dann neu starten",
+                    });
+                    gc_log::run_end(false, json!({ "fehler": format!("{e:#}") }));
+                    return Err(e);
+                }
+            }
         }
         Command::Index { command } => match command {
             IndexCommand::Build {

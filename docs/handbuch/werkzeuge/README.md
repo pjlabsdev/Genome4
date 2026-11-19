@@ -12,6 +12,7 @@ Jedes Werkzeug hat eine Seite nach derselben [Vorlage](vorlage.md).
 | `genome markdup` | Duplikate markieren, Verfahren wie samtools | gebaut und geprüft | [markdup](markdup.md) |
 | `genome bam-index` | Index `.bai` zu einer sortierten BAM | gebaut und geprüft | [bam-index](bam-index.md) |
 | `genome flagstat` | Datensätze nach Flags zählen | gebaut und geprüft | [flagstat](flagstat.md) |
+| `genome fq2bam` | FASTQ zur sortierten, duplikatmarkierten, indizierten BAM in einem Lauf | erste Fassung, auf chr20 geprüft | [fq2bam](fq2bam.md) |
 | `genome index` | FM-Index bauen, prüfen, abfragen | gebaut und geprüft | [index](index.md) |
 
 ## Geplant
@@ -21,7 +22,6 @@ Eine Seite entsteht jeweils mit dem Werkzeug.
 
 | Werkzeug | Aufgabe | ersetzt | Welle |
 |---|---|---|---|
-| [`fq2bam`](fq2bam.md) | FASTQ zur sortierten, duplikatmarkierten, indizierten BAM mit QC | fastp, bwa, samtools | 0+1 |
 | `gannot` | Annotation | Ensembl VEP | 2 |
 | `gqc` | Kontamination, Identität, Geschlecht | VerifyBamID2, Somalier, mosdepth | 2 |
 | `ghap`, `glift`, `gmicro`, `gtel`, `gpgs` | Haplogruppen, Liftover, Viren, Telomere, polygene Scores | Haplogrep, Kraken2, TelomereHunter2 u. a. | 2 |
