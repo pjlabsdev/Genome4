@@ -43,8 +43,8 @@ aus dem SRA), entscheidet der neue Name.
    10.000 Reads: kein Adapter.
 2. Bekannte Adapter (`knownadapters.h`, Liste mit Namen) prüfen, an höchstens 100.000 Reads:
    Ein Adapter trifft einen Read, wenn er an irgendeiner Stelle `pos` (0 bis Länge minus 9) mit
-   höchstens einem Unterschied je 16 verglichene Basen passt; je Read zählt nur der erste
-   Treffer. Abbruch, sobald ein Adapter mehr als 1.000 Treffer hat; Adapter mit weniger als einem
+   höchstens einem Unterschied je 16 verglichene Basen passt; je Read und Adapter zählt nur die
+   erste passende Stelle. Abbruch, sobald ein Adapter mehr als 1.000 Treffer hat; Adapter mit weniger als einem
    Zehntel der bisher meisten Treffer werden ab 20 Treffern übersprungen. Gewinner ist der mit den
    meisten Treffern, bei Gleichstand der in alphabetischer Reihenfolge erste. Er gilt, wenn er
    mehr als 1/50 der geprüften Reads trifft, oder mehr als 1/200 und die Summe seiner
@@ -113,7 +113,10 @@ Mit `--trimmen` (nur für Paare) liest `fq2bam` vor dem Laden des Index den Anfa
 für die Adaptersuche, wie fastp. Dann wird jedes Paar beim Lesen getrimmt; verworfene Paare werden
 nicht ausgerichtet und erscheinen nicht in der BAM (wie bei fastp, das sie nicht schreibt). Die
 Blöcke für die Schätzung der Insertgröße zählen die Basen nach dem Trimmen. Zwischendateien
-entstehen keine. Protokoll: `TRIM.ADAPTER`, `TRIM.POLYG`, `TRIM.FERTIG`; die Zähler stehen auch
+entstehen keine. Beide Seiten werden gleichzeitig untersucht, und eine Vorprüfung der ersten
+8 Basen jedes bekannten Adapters spart Vergleiche, ohne ein Ergebnis zu ändern (Test
+`differing_bytes_counts_like_plain_loop`; an HG002 chr20 gleiche BAM, Vorbereitung 6,3 s statt
+18,3 s bei 2 x 262.144 Reads). Protokoll: `TRIM.ADAPTER`, `TRIM.POLYG`, `TRIM.FERTIG`; die Zähler stehen auch
 im Bericht unter `trimmen` (ohne die Option `null`).
 
 ## Was `genome` zusätzlich tut

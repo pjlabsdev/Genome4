@@ -594,23 +594,37 @@ fn plan_trimming(
     use gc_io::trim;
     let st = gc_log::stage("fq2bam.trimmen_vorbereiten", json!({}));
     let mut adapters: [Option<Vec<u8>>; 2] = [None, None];
-    let mut first_name = Vec::new();
-    for (side, path) in [first, second].into_iter().enumerate() {
-        let mut reader = fastq::open(path)?;
-        let (mut reads, mut bases) = (Vec::new(), 0usize);
-        let mut rec = Record::default();
-        while reads.len() < trim::DETECT_READS && bases < trim::DETECT_BASES {
-            if !reader.read_record(&mut rec)? {
-                break;
+    // Beide Seiten werden gleichzeitig gelesen und untersucht; das Ergebnis hängt
+    // nicht davon ab, nur die Wartezeit.
+    let first_name_slot = std::sync::Mutex::new(Vec::new());
+    let read_side =
+        |side: usize, path: &std::path::Path| -> Result<(usize, Result<trim::Adapter, String>)> {
+            let mut reader = fastq::open(path)?;
+            let (mut reads, mut bases) = (Vec::new(), 0usize);
+            let mut rec = Record::default();
+            while reads.len() < trim::DETECT_READS && bases < trim::DETECT_BASES {
+                if !reader.read_record(&mut rec)? {
+                    break;
+                }
+                if side == 0 && reads.is_empty() {
+                    *first_name_slot.lock().expect("Sperre") = rec.name.clone();
+                }
+                bases += rec.seq.len();
+                reads.push(rec.seq.clone());
             }
-            if side == 0 && reads.is_empty() {
-                first_name = rec.name.clone();
-            }
-            bases += rec.seq.len();
-            reads.push(rec.seq.clone());
-        }
+            let found = trim::detect_adapter(&reads);
+            Ok((reads.len(), found))
+        };
+    let results = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| read_side(0, first));
+        let h2 = scope.spawn(|| read_side(1, second));
+        [h1.join(), h2.join()]
+    });
+    let first_name = first_name_slot.into_inner().expect("Sperre");
+    for (side, result) in results.into_iter().enumerate() {
+        let (n_reads, found) = result.map_err(|_| anyhow::anyhow!("Adaptersuche abgestürzt"))??;
         let label = if side == 0 { "read1" } else { "read2" };
-        match trim::detect_adapter(&reads) {
+        match found {
             Ok(a) => {
                 let how = match &a.found {
                     trim::Found::Known { hits, checked } => json!({
@@ -627,7 +641,7 @@ fn plan_trimming(
                     json!({
                         "seite": label,
                         "name": a.name,
-                        "reads_angesehen": reads.len(),
+                        "reads_angesehen": n_reads,
                         "erkennung": how,
                     }),
                 );
@@ -637,7 +651,7 @@ fn plan_trimming(
                 "TRIM.ADAPTER",
                 "keiner",
                 &reason,
-                json!({ "seite": label, "reads_angesehen": reads.len() }),
+                json!({ "seite": label, "reads_angesehen": n_reads }),
             ),
         }
     }

@@ -125,12 +125,32 @@ fn known_name(seq: &str) -> Option<&'static str> {
 }
 
 /// `Evaluator::checkKnownAdapters`: Folge, Treffer, geprüfte Reads.
+/// Zahl der Bytes, in denen sich `head` und die 8 Bytes von `window` unterscheiden.
+fn differing_bytes(head: u64, window: &[u8]) -> usize {
+    let w = u64::from_le_bytes(window.try_into().expect("8 Bytes"));
+    let x = head ^ w;
+    // Je Byte das oberste Bit setzen, wenn das Byte nicht null ist.
+    const LOW7: u64 = 0x7f7f_7f7f_7f7f_7f7f;
+    let nonzero = ((x & LOW7).wrapping_add(LOW7) | x) & !LOW7;
+    nonzero.count_ones() as usize
+}
+
 fn check_known_adapters(reads: &[Vec<u8>]) -> Option<(&'static str, u64, u64)> {
     const MAX_CHECK_READS: u64 = 100_000;
     const MAX_CHECK_BASES: u64 = MAX_CHECK_READS * 1000;
     const MAX_HIT: u64 = 1000;
     const MATCH_REQ: usize = 8;
     const ONE_MISMATCH_FOR_EACH: usize = 16;
+    let heads: Vec<u64> = KNOWN_ADAPTERS
+        .iter()
+        .map(|(a, _)| {
+            let b = a.as_bytes();
+            let mut h = [0u8; 8];
+            let n = b.len().min(8);
+            h[..n].copy_from_slice(&b[..n]);
+            u64::from_le_bytes(h)
+        })
+        .collect();
     let mut counts = vec![0u64; KNOWN_ADAPTERS.len()];
     let mut mismatches = vec![0u64; KNOWN_ADAPTERS.len()];
     let (mut checked_reads, mut checked_bases, mut cur_max) = (0u64, 0u64, 0u64);
@@ -156,6 +176,12 @@ fn check_known_adapters(reads: &[Vec<u8>]) -> Option<(&'static str, u64, u64)> {
             for pos in 0..rlen.saturating_sub(MATCH_REQ) {
                 let cmplen = (rlen - pos).min(alen);
                 let allowed = cmplen / ONE_MISMATCH_FOR_EACH;
+                // Vorprüfung, ändert kein Ergebnis: Die ersten 8 Basen liegen immer im
+                // Vergleich (Adapter ab 19 Basen, pos + 8 < rlen). Haben sie schon mehr
+                // Unterschiede als erlaubt, passt der Adapter hier nicht.
+                if alen >= 8 && differing_bytes(heads[a], &read[pos..pos + 8]) > allowed {
+                    continue;
+                }
                 let mut mismatch = 0;
                 let mut matched = true;
                 for i in 0..cmplen {
@@ -842,6 +868,28 @@ impl Counts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn differing_bytes_counts_like_plain_loop() {
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        for _ in 0..20_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let a = x.to_le_bytes();
+            let mut b = a;
+            for (i, byte) in b.iter_mut().enumerate() {
+                if (x >> (i * 3)) & 3 == 0 {
+                    *byte = byte.wrapping_add(((x >> 40) as u8) | 1);
+                }
+                if (x >> (i * 5 + 1)) & 7 == 0 {
+                    *byte ^= 0x80;
+                }
+            }
+            let plain = a.iter().zip(b.iter()).filter(|(p, q)| p != q).count();
+            assert_eq!(differing_bytes(u64::from_le_bytes(a), &b), plain);
+        }
+    }
 
     fn rec(seq: &str, qual: u8) -> Record {
         Record {
