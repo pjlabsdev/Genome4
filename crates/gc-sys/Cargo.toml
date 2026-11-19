@@ -1,0 +1,9 @@
+[package]
+name = "gc-sys"
+description = "Genome 4.0: Systemnahes je Prozessor und Betriebssystem"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]

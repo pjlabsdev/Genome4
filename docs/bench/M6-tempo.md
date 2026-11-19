@@ -157,6 +157,30 @@ Laden des Index).
 Eine Tabelle bis Länge 12 (rund 540 MB) war nicht schneller (11,2 s, 11,7 s, 12,0 s auf einem
 Kern; 3,04 s, 3,08 s, 3,10 s auf vier) und verlängert das Laden um 2,5 s. Es bleibt bei 10.
 
+### Nachtrag: Zählblöcke vorab anfordern
+Profil über einen ganzen Lauf (GRCh38, Index `standard`, 421.564 echte Paare, ein Kern, 594
+Stichproben des Aufrufstapels): Seed-Suche 37 %, lokales Ausrichten 18 %, Verlängern 16 %,
+Ortung 8 %, Laden des Index 7 %, Ketten 4 %.
+
+Beim Schritt nach links in der Seed-Suche werden jetzt die Zählblöcke aller lebenden Bereiche
+erst angefordert und dann gezählt (siehe [Seed-Suche](../handbuch/verfahren/seed-suche.md)).
+Sekunden des Ausrichtens, vorher und nachher abwechselnd gestartet:
+
+| Satz | Kerne | vorher | nachher |
+|---|---|---|---|
+| 50.000 echte Paare | 1 | 11,4 s, 11,0 s, 11,4 s | 11,1 s, 11,2 s, 11,6 s |
+| 50.000 echte Paare | 4 | 3,55 s, 3,20 s, 3,37 s | 3,15 s, 3,33 s, 3,36 s |
+| 421.564 echte Paare | 4 | 32,9 s, 26,2 s, 25,4 s | 26,4 s, 25,6 s, 24,9 s |
+
+Der erste Lauf vorher (32,9 s) lief mit kaltem Plattencache und zählt nicht. In jedem Paar
+direkt hintereinander gestarteter Läufe auf dem großen Satz ist die neue Fassung rund 2 %
+schneller; das liegt an der Grenze dessen, was auf dieser Maschine messbar ist. Ein erster
+Versuch mit Umschalter im selben Programm zeigte rund 5 %. Ausgabe in allen Läufen gleich.
+
+Die Seed-Suche bleibt damit der größte Teil. Was übrig ist, hängt Schritt für Schritt vom
+vorigen ab (Schritt nach rechts) oder ist schon nachgeschlagen; ein weiterer großer Gewinn ist
+dort nicht in Sicht.
+
 ### Versucht und verworfen
 - **Zählen ohne Verzweigung** (immer alle Wörter des Blocks, nicht gefragte Basen ausgeblendet):
   24 % mehr Befehle in der Seed-Suche und langsamer, wieder ausgebaut.

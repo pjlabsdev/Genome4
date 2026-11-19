@@ -12,9 +12,10 @@ Stand: gebaut (Grundgerüst), Erweiterung nach Plan Abschnitt 4 und 12.
 | `gc-align` | Seeds sammeln und orten, Ketten; später Alignment | `gc-index` |
 | `gc-log` | Ereignisstrom und Lauf-Protokoll | serde_json |
 | `gc-schema` | Ergebnis-Hülle | serde, serde_json |
+| `gc-sys` | Systemnahes je Prozessor und Betriebssystem; bisher: Vorab-Laden in den Cache (`prefetch`) für x86_64 und aarch64 | keine |
 | `genome` | das Programm mit allen Unterbefehlen | alle oben, clap, anyhow |
 
-Geplant: `gc-sys` (Systemnahes), `gc-ref`, `gc-stats`, `gc-bench`, `gc-report` und die Werkzeug-
+Geplant: `gc-ref`, `gc-stats`, `gc-bench`, `gc-report` und die Werkzeug-
 Crates aus Plan Abschnitt 4.1.
 
 ## Schichten
@@ -26,7 +27,9 @@ die Oberfläche. Das Programm `genome` verbindet nur.
 ## Regeln für macOS, Linux und Windows
 
 - Nur reines Rust oder plattformneutrale Crates. Systemnahes (Speicherabbild, Dateisperren,
-  RAM-Größe, Schlaf verhindern) kommt in die Crate `gc-sys`, nie in den Fachcode.
+  RAM-Größe, Schlaf verhindern, Befehle für einen bestimmten Prozessor) kommt in die Crate
+  `gc-sys`, nie in den Fachcode. Was dort steht, ändert kein Ergebnis, nur das Tempo oder den
+  Umgang mit dem System; auf einem Prozessor ohne passenden Befehl geschieht nichts.
 - Pfade immer als `PathBuf`.
 - Dateien werden mit Zeilenende `\n` geschrieben; beim Lesen wird `\r\n` vertragen (FASTQ, FASTA).
 - Binärformate sind ausdrücklich little-endian ([`*.gcfm`](formate/gcfm.md)).
