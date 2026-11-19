@@ -124,8 +124,13 @@ Entscheidung vom 19.11.2026: `b` = 128 und `s` = 8 ist als Variante `standard` d
 `genome index build`. `kompakt` und `schnell` bleiben wählbar, vorhandene Indexdateien bleiben
 lesbar. Die Messungen weiter oben in diesem Bericht gelten für den Index, der dort genannt ist.
 Der Spitzenbedarf von `genome fq2bam` am ganzen Genom (5,24 GB mit kompakt, siehe
-[M5](M5-ganzes-genom.md)) steigt mit der Vorgabe rechnerisch um 2,9 GB auf rund 8,2 GB; gemessen
-ist das noch nicht.
+[M5](M5-ganzes-genom.md)) steigt mit der Vorgabe rechnerisch um 2,9 GB auf rund 8,2 GB.
+
+Gemessen nach dem Einbau (GRCh38 ohne ALT, 421.564 echte Paare, 4 Kerne, je ein Lauf von
+`genome fq2bam`, Spitze als `VmHWM` des Prozesses): 8,07 GB mit `standard` gegen 5,24 GB mit
+`kompakt`, also 2,83 GB mehr. Ausrichten 26,7 s gegen 36,7 s. Die beiden BAM-Dateien sind in
+allen 844.609 Datensätzen und im Kopf bis auf die `@PG`-Zeile gleich. Der Spitzenbedarf beim Bau
+des Index mit `standard` ist nicht gemessen.
 
 ### Versucht und verworfen
 - **Zählen ohne Verzweigung** (immer alle Wörter des Blocks, nicht gefragte Basen ausgeblendet):
