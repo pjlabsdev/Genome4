@@ -52,8 +52,9 @@ einer Zeile läuft nur die Insertion `F` von Zelle zu Zelle weiter: Sie ist das 
 Zellen links davon, je Schritt um die Verlängerungskosten gesunken. Mit einem Ausgleich von
 `k` mal Verlängerungskosten wird daraus ein laufendes Maximum; alles andere hängt nur von der
 vorigen Zeile ab und lässt sich für acht Zellen zugleich rechnen. Bei echten Reads sind die
-Zeilen schmal (rund 10 Zellen), der Gewinn ist deshalb begrenzt. Die Zeit ist noch nicht
-gemessen.
+Zeilen schmal (rund 10 Zellen bei rund 160 Zeilen je Aufruf), der Gewinn ist deshalb begrenzt:
+28 % weniger ausgeführte Befehle in der Verlängerung, in der Laufzeit mit echten Reads kein
+messbarer Unterschied, mit erzeugten Reads rund 5 % ([M6 Tempo](../../bench/M6-tempo.md)).
 
 ## Validierung
 

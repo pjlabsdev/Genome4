@@ -79,7 +79,50 @@ Zwischenspeicher liegt. Gegen bwa mem (pybwa, 16.600 Reads je Sekunde und Kern a
 [M5 Echte Reads](M5-echte-reads.md)): mit dem kompakten Index jetzt 13.600 Reads je Sekunde, also
 rund 1,2-mal die Zeit von bwa statt 1,3-mal. Am ganzen Genom gibt es noch keine Messung von bwa.
 
+### Nachtrag: Verlängern der Seeds
+Zwei Änderungen an [Seed verlängern](../handbuch/verfahren/seed-verlaengern.md), beide mit
+gleichem Ergebnis in 20.000 Zufallsfällen und gleicher Ausgabe in den Sätzen unten:
+- **Frühes Ende**, sobald keine spätere Zeile das Ergebnis noch ändern kann.
+- **Rechnung in Zeilen** mit 16-Bit-Zahlen in Blöcken von acht Zellen.
+
+Ausgeführte Befehle in der Verlängerung (callgrind, 2.000 echte Paare, chr20): 566 Millionen
+vorher, 478 Millionen mit frühem Ende, 408 Millionen mit beidem (28 % weniger, im ganzen Lauf
+5 %). Bei echten Reads hat ein Aufruf im Mittel rund 160 Zeilen zu rund 10 Zellen; für so
+schmale Zeilen bringen Vektorbefehle wenig.
+
+Laufzeit, je ein bis drei Läufe im Wechsel, Rechner zur Zeit der Messung unruhig:
+
+| Satz | Index | Kerne | Stand der Tabelle oben | mit Verlängerung neu |
+|---|---|---|---|---|
+| 50.000 echte Paare | GRCh38 kompakt | 1 | 14,5 s und 15,4 s | 14,6 s und 14,7 s |
+| 100.000 echte Paare | chr20 kompakt | 1 | 15,3 s, 15,4 s, 16,9 s | 15,1 s, 15,5 s, 16,2 s |
+| 100.000 erzeugte Paare | chr20 kompakt | 4 | 20,0 s | 19,0 s |
+
+Mit echten Reads ist kein Unterschied messbar, mit erzeugten rund 5 %.
+
+### Nachtrag: dichtere Tabellen im Index (Versuch, nicht im Programm)
+Der Index wurde versuchsweise mit anderen Abständen gebaut (Zählstand alle `b` Basen,
+Suffix-Array-Stichprobe jede `s`-te Zeile). Die Ausgabe ist in jedem Fall dieselbe.
+
+chr20, 100.000 echte Paare, ein Kern, mittlerer von drei Läufen:
+
+| `b` | `s` | Zeit | zu kompakt | Größe am ganzen Genom (gerechnet) |
+|---|---|---|---|---|
+| 128 | 32 (kompakt) | 15,1 s | 1,00 | 4,8 GB |
+| 128 | 16 | 13,9 s | 0,92 | 5,8 GB |
+| 64 | 32 | 13,8 s | 0,92 | 6,4 GB |
+| 64 | 16 | 13,2 s | 0,87 | 7,4 GB |
+| 128 | 8 | 12,9 s | 0,86 | 7,7 GB |
+| 64 | 8 (schnell) | 12,5 s | 0,83 | 9,3 GB |
+
+Ganzes Genom mit `b` = 128 und `s` = 8 (Datei 7,75 GB, Bau 18,3 min auf 4 Kernen, Stichprobe
+von 100.000 Abfragen ohne Abweichung), 50.000 echte Paare, ein Kern, je zwei Läufe: 12,7 s und
+13,0 s gegen 14,6 s und 14,7 s mit dem kompakten Index, also rund 0,87-mal die Zeit für 2,9 GB
+mehr Arbeitsspeicher. Ob das eine Variante oder die Vorgabe wird, ist offen.
+
 ### Versucht und verworfen
+- **Zählen ohne Verzweigung** (immer alle Wörter des Blocks, nicht gefragte Basen ausgeblendet):
+  24 % mehr Befehle in der Seed-Suche und langsamer, wieder ausgebaut.
 - **Zählblöcke an Speicherzeilen ausrichten** (64 Bytes, ein Block der Variante kompakt in genau
   einer Zeile): kein messbarer Unterschied, wieder ausgebaut.
 - **Seed-Suche mehrerer Reads abwechselnd führen** (je Schritt erst für 16 Reads die Blöcke
@@ -101,6 +144,6 @@ rund 1,2-mal die Zeit von bwa statt 1,3-mal. Am ganzen Genom gibt es noch keine 
   Versuch mit der Systemeinstellung dafür war nicht eindeutig.
 - 50.000 Paare am ganzen Genom sind ein kleiner Satz aus einem Ausschnitt von chr20. Ein Lauf
   mit voller Abdeckung steht aus.
-- Die Seed-Suche ist jetzt der größte Teil. Verlängern und lokales Alignment (zusammen rund ein
-  Drittel) sind unverändert; das Rechnen mehrerer Verlängerungen zugleich mit Vektorbefehlen ist
-  der nächste Schritt.
+- Die Seed-Suche ist jetzt der größte Teil (40 % der ausgeführten Befehle bei echten Reads auf
+  chr20). Ihr Schritt kostet rund 470 Befehle, davon rund 200 je Zählung im Index; billiger
+  wird er nur mit einem anderen Aufbau der Zählblöcke.
