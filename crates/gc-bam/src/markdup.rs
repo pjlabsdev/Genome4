@@ -149,12 +149,12 @@ fn invalid(message: impl Into<String>) -> io::Error {
 }
 
 /// Felder eines rohen Satzes (ohne Längenfeld).
-struct View<'a> {
+pub(crate) struct View<'a> {
     b: &'a [u8],
 }
 
 impl<'a> View<'a> {
-    fn new(b: &'a [u8]) -> io::Result<Self> {
+    pub(crate) fn new(b: &'a [u8]) -> io::Result<Self> {
         let v = View { b };
         if b.len() < 32 || v.aux_start() > b.len() {
             return Err(invalid("BAM-Satz ist kürzer als seine Felder"));
@@ -164,10 +164,10 @@ impl<'a> View<'a> {
     fn i32_at(&self, at: usize) -> i32 {
         i32::from_le_bytes([self.b[at], self.b[at + 1], self.b[at + 2], self.b[at + 3]])
     }
-    fn tid(&self) -> i32 {
+    pub(crate) fn tid(&self) -> i32 {
         self.i32_at(0)
     }
-    fn pos(&self) -> i64 {
+    pub(crate) fn pos(&self) -> i64 {
         i64::from(self.i32_at(4))
     }
     fn name_len(&self) -> usize {
@@ -176,7 +176,7 @@ impl<'a> View<'a> {
     fn n_cigar(&self) -> usize {
         u16::from_le_bytes([self.b[12], self.b[13]]) as usize
     }
-    fn flag(&self) -> u16 {
+    pub(crate) fn flag(&self) -> u16 {
         u16::from_le_bytes([self.b[14], self.b[15]])
     }
     fn l_seq(&self) -> usize {
@@ -226,6 +226,19 @@ impl<'a> View<'a> {
             .map(|(_, len)| len)
             .sum();
         self.pos() - clipped + 1
+    }
+    /// Position hinter der letzten Base auf der Referenz (htslib `bam_endpos`): Ein Satz ohne
+    /// Ort oder ohne CIGAR belegt eine Base.
+    pub(crate) fn end_pos(&self) -> i64 {
+        let reference: i64 = if self.flag() & FLAG_UNMAPPED != 0 {
+            0
+        } else {
+            self.cigar()
+                .filter(|&(op, _)| matches!(op, b'M' | b'D' | b'N' | b'=' | b'X'))
+                .map(|(_, len)| len)
+                .sum()
+        };
+        self.pos() + reference.max(1)
     }
     /// Ende einschließlich abgeschnittener Basen (samtools `unclipped_end`): die Position hinter
     /// der letzten Base, ab 0 gezählt. Ein Satz ohne CIGAR belegt wie in htslib eine Base.

@@ -174,3 +174,54 @@ fn a_broken_input_leaves_no_output_and_a_clear_error() {
     assert!(left.is_empty(), "Teile blieben liegen: {left:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `genome bam-index`: Der Index nennt für jedes Contig die richtigen Zähler, und jeder
+/// vermerkte Dateibereich lässt sich lesen.
+#[test]
+fn index_counts_match_the_file() {
+    let dir = std::env::temp_dir().join(format!("genome-index-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("ein.bam");
+    let input = make_input(&src);
+    let sorted = dir.join("sortiert.bam");
+    let run = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_genome"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+    run(&["sort", src.to_str().unwrap(), sorted.to_str().unwrap()]);
+    let out = run(&["bam-index", sorted.to_str().unwrap()]);
+    assert!(out.contains("\"genome.bam-index.v1\""), "{out}");
+    let bai = gc_bam::Bai::read(&std::fs::read(dir.join("sortiert.bam.bai")).unwrap()).unwrap();
+    assert_eq!(bai.references.len(), 3);
+    // Zähler im Sonderfach 37450: (mit Ort, ohne Ort) je Contig. Alle Testsätze mit Contig
+    // tragen kein Flag 4.
+    let mut total = 0;
+    for (tid, reference) in bai.references.iter().enumerate() {
+        let expected = input
+            .iter()
+            .filter(|r| i32::from_le_bytes([r[4], r[5], r[6], r[7]]) == tid as i32)
+            .count() as u64;
+        assert_eq!(reference.bins[&37450][1], (expected, 0), "Contig {tid}");
+        // Positionen 0 bis 499 liegen alle im ersten Fenster von 16.384 Basen.
+        assert_eq!(reference.linear.len(), 1);
+        total += expected;
+    }
+    assert_eq!(bai.unplaced, input.len() as u64 - total);
+    // Eine unsortierte Datei wird abgelehnt, ohne dass ein Index entsteht.
+    let failed = Command::new(env!("CARGO_BIN_EXE_genome"))
+        .args(["bam-index", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("BAMINDEX.FEHLGESCHLAGEN"));
+    assert!(!dir.join("ein.bam.bai").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

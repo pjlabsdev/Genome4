@@ -179,6 +179,12 @@ pub fn read_encoded(reader: &mut MtReader, out: &mut Vec<u8>) -> io::Result<bool
     Ok(true)
 }
 
+/// Virtuelle Position der Lesestelle: Dateistelle des BGZF-Blocks mal 65.536 plus Stelle im
+/// entpackten Block. So verweist ein Index auf Datensätze.
+pub fn virtual_position(reader: &MtReader) -> u64 {
+    u64::from(reader.get_ref().virtual_position())
+}
+
 /// Liest eine BAM und schreibt Kopf und alle Datensätze unverändert neu.
 /// Grundlage des Rundreise-Tests gegen samtools (M1).
 pub fn roundtrip(src: impl AsRef<Path>, dst: impl AsRef<Path>, threads: usize) -> io::Result<u64> {
