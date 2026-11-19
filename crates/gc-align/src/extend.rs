@@ -101,11 +101,19 @@ pub fn extend(query: &[u8], target: &[u8], sc: &Scoring, end_bonus: i32, h0: i32
         .min(limit(sc.o_ins, sc.e_ins))
         .min(limit(sc.o_del, sc.e_del));
 
+    // Punkte je Referenzbase gegen jede Read-Position, einmal vorab (wie das `qp` in bwa).
+    let mut profile = vec![0i32; 5 * query.len()];
+    for (a, row) in profile.chunks_exact_mut(query.len().max(1)).enumerate() {
+        for (p, &q) in row.iter_mut().zip(query) {
+            *p = sc.score(a as u8, q);
+        }
+    }
+
     let (mut max, mut max_i, mut max_j) = (h0, -1i32, -1i32);
     let (mut max_ie, mut gscore, mut max_off) = (-1i32, -1i32, 0i32);
     let (mut beg, mut end) = (0i32, qlen);
     for i in 0..tlen {
-        let t = target[i as usize];
+        let t = usize::from(target[i as usize].min(4));
         let (mut f, mut m, mut mj) = (0i32, 0i32, -1i32);
         beg = beg.max(i - w);
         end = end.min(i + w + 1).min(qlen);
@@ -115,28 +123,23 @@ pub fn extend(query: &[u8], target: &[u8], sc: &Scoring, end_bonus: i32, h0: i32
             0
         };
         let mut j = beg;
-        while j < end {
-            let ju = j as usize;
-            let diag = h[ju];
-            let mut ee = e[ju];
-            h[ju] = h1;
-            let mm = if diag != 0 {
-                diag + sc.score(t, query[ju])
-            } else {
-                0
-            };
-            let hh = mm.max(ee).max(f);
-            h1 = hh;
-            if m <= hh {
-                mj = j;
+        if beg < end {
+            let (b, n) = (beg as usize, end as usize);
+            let points = &profile[t * query.len()..][b..n];
+            for ((hj, ej), &pt) in h[b..n].iter_mut().zip(&mut e[b..n]).zip(points) {
+                let diag = *hj;
+                *hj = h1;
+                let mm = if diag != 0 { diag + pt } else { 0 };
+                let hh = mm.max(*ej).max(f);
+                h1 = hh;
+                if m <= hh {
+                    mj = j;
+                    m = hh;
+                }
+                *ej = (*ej - sc.e_del).max(mm - oe_del).max(0);
+                f = (f - sc.e_ins).max(mm - oe_ins).max(0);
+                j += 1;
             }
-            m = m.max(hh);
-            let open = (mm - oe_del).max(0);
-            ee = (ee - sc.e_del).max(open);
-            e[ju] = ee;
-            let open = (mm - oe_ins).max(0);
-            f = (f - sc.e_ins).max(open);
-            j += 1;
         }
         h[end as usize] = h1;
         e[end as usize] = 0;

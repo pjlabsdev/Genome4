@@ -114,9 +114,12 @@ sind (`--block-basen`). Zwei Folgen:
 - **Lokales Alignment in Spuren.** bwa rechnet `ksw_align2` mit Vektorbefehlen in gestreifter
   Anordnung (Farrar 2007). Diese Anordnung weicht in seltenen Fällen von der Lehrbuch-Rechnung
   ab (eine Deletion direkt nach einer Insertion gibt es nicht). `local.rs` rechnet dieselben
-  Schritte Spur für Spur ohne Vektorbefehle nach und liefert in 1.000 Prüffällen jeden Wert wie
-  bwa (Score, Enden, zweitbester Score, Anfänge). Das ist langsam; der schnelle Weg mit
-  Vektorbefehlen kommt mit der Tempo-Arbeit und muss dieselben Prüffälle bestehen.
+  Schritte in derselben Anordnung und liefert in 1.000 Prüffällen jeden Wert wie bwa (Score,
+  Enden, zweitbester Score, Anfänge). Die Spuren sind feste Felder aus 16 Bytes oder 8 Werten
+  mit 16 Bit, die Schritte gesättigte Additionen, Subtraktionen und Maxima. Der Übersetzer macht
+  daraus Vektorbefehle (SSE2 auf Intel und AMD, NEON auf ARM), ohne systemnahen Code; das
+  Ergebnis ist auf jedem System dasselbe. Die erste Fassung, die jeden Wert einzeln mit 32 Bit
+  rechnet, bleibt als Prüfmaßstab im Test: 3.000 Zufallsfälle, beide Breiten, jeder Wert gleich.
 - **Bei der Partnersuche gefundene Bereiche** haben keinen Anteil häufiger Seeds (er bleibt 0)
   und werden für den CIGAR mit schmalem Band ausgerichtet, wie in bwa.
 - **Paarnummer mit 32 Bit.** bwa führt die Nummer des Paares bei der Wahl zwischen gleich guten
@@ -134,6 +137,7 @@ sind (`--block-basen`). Zwei Folgen:
 |---|---|
 | Lokales Alignment: 1.000 Fälle mit den Ergebnissen von `ksw_align2` aus bwa, alle sieben Werte | alle gleich (`tests/lokal_wie_bwa.rs`) |
 | Lokales Alignment: 8-Bit- und 16-Bit-Rechnung gleich, Score nie über der Lehrbuch-Rechnung | bestanden |
+| Lokales Alignment: schnelle Fassung gegen die Rechnung Wert für Wert, 3.000 Zufallsfälle mit N, Abbruch und beiden Breiten | alle gleich |
 | Richtung und Abstand zweier Orte | bestanden |
 | Insertgröße aus 40 Paaren mit Stücken von 380 bis 420; keine Schätzung unter 10 Paaren | bestanden |
 | Gewöhnliches Paar: Flags 99 und 147, Partnerfelder, TLEN ±Stücklänge, `MC`, `MQ` | bestanden |
@@ -155,7 +159,6 @@ sind (`--block-basen`). Zwei Folgen:
   benutzt. Welche das sind, kann von bwa abweichen; dann unterscheiden sich in langen
   Wiederholungen (Zentromer) einzelne Bereiche und damit die Wahl zwischen gleich guten Orten.
   Die Ursache ist eingegrenzt, aber nicht bewiesen, siehe Messung.
-- Das lokale Alignment der Partnersuche rechnet noch ohne Vektorbefehle.
 
 ## Literatur
 Li 2013; Farrar 2007; SAM-Spezifikation, siehe [Literatur](../literatur.md).

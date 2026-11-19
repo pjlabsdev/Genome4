@@ -3,10 +3,13 @@
 //!
 //! bwa rechnet das mit Vektorbefehlen in "gestreifter" Anordnung (Farrar 2007): Der Read wird
 //! auf 16 oder 8 Spuren verteilt, die gleichzeitig laufen. Diese Fassung rechnet dieselben
-//! Schritte Spur für Spur ohne Vektorbefehle nach. Das ist langsam, liefert aber auch in den
-//! Feinheiten dasselbe: Eine Deletion direkt nach einer Insertion gibt es nicht, und was die
-//! Spuren erst in der Nachkorrektur erfahren, fließt nicht mehr in die offene Deletion ein.
-//! Der schnelle Weg mit Vektorbefehlen kommt mit der Tempo-Arbeit und muss dasselbe liefern.
+//! Schritte in derselben Anordnung und liefert auch in den Feinheiten dasselbe: Eine Deletion
+//! direkt nach einer Insertion gibt es nicht, und was die Spuren erst in der Nachkorrektur
+//! erfahren, fließt nicht mehr in die offene Deletion ein.
+//!
+//! Die Spuren sind feste Felder (16 Bytes oder 8 Werte mit 16 Bit) und die Schritte gesättigte
+//! Additionen, Subtraktionen und Maxima. Daraus macht der Übersetzer auf jedem System
+//! Vektorbefehle; systemnaher Code ist nicht nötig, und das Ergebnis ist überall dasselbe.
 
 use crate::extend::Scoring;
 
@@ -35,10 +38,213 @@ const NONE: LocalResult = LocalResult {
     qb: -1,
 };
 
-/// Ein Durchlauf. `lanes` ist 16 (Scores in einem Byte, höchstens 255) oder 8 (16 Bit).
+/// Ein Wert einer Spur: ein Byte ohne Vorzeichen (16 Spuren) oder 16 Bit (8 Spuren). Die
+/// Rechenschritte sind so geschrieben, dass der Übersetzer aus den Schleifen über die Spuren
+/// Vektorbefehle macht (SSE2, NEON), ohne dass hier systemnaher Code steht.
+trait Cell: Copy + Ord + Default + Send + Sync {
+    /// Ob die Punkte verschoben gespeichert sind (Byte-Lauf).
+    const BYTE: bool;
+    fn from_i32(v: i32) -> Self;
+    fn to_i32(self) -> i32;
+    /// `self + s`, oben begrenzt; im Byte-Lauf danach um `shift` vermindert, unten bei 0 begrenzt.
+    fn add_score(self, s: Self, shift: Self) -> Self;
+    /// `self - b`, unten bei 0 begrenzt. Beide Werte sind nie negativ.
+    fn sub(self, b: Self) -> Self;
+}
+
+impl Cell for u8 {
+    const BYTE: bool = true;
+    #[inline(always)]
+    fn from_i32(v: i32) -> Self {
+        v as u8
+    }
+    #[inline(always)]
+    fn to_i32(self) -> i32 {
+        i32::from(self)
+    }
+    #[inline(always)]
+    fn add_score(self, s: Self, shift: Self) -> Self {
+        self.saturating_add(s).saturating_sub(shift)
+    }
+    #[inline(always)]
+    fn sub(self, b: Self) -> Self {
+        self.saturating_sub(b)
+    }
+}
+
+impl Cell for i16 {
+    const BYTE: bool = false;
+    #[inline(always)]
+    fn from_i32(v: i32) -> Self {
+        v as i16
+    }
+    #[inline(always)]
+    fn to_i32(self) -> i32 {
+        i32::from(self)
+    }
+    #[inline(always)]
+    fn add_score(self, s: Self, _shift: Self) -> Self {
+        self.saturating_add(s)
+    }
+    #[inline(always)]
+    fn sub(self, b: Self) -> Self {
+        (self - b).max(0)
+    }
+}
+
+/// Ein Durchlauf mit `L` Spuren: 16 (Scores in einem Byte, höchstens 255) oder 8 (16 Bit).
 /// `min_sub`: ab diesem Score merkt sich der Lauf Zeilen für den zweitbesten Score.
 /// `stop_at`: Abbruch, sobald dieser Score erreicht ist.
-fn striped(
+// Die Schleifen über die Spuren laufen absichtlich über den Index: So erkennt der Übersetzer
+// die feste Länge und setzt Vektorbefehle ein.
+#[allow(clippy::needless_range_loop)]
+fn striped<T: Cell, const L: usize>(
+    query: &[u8],
+    target: &[u8],
+    sc: &Scoring,
+    min_sub: i32,
+    stop_at: i32,
+) -> LocalResult {
+    let qlen = query.len();
+    let slen = qlen.div_ceil(L);
+    // Im Byte-Lauf sind alle Punkte um den größten Abzug verschoben, damit nichts negativ wird.
+    let shift = if T::BYTE {
+        sc.mismatch.max(sc.ambiguous)
+    } else {
+        0
+    };
+    let best_pair = sc.matching.max(-sc.ambiguous);
+    let zero = [T::default(); L];
+    // Punkte je Referenzbase, in gestreifter Anordnung: Vektor j, Spur k gehört zu Read-Position
+    // j + k * slen. Hinter dem Read-Ende stehen 0 Punkte.
+    let mut profile = vec![zero; 5 * slen];
+    for a in 0..5u8 {
+        for j in 0..slen {
+            for k in 0..L {
+                let p = j + k * slen;
+                let s = if p < qlen { sc.score(a, query[p]) } else { 0 };
+                profile[usize::from(a) * slen + j][k] = T::from_i32(s + shift);
+            }
+        }
+    }
+    let (mut h0, mut h1) = (vec![zero; slen], vec![zero; slen]);
+    let (mut e_row, mut h_max) = (vec![zero; slen], vec![zero; slen]);
+    let shift_t = T::from_i32(shift);
+    let (e_del, e_ins) = (T::from_i32(sc.e_del), T::from_i32(sc.e_ins));
+    let oe_del = T::from_i32(sc.o_del + sc.e_del);
+    let oe_ins = T::from_i32(sc.o_ins + sc.e_ins);
+    let mut marks: Vec<(i32, i32)> = Vec::new(); // (Score, Zeile)
+    let (mut gmax, mut te) = (0i32, -1i32);
+    for (i, &base) in target.iter().enumerate() {
+        let s = &profile[usize::from(base.min(4)) * slen..][..slen];
+        // h = H der vorigen Zeile, letzte Read-Position jeder Spur, um eine Spur verschoben.
+        let mut h = zero;
+        h[1..].copy_from_slice(&h0[slen - 1][..L - 1]);
+        let mut f = zero;
+        let mut row_max = zero;
+        for (((sj, ej), h0j), h1j) in s.iter().zip(&mut e_row).zip(&h0).zip(&mut h1) {
+            for k in 0..L {
+                let v = h[k].add_score(sj[k], shift_t).max(ej[k]).max(f[k]);
+                row_max[k] = row_max[k].max(v);
+                h1j[k] = v;
+                ej[k] = ej[k].sub(e_del).max(v.sub(oe_del));
+                f[k] = f[k].sub(e_ins).max(v.sub(oe_ins));
+            }
+            h = *h0j;
+        }
+        // Nachkorrektur: die offene Insertion von Spur zu Spur weiterreichen.
+        'lazy: for _ in 0..16 {
+            f.copy_within(0..L - 1, 1);
+            f[0] = T::default();
+            for h1j in &mut h1 {
+                let mut open = false;
+                for k in 0..L {
+                    let v = h1j[k].max(f[k]);
+                    h1j[k] = v;
+                    f[k] = f[k].sub(e_ins);
+                    open |= f[k] > v.sub(oe_ins);
+                }
+                if !open {
+                    break 'lazy;
+                }
+            }
+        }
+        let imax = row_max.iter().copied().max().map_or(0, T::to_i32);
+        let i = i as i32;
+        if imax >= min_sub {
+            match marks.last_mut() {
+                Some(last) if last.1 + 1 == i => {
+                    if last.0 < imax {
+                        *last = (imax, i);
+                    }
+                }
+                _ => marks.push((imax, i)),
+            }
+        }
+        if imax > gmax {
+            gmax = imax;
+            te = i;
+            h_max.copy_from_slice(&h1);
+            if (T::BYTE && gmax + shift >= 255) || gmax >= stop_at {
+                break;
+            }
+        }
+        std::mem::swap(&mut h0, &mut h1);
+    }
+    let mut r = NONE;
+    r.score = if T::BYTE && gmax + shift >= 255 {
+        255
+    } else {
+        gmax
+    };
+    r.te = te;
+    if !(T::BYTE && r.score == 255) {
+        let mut max = -1;
+        for (j, lanes) in h_max.iter().enumerate() {
+            for (k, &v) in lanes.iter().enumerate() {
+                let (v, p) = (v.to_i32(), (j + k * slen) as i32);
+                if v > max {
+                    max = v;
+                    r.qe = p;
+                } else if v == max && p < r.qe {
+                    r.qe = p;
+                }
+            }
+        }
+        if !marks.is_empty() {
+            let d = (r.score + best_pair - 1) / best_pair;
+            let (low, high) = (te - d, te + d);
+            for &(score, row) in &marks {
+                if (row < low || row > high) && score > r.score2 {
+                    r.score2 = score;
+                    r.te2 = row;
+                }
+            }
+        }
+    }
+    r
+}
+
+/// Ein Durchlauf mit Scores in einem Byte (16 Spuren) oder in 16 Bit (8 Spuren).
+fn run(
+    query: &[u8],
+    target: &[u8],
+    sc: &Scoring,
+    byte: bool,
+    min_sub: i32,
+    stop_at: i32,
+) -> LocalResult {
+    if byte {
+        striped::<u8, 16>(query, target, sc, min_sub, stop_at)
+    } else {
+        striped::<i16, 8>(query, target, sc, min_sub, stop_at)
+    }
+}
+
+/// Dieselbe Rechnung Wert für Wert mit 32 Bit, ohne jede Rücksicht auf Tempo. Sie war die erste
+/// Fassung und ist gegen bwa geprüft; die schnelle Fassung muss in jedem Wert dasselbe liefern.
+#[cfg(test)]
+fn striped_reference(
     query: &[u8],
     target: &[u8],
     sc: &Scoring,
@@ -195,8 +401,7 @@ pub fn local_align(
     if query.is_empty() {
         return NONE;
     }
-    let lanes = if byte { 16 } else { 8 };
-    let mut r = striped(query, target, sc, lanes, min_sub, 0x10000);
+    let mut r = run(query, target, sc, byte, min_sub, 0x10000);
     if !want_start || r.score < min_sub || r.qe < 0 || r.te < 0 {
         return r;
     }
@@ -205,7 +410,7 @@ pub fn local_align(
     let q: Vec<u8> = query[..=r.qe as usize].iter().rev().copied().collect();
     let mut t = target.to_vec();
     t[..=r.te as usize].reverse();
-    let rr = striped(&q, &t, sc, lanes, 0x10000, r.score);
+    let rr = run(&q, &t, sc, byte, 0x10000, r.score);
     if rr.score == r.score {
         r.tb = r.te - rr.te;
         r.qb = r.qe - rr.qe;
@@ -295,6 +500,48 @@ mod tests {
         // ohne zweite Stelle bleibt der zweitbeste Score unter der Schwelle unbekannt
         let r = local_align(&t[200..300], &t[150..350], &sc, true, 60, false);
         assert_eq!((r.score, r.score2), (100, -1));
+    }
+
+    /// Die schnelle Fassung gegen die Rechnung Wert für Wert: jeder Wert des Ergebnisses, beide
+    /// Breiten, mit und ohne vorzeitigen Abbruch, auch mit N und mit Scores über 255.
+    #[test]
+    fn fast_version_equals_the_reference_in_every_value() {
+        let sc = Scoring::default();
+        let mut state = 0x5151_DEAD_BEEF_0001u64;
+        for round in 0..3000 {
+            let tlen = 1 + (xorshift(&mut state) % 700) as usize;
+            let mut t = random(&mut state, tlen);
+            let qlen = 1 + (xorshift(&mut state) % 320) as usize;
+            let start = (xorshift(&mut state) as usize) % tlen;
+            let mut q: Vec<u8> = t[start..(start + qlen).min(tlen)].to_vec();
+            if round % 7 == 0 {
+                q = random(&mut state, qlen);
+            }
+            for _ in 0..(xorshift(&mut state) % 10) {
+                let p = (xorshift(&mut state) as usize) % q.len();
+                match xorshift(&mut state) % 4 {
+                    0 => q[p] = (xorshift(&mut state) % 5) as u8,
+                    1 if q.len() > 1 => {
+                        q.remove(p);
+                    }
+                    2 => q.insert(p, (xorshift(&mut state) % 4) as u8),
+                    _ => {
+                        let at = (xorshift(&mut state) as usize) % tlen;
+                        t[at] = 4;
+                    }
+                }
+            }
+            let min_sub = [0, 19, 40, 0x10000][(xorshift(&mut state) % 4) as usize];
+            let stop_at = [0x10000, 30, 77][(xorshift(&mut state) % 3) as usize];
+            for byte in [true, false] {
+                let lanes = if byte { 16 } else { 8 };
+                assert_eq!(
+                    run(&q, &t, &sc, byte, min_sub, stop_at),
+                    striped_reference(&q, &t, &sc, lanes, min_sub, stop_at),
+                    "Runde {round}, Byte {byte}"
+                );
+            }
+        }
     }
 
     #[test]

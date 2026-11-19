@@ -50,7 +50,7 @@ ohne erkennbaren Verlust. Mehr sagt die Messung nicht.
 - Das Tempo an sich ist noch weit vom Ziel: Für ein Genom mit 30-facher Abdeckung (rund 600
   Millionen Reads) wären es bei 5.200 Reads je Sekunde etwa 32 Stunden. Die Rechnung selbst
   (lokales Alignment, Verlängerung, Seed-Suche) ist noch nicht auf Tempo gebaut; das ist der
-  nächste Schritt und wird an denselben Prüffällen gemessen.
+  nächste Schritt und wird an denselben Prüffällen gemessen. Neuer Stand: [M3 Tempo](M3-tempo.md).
 - Kein Vergleich der Laufzeit mit bwa auf demselben Rechner (das Programm bwa steht hier nicht
   zur Verfügung).
 - Je Einstellung nur ein Lauf, keine Streuung angegeben.

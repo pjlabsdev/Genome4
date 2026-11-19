@@ -50,7 +50,8 @@ Beides kann nur Ergebnisse wegnehmen, nie bessere erfinden.
 - Kein direkter Vergleich mit `ksw_extend2` aus bwa; die Funktion ist dort nicht von außen
   aufrufbar. Ob Band und Abbruch in jedem Einzelfall wie bei bwa greifen, zeigt erst der Vergleich
   der fertigen Alignments.
-- Eine Zelle nach der anderen, kein SIMD. Tempo ist noch nicht gemessen.
+- Eine Zelle nach der anderen, kein SIMD (wie in bwa). Die Punkte je Referenzbase stehen vorab
+  in einer Tabelle. Tempo: [M3 Tempo](../../bench/M3-tempo.md).
 
 ## Literatur
 Li 2013; Gotoh 1982 für affine Lücken, siehe [Literatur](../literatur.md).

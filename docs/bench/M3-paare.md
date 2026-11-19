@@ -106,8 +106,8 @@ Bei den 1.031 Paaren mit Read 2 aus einem anderen Stück bleibt Read 1 an seinem
 - Flag-Bits 2, 64, 128 nicht gegen bwa geprüft (siehe oben), nur durch eigene Tests.
 - Verglichen mit dem in pybwa eingebauten bwa 0.7.18, nicht mit dem Programm bwa 0.7.19.
 - Tempo: 155 s für 100.000 Paare auf einem Kern, davon etwa die Hälfte Partnersuche
-  (mehrere Kerne: [M3 Kerne und BAM](M3-kerne-bam.md)). Das lokale
-  Alignment rechnet noch ohne Vektorbefehle.
+  (mehrere Kerne: [M3 Kerne und BAM](M3-kerne-bam.md)). Das war der Stand ohne Vektorbefehle
+  im lokalen Alignment; neuer Stand: [M3 Tempo](M3-tempo.md).
 
 Rohdaten: `bench/m3/ergebnisse/paare_vergleich.json`, `paare_stufen.json`,
 `paare_wahrheit.json`, `paare_wahrheit_einzeln.json`.
