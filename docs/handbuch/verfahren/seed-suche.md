@@ -48,6 +48,22 @@ zulassen) ohne neue Suche bauen.
 
 Gemeldet werden Treffer ab einer Mindestlänge, Voreinstellung 19 wie in BWA-MEM (`-k 19`).
 
+## Tabelle für kurze Muster
+Die ersten Schritte jeder Suche laufen auf sehr breiten Bereichen: Die beiden Enden liegen in
+weit entfernten Zählblöcken, jeder Schritt kostet zwei volle Zählungen und zwei Zugriffe auf
+fernen Speicher. Am ganzen Genom mit echten Reads sind das 42 von 100 Schritten (Bereich breiter
+als 1.000 Zeilen, gezählt an 50.000 Paaren).
+
+Für kurze Muster gibt es nur wenige Möglichkeiten, bei Länge n genau 4^n. Beim Laden des Index
+werden deshalb die Bereiche aller Muster bis Länge 10 einmal berechnet, mit genau denselben
+Schritten, die sonst die Suche ginge (1.398.100 Einträge zu 24 Bytes, rund 34 MB). Die Suche
+schlägt nach, solange das Muster höchstens 10 Basen hat, in beiden Richtungen, und rechnet erst
+danach. Bei kleinen Referenzen ist die Tabelle kürzer: nie mehr Muster der längsten Länge als
+Zeilen im Index. Die Tabelle steht nicht in der Indexdatei, das Format bleibt gleich.
+
+Am Ergebnis ändert das nichts. Ein Test vergleicht jeden Eintrag mit der einfachen Suche und die
+Suche mit Tabelle gegen die Suche ohne Tabelle (`short_table_changes_nothing`).
+
 ## Was ein Treffer enthält
 Anfang und Ende im Read und den Doppelbereich. Die Zeilenzahl ist die rohe Häufigkeit im
 Indextext beider Stränge. Sie kann Fundstellen enthalten, die über eine Contig-Grenze, die

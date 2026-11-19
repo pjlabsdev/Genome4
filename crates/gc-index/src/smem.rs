@@ -38,7 +38,98 @@ impl Smem {
     }
 }
 
+/// Längstes Muster, dessen Bereich in der Tabelle steht.
+const SHORT_MAX: usize = 10;
+
+/// Die Bereiche aller Muster bis zu einer festen Länge, fertig berechnet.
+///
+/// Die ersten Schritte jeder Suche laufen auf sehr breiten Bereichen: Die beiden Enden liegen in
+/// verschiedenen Zählblöcken weit auseinander, jeder Schritt kostet zwei volle Zählungen und zwei
+/// Zugriffe auf fernen Speicher. Für kurze Muster gibt es aber nur wenige Möglichkeiten (4^n bei
+/// Länge n). Ihre Bereiche werden einmal beim Anlegen des Index mit genau denselben Schritten
+/// berechnet, die sonst die Suche ginge, und danach nur noch nachgeschlagen. Das Ergebnis der
+/// Suche ändert sich dadurch nicht.
+///
+/// Ablage: erst die 4 Muster der Länge 1, dann die 16 der Länge 2 und so weiter. Der Code eines
+/// Musters ist seine Basenfolge als Zahl zur Basis 4, erste Base an höchster Stelle.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct ShortTable {
+    /// Längste enthaltene Musterlänge, 0 = keine Tabelle.
+    longest: usize,
+    entries: Vec<BiInterval>,
+}
+
+impl ShortTable {
+    /// Stelle des ersten Musters der Länge `len` (ab 1) in `entries`: 4 + 16 + … davor.
+    #[inline]
+    fn offset(len: usize) -> usize {
+        ((1usize << (2 * len)) - 4) / 3
+    }
+
+    /// Längste Musterlänge für einen Index mit `rows` Zeilen: höchstens `SHORT_MAX`, und nicht
+    /// mehr Muster als Zeilen, damit die Tabelle bei kleinen Referenzen klein bleibt.
+    fn longest_for(rows: u64) -> usize {
+        (1..=SHORT_MAX)
+            .take_while(|&n| 1u64 << (2 * n) <= rows)
+            .last()
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn build(index: &FmIndex) -> Self {
+        let longest = Self::longest_for(index.rows());
+        if longest == 0 {
+            return Self::default();
+        }
+        let mut entries = Vec::with_capacity(Self::offset(longest + 1));
+        for c in 0..4u8 {
+            entries.push(index.bi_start(c));
+        }
+        for len in 1..longest {
+            for code in 0..1usize << (2 * len) {
+                let iv = entries[Self::offset(len) + code];
+                for c in 0..4u8 {
+                    entries.push(index.extend_right(iv, c));
+                }
+            }
+        }
+        Self { longest, entries }
+    }
+
+    /// Bereich von `pattern` (Codes 0..3), wenn es kurz genug für die Tabelle ist.
+    #[inline]
+    fn get(&self, pattern: &[u8]) -> Option<BiInterval> {
+        let len = pattern.len();
+        if len == 0 || len > self.longest {
+            return None;
+        }
+        let code = pattern
+            .iter()
+            .fold(0usize, |code, &c| code << 2 | usize::from(c));
+        Some(self.entries[Self::offset(len) + code])
+    }
+}
+
 impl FmIndex {
+    /// `extend_right` für das Muster `read[start..end]`, dessen Bereich `iv` ist, um die Base
+    /// `read[end]`: nachgeschlagen, wenn das neue Muster in der Tabelle steht.
+    #[inline]
+    fn grow_right(&self, read: &[u8], start: usize, end: usize, iv: BiInterval) -> BiInterval {
+        match self.short.get(&read[start..=end]) {
+            Some(found) => found,
+            None => self.extend_right(iv, read[end]),
+        }
+    }
+
+    /// `extend_left` für das Muster `read[start..end]`, dessen Bereich `iv` ist, um die Base
+    /// `read[start - 1]`: nachgeschlagen, wenn das neue Muster in der Tabelle steht.
+    #[inline]
+    fn grow_left(&self, read: &[u8], start: usize, end: usize, iv: BiInterval) -> BiInterval {
+        match self.short.get(&read[start - 1..end]) {
+            Some(found) => found,
+            None => self.extend_left(iv, read[start - 1]),
+        }
+    }
+
     /// Bereich eines einzelnen Zeichens (Code 0..3).
     pub fn bi_start(&self, c: u8) -> BiInterval {
         let end = |c: u8| {
@@ -118,7 +209,7 @@ impl FmIndex {
         let mut iv = self.bi_start(read[x]);
         let mut end = x + 1;
         while end < read.len() && read[end] <= 3 {
-            let next = self.extend_right(iv, read[end]);
+            let next = self.grow_right(read, x, end, iv);
             if next.size != iv.size {
                 forward.push((end, iv));
                 if next.size < min_size {
@@ -147,7 +238,7 @@ impl FmIndex {
             next_alive.clear();
             for &(e, iv) in &alive {
                 let ext = if c <= 3 {
-                    self.extend_left(iv, c)
+                    self.grow_left(read, (i + 1) as usize, e, iv)
                 } else {
                     BiInterval {
                         k: 0,
@@ -205,7 +296,7 @@ impl FmIndex {
             if c > 3 {
                 return (i + 1, None);
             }
-            iv = self.extend_right(iv, c);
+            iv = self.grow_right(read, x, i, iv);
             if iv.size < max_size && i - x >= min_len as usize {
                 let found = (iv.size > 0).then_some(Smem {
                     start: x as u32,
@@ -292,6 +383,57 @@ mod tests {
             r[i] = 4;
         }
         r
+    }
+
+    /// Jeder Eintrag der Tabelle gegen die einfache Suche, und die Suche mit Tabelle gegen
+    /// die Suche ohne.
+    #[test]
+    fn short_table_changes_nothing() {
+        let index = genome(5, 1200);
+        assert_eq!(index.short.longest, 5);
+        for len in 1..=index.short.longest {
+            for code in 0..1usize << (2 * len) {
+                let p: Vec<u8> = (0..len)
+                    .map(|i| (code >> (2 * (len - 1 - i)) & 3) as u8)
+                    .collect();
+                let rc: Vec<u8> = p.iter().rev().map(|c| 3 - c).collect();
+                let iv = index.short.get(&p).unwrap();
+                let (lo, hi) = index.interval(&p);
+                let (rlo, rhi) = index.interval(&rc);
+                assert_eq!((iv.size, iv.size), (hi - lo, rhi - rlo), "Muster {p:?}");
+                if iv.size > 0 {
+                    assert_eq!((iv.k, iv.kr), (lo, rlo), "Muster {p:?}");
+                }
+            }
+        }
+        assert!(index.short.get(&[0; 6]).is_none());
+        assert!(index.short.get(&[]).is_none());
+
+        let mut plain = index.clone();
+        plain.short = ShortTable::default();
+        let text = text_of(&index);
+        let mut rng = Rng(23);
+        for _ in 0..400 {
+            let mut read = read_from(&text, &mut rng);
+            if rng.next().is_multiple_of(4) {
+                let i = (rng.next() as usize) % read.len();
+                read[i] = 4;
+            }
+            for min_size in [1, 2, 5] {
+                for x in 0..read.len() {
+                    let (mut with, mut without) = (Vec::new(), Vec::new());
+                    let a = index.smems_at(&read, x, min_size, &mut with);
+                    let b = plain.smems_at(&read, x, min_size, &mut without);
+                    assert_eq!((a, &with), (b, &without));
+                    for (min_len, max_size) in [(3, 4), (8, 2), (19, 20)] {
+                        assert_eq!(
+                            index.seed_forward(&read, x, min_len, max_size),
+                            plain.seed_forward(&read, x, min_len, max_size)
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
