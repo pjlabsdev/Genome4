@@ -151,10 +151,10 @@ sind (`--block-basen`). Zwei Folgen:
 - Verglichen mit dem in pybwa eingebauten bwa (0.7.18). Dessen Ausgabe trägt die Flag-Bits 2, 64
   und 128 nicht; diese Bits sind nur durch eigene Tests und den Quelltext von bwa belegt. Der
   Vergleich mit dem Programm bwa 0.7.19 steht aus.
-- **N-Strecken.** N-Stellen der Referenz sind im Index mit Füllbasen belegt, bei bwa mit
-  anderen (jeweils eigene Zufallsfolge). Fenster der Partnersuche und Verlängerungen, die an eine
-  N-Strecke stoßen, sehen deshalb andere Basen als bwa. Richtig wäre "unbekannt" mit eigenem
-  Punktwert. Offen; betrifft Orte direkt an N-Strecken.
+- **N-Strecken.** An N-Stellen der Referenz rechnet Genome 4.0 mit "unbekannt"
+  ([Ausgabe als SAM](sam-ausgabe.md)), bwa mit seinen Zufallsbasen. Fenster der Partnersuche
+  und Verlängerungen, die an eine N-Strecke stoßen, können sich deshalb um einzelne Basen und
+  Punkte unterscheiden. Betrifft nur Orte direkt an N-Strecken.
 - **Sehr häufige Seeds.** Kommt ein Seed mehr als 500-mal vor, wird nur jede n-te Fundstelle
   benutzt. Welche das sind, kann von bwa abweichen; dann unterscheiden sich in langen
   Wiederholungen (Zentromer) einzelne Bereiche und damit die Wahl zwischen gleich guten Orten.

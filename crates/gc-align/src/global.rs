@@ -179,7 +179,7 @@ pub fn gen_cigar(
     if query.is_empty() || rb >= re || (rb < l && re > l) || re > 2 * l {
         return None;
     }
-    let mut rseq: Vec<u8> = (rb..re).map(|p| index.text_base(p)).collect();
+    let mut rseq = index.text_range(rb, re);
     let mut q = query.to_vec();
     let reverse = rb >= l;
     if reverse {

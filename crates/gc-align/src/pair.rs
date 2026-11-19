@@ -235,7 +235,7 @@ pub fn mate_rescue(
             } else {
                 mate.to_vec()
             };
-            let target: Vec<u8> = (rb..re).map(|p| index.text_base(p as u64)).collect();
+            let target = index.text_range(rb as u64, re as u64);
             let byte = l_ms * i64::from(sc.matching) < 250;
             let aln = local_align(&seq, &target, sc, byte, min_seed * sc.matching, true);
             if aln.score >= min_seed && aln.qb >= 0 {

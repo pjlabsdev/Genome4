@@ -537,6 +537,31 @@ impl FmIndex {
         }
     }
 
+    /// Basen der Textpositionen `[from, to)` (Vorwärtsstrang, dann reverses Komplement). Stellen,
+    /// an denen die Referenz N hat, kommen als Code 4 (unbekannt), nicht als die Füllbase, die
+    /// der Index dort für die Suche führt.
+    pub fn text_range(&self, from: u64, to: u64) -> Vec<u8> {
+        let mut bases: Vec<u8> = (from..to).map(|p| self.text_base(p)).collect();
+        let l = self.reference.len();
+        // Der Bereich kann auf beiden Strängen liegen; je Strang das Stück des Vorwärtsstrangs.
+        let forward = (from.min(l), to.min(l));
+        let reverse = (2 * l - to.max(l), 2 * l - from.max(l));
+        let holes = &self.reference.holes;
+        for (strand, (a, b)) in [forward, reverse].into_iter().enumerate() {
+            if a >= b {
+                continue;
+            }
+            let first = holes.partition_point(|h| h.offset + h.len <= a);
+            for h in holes[first..].iter().take_while(|h| h.offset < b) {
+                for pos in h.offset.max(a)..(h.offset + h.len).min(b) {
+                    let text = if strand == 0 { pos } else { 2 * l - 1 - pos };
+                    bases[(text - from) as usize] = 4;
+                }
+            }
+        }
+        bases
+    }
+
     /// Base an Textposition `p` (Vorwärtsstrang, dann reverses Komplement), aus der Referenz gelesen.
     #[inline]
     pub fn text_base(&self, p: u64) -> u8 {
@@ -1030,6 +1055,37 @@ mod tests {
                 with_hits += usize::from(!want.is_empty());
             }
             assert!(with_hits > 1000);
+        }
+    }
+
+    #[test]
+    fn text_range_marks_n_as_unknown_on_both_strands() {
+        let contigs = vec![("a", b"ACGTNNACGTAC".to_vec()), ("b", b"NTTGCA".to_vec())];
+        let index = build(&contigs, Variant::Kompakt);
+        let l = index.reference().len();
+        let forward: Vec<u8> = contigs.iter().flat_map(|c| c.1.clone()).collect();
+        let code = |b: u8| match b {
+            b'A' => 0,
+            b'C' => 1,
+            b'G' => 2,
+            b'T' => 3,
+            _ => 4,
+        };
+        let mut text: Vec<u8> = forward.iter().map(|&b| code(b)).collect();
+        let rc: Vec<u8> = text
+            .iter()
+            .rev()
+            .map(|&c| if c < 4 { 3 - c } else { 4 })
+            .collect();
+        text.extend(rc);
+        for from in 0..=2 * l {
+            for to in from..=2 * l {
+                assert_eq!(
+                    index.text_range(from, to),
+                    text[from as usize..to as usize],
+                    "[{from}, {to})"
+                );
+            }
         }
     }
 

@@ -39,20 +39,20 @@ Stücklänge minus 1.
 | Paare | 100.000 |
 | Paare, bei denen alle Zeilen beider Reads in allen Feldern gleich sind | 99.942 |
 | Reads | 200.000 |
-| Reads mit allen Feldern gleich | 199.907 |
+| Reads mit allen Feldern gleich | 199.908 |
 | andere Zahl von Zeilen | 0 |
 | Reads ohne Ort bei bwa | 972 |
 | Reads mit ergänzenden Zeilen bei bwa | 0 |
 
-Die 93 abweichenden Reads nach den Feldern, die sich unterscheiden:
+Die 92 abweichenden Reads nach den Feldern, die sich unterscheiden:
 
 | Felder | Reads |
 |---|---:|
 | Position und Position des Partners (dazu teils TLEN, AS, MD, NM) | 62 |
 | XS (dazu teils XA) | 19 |
-| MAPQ und MQ | 8 |
+| MAPQ und MQ | 6 |
 | Flag | 3 |
-| XA | 1 |
+| XA | 2 |
 
 ## Einordnung
 - **Position (62 Reads).** Paare in langen Wiederholungen am Zentromer mit MAPQ 0: Es gibt
@@ -67,11 +67,11 @@ Die 93 abweichenden Reads nach den Feldern, die sich unterscheiden:
   Seeds mit mehr als 500 Fundstellen werden ausgedünnt, und welche Fundstellen bleiben, hängt
   von der Ordnung im Index ab, die sich an N-Strecken von bwa unterscheidet (andere Füllbasen).
   Das ist dieselbe Gruppe wie die bisher ungeklärten Reads am Zentromer bei einzelnen Reads.
-- **XS, XA (20 Reads).** bwa findet einen Seed in einer mit Zufallsbasen gefüllten N-Strecke
+- **XS, XA (21 Reads).** bwa findet einen Seed in einer mit Zufallsbasen gefüllten N-Strecke
   oder verlängert ein Alignment um eine Base in sie hinein. An zwei Reads nachvollzogen
   (bwa meldet `chr20,-28646295,21S129M`, die erste dieser 129 Basen ist in der Referenz ein N),
   bei den übrigen nach dem gleichen Muster angenommen.
-- **MAPQ (8 Reads, 4 Paare).** Paare am Zentromer; die MAPQ des Paares hängt an der Zahl fast
+- **MAPQ (6 Reads, 3 Paare).** Paare am Zentromer; die MAPQ des Paares hängt an der Zahl fast
   gleich guter Paare, die sich aus dem ersten Punkt ergibt. Nicht einzeln geprüft.
 - **Flag (3 Reads).** Read mit Ort auf dem Gegenstrang, Partner ohne Ort: Wir setzen Bit 32
   (Partner auf dem Gegenstrang), weil der Partner an den Ort des Reads gestellt wird; so steht
@@ -98,6 +98,14 @@ einen falschen Ort mit hoher MAPQ. Die falschen Orte liegen fast alle bei MAPQ 0
 Wiederholungen von chr20 (Zentromer); dort ist der Ort aus 150 Basen nicht bestimmbar.
 Bei den 1.031 Paaren mit Read 2 aus einem anderen Stück bleibt Read 1 an seinem Ort
 (1.996 von 2.062 Reads richtig).
+
+## Nachtrag 19.11.2026: N-Stellen als unbekannt
+Seit diesem Stand sieht der Aligner an N-Stellen der Referenz "unbekannt" (Abzug 1 wie bei N im
+Read) statt der Füllbase des Index ([Read-Paare](../handbuch/verfahren/read-paare.md), Grenzen).
+Die Zahlen oben sind neu gemessen. Gegenüber vorher ändern sich 3 von 200.000 Reads (zweimal MQ
+und MAPQ um einen Punkt, einmal `NM` in `XA`); die Übereinstimmung mit bwa geht von 199.907 auf
+199.908 Reads, die Zahl ganz gleicher Paare bleibt 99.942. Gegen den wahren Ort ändert sich
+nichts.
 
 ## Was die Messung nicht zeigt
 - Nur chr20 und erzeugte Reads ohne realistisches Fehlermodell. Echte Daten und das ganze

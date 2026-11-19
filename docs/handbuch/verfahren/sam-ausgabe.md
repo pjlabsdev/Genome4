@@ -45,6 +45,16 @@ Kopf: je Contig eine `@SQ`-Zeile, dazu `@PG` mit Version und Aufruf.
   um einen Punkt. Das Verhalten von bwa ist hier ein Zufallsprodukt, deshalb wird es nicht
   nachgebaut.
 
+- **N in der Referenz zählt als unbekannt.** Beim Verlängern, beim lokalen Alignment und beim
+  fertigen Alignment (CIGAR, `NM`, `MD`) steht an N-Stellen der Referenz der Code für
+  "unbekannt": Abzug 1 gegen jede Base, wie bei einem N im Read; in `MD` steht dort `N`, und
+  die Stelle zählt in `NM`. bwa rechnet an diesen Stellen gegen seine Zufallsbasen, die mit
+  der Wahrscheinlichkeit 1/4 als Treffer zählen. Die Füllbasen des Index dienen bei
+  Genome 4.0 nur der Suche und erscheinen in keinem Ergebnis. Wirkung auf chr20: 5 von 200.000
+  einzelnen Reads und 3 von 200.000 Reads in Paaren ändern sich, keiner im Ort
+  ([Messung](../../bench/M3-sam.md)). Ob das Ergebnis dadurch richtiger wird, ist nicht
+  gemessen; der Grund ist, dass kein Ergebnis von einer erfundenen Base abhängen soll.
+
 ## Validierung
 
 | Prüfung | Ergebnis |
@@ -53,7 +63,7 @@ Kopf: je Contig eine `@SQ`-Zeile, dazu `@PG` mit Version und Aufruf.
 | Read ohne Ort: Flag 4, `*`-Felder | bestanden |
 | Geteilter Read: primäre und ergänzende Zeile, `90M60S` und `90H60M`, `SA` gegenseitig, MAPQ der ergänzenden nicht höher | bestanden |
 | Zwei gleich gute Orte: MAPQ 0, `XS` gleich `AS`, der andere Ort in `XA` | bestanden |
-| Ganze Zeilen gegen bwa, chr20, 200.000 Reads: alle Felder gleich | 199.964 ohne Indels, 199.956 mit Indels; siehe Messung |
+| Ganze Zeilen gegen bwa, chr20, 200.000 Reads: alle Felder gleich | 199.964 ohne Indels, 199.955 mit Indels; siehe Messung |
 
 ## Grenzen
 - Die Testsätze enthalten keine geteilten Reads. Ergänzende Zeilen und `SA` sind nur durch den
