@@ -1,0 +1,8 @@
+{
+  "programm": "bwa mem aus pybwa 2.3.2",
+  "paare": false,
+  "reads": 200000,
+  "kerne": 1,
+  "sekunden": 59.5,
+  "reads_je_sekunde": 3364
+}
