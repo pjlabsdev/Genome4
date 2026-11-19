@@ -6,6 +6,14 @@ Contig und Position des Partners, TLEN, Basen, Qualitäten und die Angaben NM, M
 XS, SA, XA. Zuordnung nach Reihenfolge. pybwa liefert die Flag-Bits 2 (richtiges Paar), 64 und
 128 (Read 1, Read 2) nicht; sie bleiben deshalb aus dem Vergleich heraus. Beide Seiten schätzen die Insertgröße je Block von
 `block_basen` Basen (bwa -K).
+
+pybwa baut seine Datensätze selbst und weicht dabei in zwei Punkten vom Programm bwa ab
+(bwamem.c, `mem_aln2sam`; pybwa-Patch 0006). Beide bleiben aus dem Vergleich heraus und werden
+gezählt:
+ - Flag 32 (Partner auf dem Gegenstrang) setzt pybwa nicht, wenn der Partner keinen Ort hat.
+   bwa übernimmt für den Partner ohne Ort den Strang des Reads und setzt das Bit.
+ - Bei hart gekürzten Zeilen auf dem Gegenstrang schneidet pybwa Basen und Qualitäten am
+   falschen Ende ab (es dreht die Grenzen nicht um wie bwa).
 Aufruf: compare_bwa_pairs.py bwa-prefix r1.fq r2.fq unser.sam ergebnis.json [block_basen]
 """
 import json
@@ -59,6 +67,20 @@ opt = pybwa.BwaMemOptions(interleaved_paired_end=True, chunk_size=block_bases)
 with pybwa.BwaMem(prefix=prefix) as aligner:
     results = aligner.align(queries, opt)
 
+def neutral(rec, counts):
+    """Nimmt die zwei Abweichungen von pybwa aus einem Datensatz heraus."""
+    flag, cigar = rec[0], rec[4]
+    if flag & 8:
+        counts["flag32_bei_partner_ohne_ort"] += int(flag & 32 != 0)
+        flag &= ~32
+    if flag & 16 and "H" in cigar:
+        counts["hart_gekuerzt_gegenstrang"] += 1
+        return (flag,) + rec[1:8] + (None, None) + rec[10:]
+    return (flag,) + rec[1:]
+
+
+neutral_counts = dict(flag32_bei_partner_ohne_ort=0, hart_gekuerzt_gegenstrang=0)
+unused = dict(neutral_counts)
 stats = dict(reads=0, paare=0, reads_alle_zeilen_gleich=0, paare_ganz_gleich=0, reads_andere_zeilenzahl=0,
              zeilen_bwa=0, zeilen_wir=0, reads_ohne_ort_bwa=0,
              reads_mit_ergaenzenden_zeilen_bwa=0)
@@ -68,7 +90,8 @@ pair_ok = True
 for n, (q, recs) in enumerate(zip(queries, results)):
     name, mine = next(ours)
     assert name == q.name, f"Reihenfolge weicht ab: {name} / {q.name}"
-    theirs = [bwa_rec(r) for r in recs]
+    theirs = [neutral(bwa_rec(r), unused) for r in recs]
+    mine = [neutral(r, neutral_counts) for r in mine]
     stats["reads"] += 1
     stats["zeilen_bwa"] += len(theirs)
     stats["zeilen_wir"] += len(mine)
@@ -90,8 +113,9 @@ for n, (q, recs) in enumerate(zip(queries, results)):
         fields = sorted({FIELDS[i] for a, b in zip(theirs, mine) for i in range(len(FIELDS)) if a[i] != b[i]})
     key = "+".join(fields)
     diff_fields[key] = diff_fields.get(key, 0) + 1
-    if len(examples) < 80:
+    if len(examples) < 200:
         examples.append(dict(read=q.name, nr=n, felder=fields, bwa=theirs, wir=mine))
+stats["aus_dem_vergleich_genommen_wegen_pybwa"] = neutral_counts
 stats["abweichende_felder"] = dict(sorted(diff_fields.items(), key=lambda x: -x[1]))
 json.dump(dict(block_basen=block_bases, ergebnis=stats, beispiele=examples), open(out_path, "w"), indent=1, ensure_ascii=False)
 print(json.dumps(stats, ensure_ascii=False))

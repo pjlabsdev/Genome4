@@ -119,3 +119,10 @@ nichts.
 
 Rohdaten: `bench/m3/ergebnisse/paare_vergleich.json`, `paare_stufen.json`,
 `paare_wahrheit.json`, `paare_wahrheit_einzeln.json`.
+
+## Nachtrag vom 19.11.2026
+Der Vergleich nimmt jetzt zwei Abweichungen von pybwa gegenüber dem Programm bwa heraus (Flag 32
+bei einem Partner ohne Ort, Basen hart gekürzter Zeilen auf dem Gegenstrang, siehe
+[M5 Echte Reads](M5-echte-reads.md)). Damit gelten 3 Reads mehr als gleich: 199.911 Reads und
+99.945 Paare. `bench/m3/ergebnisse/paare_vergleich.json` ist neu geschrieben. Dass doppelte
+Seeds jetzt erhalten bleiben, ändert an den übrigen Abweichungen nichts (gleiche Zahlen je Feld).

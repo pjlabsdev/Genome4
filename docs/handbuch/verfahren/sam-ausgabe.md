@@ -56,8 +56,13 @@ nach `samtools fixmate -m`. Das Markieren der Duplikate braucht sie
 - `MC`: CIGAR des Partners. bwa schreibt sie schon, außer wenn der Partner keinen Ort hat; dann
   steht hier wie bei fixmate `MC:Z:*`.
 
-Zusätzliche Zeilen (Flags 256 und 2048) bekommen nichts. Ein Read ohne Qualitätswerte gibt
-seinem Partner kein `ms`.
+Ergänzende Zeilen (Flag 2048) übernehmen von der Hauptzeile des Partners den Ort (RNEXT, PNEXT),
+den Strang (Flag 32), `MQ` und `MC`, wie fixmate in samtools 1.24. bwa schreibt dort
+`MC` mit hartem statt weichem Kürzen und, wenn der Partner keinen Ort hat, den Ort der eigenen
+Zeile. `ms` bekommen sie nicht, Zeilen mit Flag 256 bekommen nichts. Ein Read ohne
+Qualitätswerte gibt seinem Partner kein `ms`. Gemessen mit echten Reads
+([M5 Echte Reads](../../bench/M5-echte-reads.md)): 878 ergänzende Zeilen, alle gleich wie nach
+fixmate.
 
 Gemessen ([M5 Duplikate](../../bench/M5-duplikate.md)): Auf 200.000 Zeilen sind alle
 Zusatzangaben gleich wie nach `samtools fixmate -m`. fixmate ändert außerdem TLEN bei Paaren, die
