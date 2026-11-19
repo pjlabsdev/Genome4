@@ -47,6 +47,21 @@ enum Command {
         #[arg(long)]
         log: Option<PathBuf>,
     },
+    /// Duplikate in einer nach Ort sortierten BAM markieren (Flag 1024), Verfahren wie
+    /// `samtools markdup`. Die Eingabe braucht die Partner-Angaben `MC` und `ms`.
+    Markdup {
+        src: PathBuf,
+        dst: PathBuf,
+        /// Längster erwarteter Read einschließlich abgeschnittener Basen
+        #[arg(long, default_value_t = 300)]
+        max_laenge: i64,
+        /// Kerne für BGZF (0 = alle)
+        #[arg(long, default_value_t = 0)]
+        kerne: usize,
+        /// Lauf-Protokoll als JSON-Zeilen in diese Datei
+        #[arg(long)]
+        log: Option<PathBuf>,
+    },
     /// FM-Index über ein Referenzgenom bauen, prüfen und abfragen (Meilenstein M2).
     Index {
         #[command(subcommand)]
@@ -166,6 +181,10 @@ enum IndexCommand {
         /// '@RG\tID:lauf1\tSM:probe\tPL:ILLUMINA'. Jede Zeile bekommt die Kennung als `RG`.
         #[arg(long)]
         lesegruppe: Option<String>,
+        /// Paare: Angaben zum Partner wie nach `samtools fixmate -m` ergänzen (`ms`, `MC` auch
+        /// am Read ohne Ort). Nötig für `genome markdup`.
+        #[arg(long)]
+        partner_angaben: bool,
     },
 }
 
@@ -238,19 +257,34 @@ impl AlignOutput {
     }
 }
 
+/// Einstellungen eines Laufs von `genome index sam`.
+#[derive(Clone, Copy)]
+struct SamRun<'a> {
+    block_bases: u64,
+    threads: usize,
+    bam: Option<&'a std::path::Path>,
+    read_group: Option<&'a gc_align::ReadGroup>,
+    mate_tags: bool,
+}
+
 /// Richtet Reads aus, einzeln oder als Paare, Block für Block auf `threads` Kernen.
 /// Bei Paaren wird die Insertgröße je Block geschätzt.
 fn index_sam(
     fm: &gc_index::FmIndex,
     first: &std::path::Path,
     second: Option<&std::path::Path>,
-    block_bases: u64,
-    threads: usize,
-    bam: Option<&std::path::Path>,
-    read_group: Option<&gc_align::ReadGroup>,
+    run: &SamRun<'_>,
 ) -> Result<()> {
+    let SamRun {
+        block_bases,
+        threads,
+        bam,
+        read_group,
+        mate_tags,
+    } = *run;
     let mut opt = gc_align::AlignOptions::default();
     opt.sam.read_group = read_group.map(|rg| rg.id.clone());
+    opt.sam.mate_tags = mate_tags;
     let mut out = AlignOutput::open(fm, read_group, bam, threads)?;
     let mut reader1 = fastq::open(first)?;
     let mut reader2 = match second {
@@ -467,6 +501,90 @@ fn sort_bam(
         "saetze_je_sekunde": if seconds > 0.0 { stats.records as f64 / seconds } else { 0.0 },
     });
     gc_log::info("SORT.FERTIG", "Sortieren beendet", result.clone());
+    Ok(result)
+}
+
+/// Markiert Duplikate in einer nach Ort sortierten BAM. Die Ausgabe entsteht wie beim Sortieren
+/// unter einem vorläufigen Namen.
+fn markdup_bam(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+    max_length: i64,
+    kerne: usize,
+) -> Result<serde_json::Value> {
+    let started = std::time::Instant::now();
+    anyhow::ensure!(max_length > 0, "--max-laenge muss größer als 0 sein");
+    if let (Ok(a), Ok(b)) = (std::fs::canonicalize(src), std::fs::canonicalize(dst)) {
+        anyhow::ensure!(a != b, "Eingabe und Ausgabe sind dieselbe Datei");
+    }
+    let (mut reader, header, raw) =
+        gc_io::bam::open_raw(src, kerne).with_context(|| format!("{} öffnen", src.display()))?;
+    let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+    let text = std::str::from_utf8(&raw[..end]).context("Kopftext ist kein UTF-8")?;
+    let command_line = std::env::args().collect::<Vec<_>>().join(" ");
+    let new_text = gc_bam::with_program_line(
+        text,
+        "genome-markdup",
+        env!("CARGO_PKG_VERSION"),
+        &command_line,
+    );
+    let mut part = dst.as_os_str().to_owned();
+    part.push(".unfertig");
+    let part = PathBuf::from(part);
+    let mut st = gc_log::stage("markdup.durchlauf", json!({ "max_laenge": max_length }));
+    let done = (|| -> Result<gc_bam::DupStats> {
+        let mut writer = gc_io::bam::create_raw(&part, &header, new_text.as_bytes(), kerne)
+            .with_context(|| format!("{} anlegen", part.display()))?;
+        let mut marker = gc_bam::DupMarker::new(gc_bam::DupOptions { max_length });
+        let mut record = Vec::new();
+        loop {
+            record.clear();
+            if !gc_io::bam::read_encoded(&mut reader, &mut record)
+                .with_context(|| format!("{} lesen", src.display()))?
+            {
+                break;
+            }
+            marker.push(&record, &mut |rec| {
+                gc_io::bam::write_encoded(&mut writer, rec)
+            })?;
+            st.heartbeat(30, || {
+                let now = marker.stats();
+                json!({ "saetze": now.read, "duplikate": now.duplicate_pair + now.duplicate_single })
+            });
+        }
+        let stats = marker.finish(&mut |rec| gc_io::bam::write_encoded(&mut writer, rec))?;
+        gc_io::bam::finish(writer).with_context(|| format!("{} abschließen", part.display()))?;
+        std::fs::rename(&part, dst).with_context(|| format!("{} umbenennen", part.display()))?;
+        Ok(stats)
+    })();
+    let stats = match done {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = std::fs::remove_file(&part);
+            return Err(e);
+        }
+    };
+    st.finish(json!({ "saetze": stats.read }));
+    let seconds = started.elapsed().as_secs_f64();
+    let duplicates = stats.duplicate_pair + stats.duplicate_single;
+    let result = json!({
+        "gelesen": stats.read,
+        "geschrieben": stats.written,
+        "nicht_bewertet": stats.excluded,
+        "bewertet": stats.examined,
+        "mit_partner": stats.paired,
+        "ohne_partner": stats.single,
+        "duplikate_mit_partner": stats.duplicate_pair,
+        "duplikate_ohne_partner": stats.duplicate_single,
+        "duplikate": duplicates,
+        "anteil_duplikate": if stats.examined > 0 { duplicates as f64 / stats.examined as f64 } else { 0.0 },
+        "geschaetzte_bibliotheksgroesse": stats.estimated_library_size(),
+        "fenster_spitze_saetze": stats.window_peak,
+        "max_laenge": max_length,
+        "sekunden": seconds,
+        "saetze_je_sekunde": if seconds > 0.0 { stats.read as f64 / seconds } else { 0.0 },
+    });
+    gc_log::info("MARKDUP.FERTIG", "Duplikate markiert", result.clone());
     Ok(result)
 }
 
@@ -1133,6 +1251,50 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Command::Markdup {
+            src,
+            dst,
+            max_laenge,
+            kerne,
+            log,
+        } => {
+            gc_log::init(gc_log::Config {
+                tool: "markdup".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                level: gc_log::Level::Info,
+                jsonl: log,
+                stderr: true,
+            })?;
+            gc_log::install_panic_hook();
+            gc_log::run_header(json!({
+                "eingabe": src.display().to_string(),
+                "ausgabe": dst.display().to_string(),
+                "max_laenge": max_laenge,
+                "kerne": kerne,
+            }));
+            gc_log::input_file("eingabe", &src);
+            match markdup_bam(&src, &dst, max_laenge, kerne) {
+                Ok(mut result) => {
+                    result["lauf"] = json!(gc_log::run_id());
+                    gc_log::run_end(true, result.clone());
+                    println!("{}", Envelope::new("genome.markdup.v1", result).to_json()?);
+                }
+                Err(e) => {
+                    gc_log::failure(gc_log::Failure {
+                        code: "MARKDUP.FEHLGESCHLAGEN",
+                        what: "Das Markieren der Duplikate wurde abgebrochen, es gibt keine Ausgabedatei",
+                        location: json!({
+                            "eingabe": src.display().to_string(),
+                            "ausgabe": dst.display().to_string(),
+                        }),
+                        cause: &format!("{e:#}"),
+                        action: "Die Eingabe muss nach Ort sortiert sein (genome sort) und die Partner-Angaben MC und ms tragen (genome index sam --partner-angaben oder samtools fixmate -m)",
+                    });
+                    gc_log::run_end(false, json!({ "fehler": format!("{e:#}") }));
+                    return Err(e);
+                }
+            }
+        }
         Command::Index { command } => match command {
             IndexCommand::Build {
                 fasta,
@@ -1264,6 +1426,7 @@ fn main() -> Result<()> {
                 kerne,
                 bam,
                 lesegruppe,
+                partner_angaben,
             } => {
                 let threads = if kerne == 0 {
                     std::thread::available_parallelism().map_or(1, usize::from)
@@ -1286,6 +1449,7 @@ fn main() -> Result<()> {
                     "kerne": threads,
                     "bam": bam.as_ref().map(|p| p.display().to_string()),
                     "lesegruppe": lesegruppe,
+                    "partner_angaben": partner_angaben,
                 }));
                 let read_group = match &lesegruppe {
                     Some(text) => Some(gc_align::ReadGroup::parse(text).map_err(|cause| {
@@ -1305,10 +1469,13 @@ fn main() -> Result<()> {
                     &fm,
                     &fastq,
                     fastq2.as_deref(),
-                    block_basen,
-                    threads,
-                    bam.as_deref(),
-                    read_group.as_ref(),
+                    &SamRun {
+                        block_bases: block_basen,
+                        threads,
+                        bam: bam.as_deref(),
+                        read_group: read_group.as_ref(),
+                        mate_tags: partner_angaben,
+                    },
                 )?;
             }
             IndexCommand::Smem {

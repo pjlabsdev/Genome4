@@ -1,0 +1,71 @@
+{
+ "samtools": "1.24",
+ "A_gleiche_eingabe": {
+  "zeilen": 260536,
+  "zeilen_gleich": 260536,
+  "alle_zeilen_gleich": true,
+  "markiert_genome": 56067,
+  "markiert_samtools": 56067,
+  "statistik": {
+   "READ": {
+    "samtools": 260536,
+    "genome": 260536
+   },
+   "WRITTEN": {
+    "samtools": 260536,
+    "genome": 260536
+   },
+   "EXCLUDED": {
+    "samtools": 4292,
+    "genome": 4292
+   },
+   "EXAMINED": {
+    "samtools": 256244,
+    "genome": 256244
+   },
+   "PAIRED": {
+    "samtools": 251952,
+    "genome": 251952
+   },
+   "SINGLE": {
+    "samtools": 4292,
+    "genome": 4292
+   },
+   "DUPLICATE PAIR": {
+    "samtools": 52830,
+    "genome": 52830
+   },
+   "DUPLICATE SINGLE": {
+    "samtools": 3237,
+    "genome": 3237
+   },
+   "DUPLICATE TOTAL": {
+    "samtools": 56067,
+    "genome": 56067
+   },
+   "ESTIMATED_LIBRARY_SIZE": {
+    "samtools": 256745,
+    "genome": 256745
+   }
+  },
+  "sekunden_genome": 1.827,
+  "sekunden_samtools": 4.78,
+  "statistik_gleich": true
+ },
+ "B_ganze_kette": {
+  "zeilen": 260536,
+  "zeilen_gleich_ohne_tlen": 260536,
+  "alle_gleich_ohne_tlen": true,
+  "zeilen_mit_anderem_tlen": 1318,
+  "markiert_samtools_kette": 56067
+ },
+ "C_wahrheit": {
+  "gruppen_mit_einem_paar": 84638,
+  "davon_faelschlich_markiert": 0,
+  "gruppen_mit_kopien": 14390,
+  "genau_ein_paar_bleibt": 14047,
+  "das_beste_bleibt": 14047,
+  "mehrere_bleiben": 342,
+  "anderes": 1
+ }
+}
