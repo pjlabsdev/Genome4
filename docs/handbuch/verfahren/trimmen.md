@@ -1,6 +1,6 @@
 # Trimmen von Read-Paaren (Ersatz für fastp)
 
-Stand: gebaut (`gc-io`, Modul `trim`) und in `genome fq2bam --trimmen` eingebaut; noch nicht Read für Read gegen fastp geprüft. Die Seite beschreibt, was fastp 1.4.0 mit den
+Stand: gebaut (`gc-io`, Modul `trim`), in `genome fq2bam --trimmen` eingebaut und Read für Read gegen fastp 1.4.0 geprüft: an je 1 Mio. Paaren NovaSeq und MGI keine Abweichung ([Ergebnis](../../../bench/m9/ERGEBNIS.md)). Die Seite beschreibt, was fastp 1.4.0 mit den
 Einstellungen der alten Kette tut. `genome fq2bam --trimmen` soll genau das tun (Absicht vom
 19.11.2026, pj: Trimmen ist eine Option, ohne sie bleiben die Reads unverändert).
 
@@ -125,7 +125,9 @@ gekürzt, über Folge gekürzt (je Seite), Dimer, verworfen nach Grund, behalten
 im Protokoll auf. Die beiden Entscheidungen vor dem Lauf (PolyG, Adapterfolgen samt Name des
 bekannten Adapters) stehen mit Begründung im Protokoll.
 
-## Validierung (geplant)
-Read für Read gegen fastp 1.4.0: gleiche Länge nach dem Kürzen, gleiche Paare verworfen, gleiche
-erkannte Adapter. Sätze: HG002 (Illumina), ein Stück MGI. Danach Wirkung am Ausrichten mit
-erzeugten Reads bekannter Herkunft und bekannter Adapter.
+## Validierung
+Read für Read gegen fastp 1.4.0 ([Ergebnis](../../../bench/m9/ERGEBNIS.md)): HG001 NovaSeq
+(PolyG an) und PJ MGI (PolyG aus), je 1.000.000 Paare. Alle behaltenen Reads gleich in Folge und
+Qualität, keine Abweichung im Verbleib, gleiche Zahl gekürzter Adapterbasen. `genome trim` brauchte
+9 bis 10 s statt 38 bis 40 s und ein Drittel des Speichers. Offen: Sätze, in denen eine
+Adapterfolge erkannt wird (beide hier: keine), und die Wirkung am Ausrichten mit erzeugten Reads.

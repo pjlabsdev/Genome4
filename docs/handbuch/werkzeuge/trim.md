@@ -1,6 +1,6 @@
 # `genome trim`
 
-Stand: gebaut; der Vergleich Read für Read mit fastp 1.4.0 läuft mit `bench/m9`.
+Stand: gebaut und geprüft (Read für Read gleich wie fastp 1.4.0, [Ergebnis](../../../bench/m9/ERGEBNIS.md)).
 
 ## Zweck
 Read-Paare so trimmen wie fastp 1.4.0 mit `--detect_adapter_for_pe` und sonst Vorgaben, und die
@@ -28,7 +28,7 @@ Bericht von `fq2bam`) und `sekunden`.
 [Trimmen](../verfahren/trimmen.md). Stufen `fq2bam.trimmen_vorbereiten` und `trim.schreiben`.
 
 ## Validierung
-Regeltests in `gc-io`. Vergleich mit fastp: `bench/m9/trim-vergleich.py`, Ergebnis folgt.
+Regeltests in `gc-io`. Vergleich mit fastp 1.4.0 an je 1 Mio. Paaren HG001 (NovaSeq) und MGI: kein Read weicht ab ([Ergebnis](../../../bench/m9/ERGEBNIS.md)).
 
 ## Grenzen
 Nur Paare. Ein Kern beim Schreiben.
