@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/gc-align", "crates/gc-bam", "crates/gc-index", "crates/gc-io", "crates/gc-log", "crates/gc-schema", "crates/genome"]
+members = ["crates/gc-align", "crates/gc-bam", "crates/gc-index", "crates/gc-io", "crates/gc-log", "crates/gc-schema", "crates/gc-sys", "crates/genome"]
 
 [workspace.package]
 version = "0.1.0"
@@ -22,6 +22,7 @@ gc-index = { path = "crates/gc-index" }
 gc-io = { path = "crates/gc-io" }
 gc-log = { path = "crates/gc-log" }
 gc-schema = { path = "crates/gc-schema" }
+gc-sys = { path = "crates/gc-sys" }
 
 [profile.release]
 lto = "fat"

@@ -575,6 +575,17 @@ impl FmIndex {
         (lo, [lo[0] + a, lo[1] + c, lo[2] + g, lo[3] + t])
     }
 
+    /// Holt den Zählblock der Zeile `i` schon in den Cache, damit ein folgendes `occ4` an
+    /// dieser Zeile nicht auf den Speicher warten muss. Ändert kein Ergebnis.
+    #[inline]
+    pub fn prefetch_row(&self, i: u64) {
+        let stride = 4 + (self.occ_interval / 32) as usize;
+        let base = (i >> self.occ_shift) as usize * stride;
+        // Ein Block hat bis zu 64 Bytes und liegt nicht ausgerichtet: Anfang und Ende holen.
+        gc_sys::prefetch(&self.blocks[base]);
+        gc_sys::prefetch(&self.blocks[base + stride - 1]);
+    }
+
     #[inline]
     fn bwt(&self, row: u64) -> u8 {
         let interval = u64::from(self.occ_interval);

@@ -236,6 +236,18 @@ impl FmIndex {
         loop {
             let c = if i >= 0 { read[i as usize] } else { 4 };
             next_alive.clear();
+            // Alle Bereiche dieses Schritts sind voneinander unabhängig. Ihre Zählblöcke werden
+            // erst alle angefordert und dann gezählt, so wartet der Prozessor auf mehrere
+            // Speicherzugriffe zugleich statt nacheinander. Muster, die in der Tabelle stehen,
+            // brauchen keinen Block.
+            if c <= 3 {
+                for &(e, iv) in &alive {
+                    if self.short.get(&read[i as usize..e]).is_none() {
+                        self.prefetch_row(iv.k);
+                        self.prefetch_row(iv.k + iv.size);
+                    }
+                }
+            }
             for &(e, iv) in &alive {
                 let ext = if c <= 3 {
                     self.grow_left(read, (i + 1) as usize, e, iv)
