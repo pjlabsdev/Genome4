@@ -384,6 +384,12 @@ fn chain_to_marked_duplicates() {
         assert_eq!(&bai[..4], b"BAI\x01");
         let log = std::fs::read_to_string(dir.join(format!("{name}.log.jsonl"))).unwrap();
         assert!(log.contains("FQ2BAM.FERTIG"), "{log}");
+        // Schreibt das Sortieren Teile auf die Platte, steht das im Protokoll.
+        assert_eq!(
+            log.contains("SORT.TEIL"),
+            !out.contains("\"teile\": 0"),
+            "{out}"
+        );
         assert!(!dir.join(format!("{name}.unfertig")).exists());
     }
     // Ungleich lange FASTQ-Dateien: Abbruch mit Fehlercode, keine BAM.

@@ -1,0 +1,11 @@
+{
+ "gesamt": 4000000,
+ "mapq0": 94928,
+ "mapq0_richtig": 31065,
+ "mapq1_29": 42290,
+ "mapq1_29_richtig": 41772,
+ "mapq30plus": 3862782,
+ "mapq30plus_richtig": 3862773,
+ "richtig": 3935610,
+ "sortiert": true
+}

@@ -1,7 +1,8 @@
 # `genome fq2bam`
 
-Stand: erste lauffähige Fassung, auf chr20 geprüft ([Messung](../../bench/M5-fq2bam.md)). Das
-ganze Genom, Trimmen, CRAM und die weitere Qualitätsauswertung sind offen.
+Stand: erste lauffähige Fassung, auf chr20 ([Messung](../../bench/M5-fq2bam.md)) und auf dem
+ganzen Genom mit erzeugten Reads ([Messung](../../bench/M5-ganzes-genom.md)) geprüft. Ein Lauf mit
+echten Reads in voller Abdeckung, Trimmen, CRAM und die weitere Qualitätsauswertung sind offen.
 
 ## Zweck
 Ein Programm vom FASTQ bis zur sortierten, duplikatmarkierten, indizierten BAM mit ersten
@@ -48,7 +49,7 @@ Daten zwischen vier Programmen durch Pipes weiter und kodiert sie dabei mehrfach
 - `<aus>.bai`.
 - `<aus>.log.jsonl`: Lauf-Protokoll mit den Stufen `fq2bam.index_laden`, `fq2bam.ausrichten`,
   `fq2bam.zusammenfuehren`, `bamindex.lesen`, den Ereignissen `ALIGN.INSERTGROESSE` je Block,
-  `ALIGN.FERTIG`, `BAMINDEX.FERTIG`, `FQ2BAM.FERTIG` und im Fehlerfall `FQ2BAM.FEHLGESCHLAGEN`
+  `SORT.TEIL` je Teil auf der Platte, `ALIGN.FERTIG`, `BAMINDEX.FERTIG`, `FQ2BAM.FERTIG` und im Fehlerfall `FQ2BAM.FEHLGESCHLAGEN`
   ([Ereignisse und Fehlercodes](../ereignisse-und-fehlercodes.md)).
 - JSON, Schema `genome.fq2bam.v1`: `bam`, `bai`, `reads`, `saetze`, `paare`, `kerne`;
   `sortieren` (Bytes, Teile); `duplikate` (Felder wie bei [`markdup`](markdup.md)); `flagstat`
