@@ -114,7 +114,7 @@ für die Adaptersuche, wie fastp. Dann wird jedes Paar beim Lesen getrimmt; verw
 nicht ausgerichtet und erscheinen nicht in der BAM (wie bei fastp, das sie nicht schreibt). Die
 Blöcke für die Schätzung der Insertgröße zählen die Basen nach dem Trimmen. Zwischendateien
 entstehen keine. Die Adaptersuche läuft, während der Index lädt; Lesen und Trimmen des nächsten
-Blocks laufen in einem eigenen Faden neben dem Ausrichten. Beide Seiten werden gleichzeitig untersucht, und eine Vorprüfung der ersten
+Blocks laufen in einem eigenen Faden neben dem Ausrichten. Beide Seiten werden gleichzeitig untersucht, die bekannten Adapter blockweise auf allen Kernen (ein übersprungener Adapter bleibt übersprungen, daher genügt je Block die Menge der noch aktiven; Test `known_adapters_parallel_equals_sequential`), die Keime der zweiten Suche gleichzeitig (gewählt wird wie bei fastp der erste der Reihe nach, Test `unknown_adapter_is_found_by_seed`), und eine Vorprüfung der ersten
 8 Basen jedes bekannten Adapters spart Vergleiche, ohne ein Ergebnis zu ändern (Test
 `differing_bytes_counts_like_plain_loop`; an HG002 chr20 gleiche BAM, Vorbereitung 6,3 s statt
 18,3 s bei 2 x 262.144 Reads). Protokoll: `TRIM.ADAPTER`, `TRIM.POLYG`, `TRIM.FERTIG`; die Zähler stehen auch

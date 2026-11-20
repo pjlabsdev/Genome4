@@ -151,53 +151,87 @@ fn check_known_adapters(reads: &[Vec<u8>]) -> Option<(&'static str, u64, u64)> {
             u64::from_le_bytes(h)
         })
         .collect();
-    let mut counts = vec![0u64; KNOWN_ADAPTERS.len()];
-    let mut mismatches = vec![0u64; KNOWN_ADAPTERS.len()];
-    let (mut checked_reads, mut checked_bases, mut cur_max) = (0u64, 0u64, 0u64);
-    for read in reads {
-        let rlen = read.len();
-        checked_reads += 1;
-        checked_bases += rlen as u64;
-        if checked_reads > MAX_CHECK_READS || checked_bases > MAX_CHECK_BASES {
-            break;
+    // Ob ein Adapter einen Read trifft, hängt nur von beiden ab. Das wird blockweise auf allen
+    // Kernen vorausberechnet; danach laufen die Regeln von fastp (Abbruch, Überspringen) der
+    // Reihe nach über die fertigen Ergebnisse. Das Ergebnis ist dasselbe wie nacheinander.
+    const NO_HIT: u8 = u8::MAX;
+    let hit = |read: &[u8], a: usize| -> u8 {
+        let adata = KNOWN_ADAPTERS[a].0.as_bytes();
+        let (rlen, alen) = (read.len(), adata.len());
+        if alen >= rlen {
+            return NO_HIT;
         }
-        if cur_max > MAX_HIT {
-            break;
-        }
-        for (a, (adapter, _)) in KNOWN_ADAPTERS.iter().enumerate() {
-            let adata = adapter.as_bytes();
-            let alen = adata.len();
-            if alen >= rlen {
+        for pos in 0..rlen.saturating_sub(MATCH_REQ) {
+            let cmplen = (rlen - pos).min(alen);
+            let allowed = cmplen / ONE_MISMATCH_FOR_EACH;
+            // Vorprüfung, ändert kein Ergebnis: Die ersten 8 Basen liegen immer im Vergleich
+            // (Adapter ab 19 Basen, pos + 8 < rlen). Haben sie schon mehr Unterschiede als
+            // erlaubt, passt der Adapter hier nicht.
+            if alen >= 8 && differing_bytes(heads[a], &read[pos..pos + 8]) > allowed {
                 continue;
             }
-            if cur_max > 20 && counts[a] < cur_max / 10 {
-                continue;
-            }
-            for pos in 0..rlen.saturating_sub(MATCH_REQ) {
-                let cmplen = (rlen - pos).min(alen);
-                let allowed = cmplen / ONE_MISMATCH_FOR_EACH;
-                // Vorprüfung, ändert kein Ergebnis: Die ersten 8 Basen liegen immer im
-                // Vergleich (Adapter ab 19 Basen, pos + 8 < rlen). Haben sie schon mehr
-                // Unterschiede als erlaubt, passt der Adapter hier nicht.
-                if alen >= 8 && differing_bytes(heads[a], &read[pos..pos + 8]) > allowed {
-                    continue;
-                }
-                let mut mismatch = 0;
-                let mut matched = true;
-                for i in 0..cmplen {
-                    if adata[i] != read[i + pos] {
-                        mismatch += 1;
-                        if mismatch > allowed {
-                            matched = false;
-                            break;
-                        }
+            let mut mismatch = 0;
+            let mut matched = true;
+            for i in 0..cmplen {
+                if adata[i] != read[i + pos] {
+                    mismatch += 1;
+                    if mismatch > allowed {
+                        matched = false;
+                        break;
                     }
                 }
-                if matched {
+            }
+            if matched {
+                return mismatch.min(NO_HIT as usize - 1) as u8;
+            }
+        }
+        NO_HIT
+    };
+    let n_adapters = KNOWN_ADAPTERS.len();
+    let threads = std::thread::available_parallelism().map_or(1, usize::from);
+    const CHUNK: usize = 8192;
+    let mut counts = vec![0u64; n_adapters];
+    let mut mismatches = vec![0u64; n_adapters];
+    let (mut checked_reads, mut checked_bases, mut cur_max) = (0u64, 0u64, 0u64);
+    let mut table = vec![NO_HIT; CHUNK * n_adapters];
+    'chunks: for chunk in reads.chunks(CHUNK) {
+        // Ein übersprungener Adapter bleibt übersprungen: Seine Zahl steht still, `cur_max`
+        // wächst nur. Daher genügt es, die zu Beginn des Blocks noch aktiven zu berechnen.
+        let active: Vec<usize> = (0..n_adapters)
+            .filter(|&a| !(cur_max > 20 && counts[a] < cur_max / 10))
+            .collect();
+        let active = &active;
+        let per = chunk.len().div_ceil(threads);
+        std::thread::scope(|scope| {
+            for (reads_part, out_part) in chunk.chunks(per).zip(table.chunks_mut(per * n_adapters))
+            {
+                scope.spawn(move || {
+                    for (read, row) in reads_part.iter().zip(out_part.chunks_mut(n_adapters)) {
+                        for &a in active {
+                            row[a] = hit(read, a);
+                        }
+                    }
+                });
+            }
+        });
+        for (i, read) in chunk.iter().enumerate() {
+            checked_reads += 1;
+            checked_bases += read.len() as u64;
+            if checked_reads > MAX_CHECK_READS || checked_bases > MAX_CHECK_BASES {
+                break 'chunks;
+            }
+            if cur_max > MAX_HIT {
+                break 'chunks;
+            }
+            let row = &table[i * n_adapters..(i + 1) * n_adapters];
+            for a in 0..n_adapters {
+                if cur_max > 20 && counts[a] < cur_max / 10 {
+                    continue;
+                }
+                if row[a] != NO_HIT {
                     counts[a] += 1;
                     cur_max = cur_max.max(counts[a]);
-                    mismatches[a] += mismatch as u64;
-                    break;
+                    mismatches[a] += u64::from(row[a]);
                 }
             }
         }
@@ -326,6 +360,7 @@ fn search_by_seed(reads: &[Vec<u8>]) -> Option<Adapter> {
         }
     }
     const FOLD: u64 = 20;
+    let mut candidates = Vec::new();
     for &key in &top {
         if key == 0 {
             continue;
@@ -340,11 +375,21 @@ fn search_by_seed(reads: &[Vec<u8>]) -> Option<Adapter> {
         if diff < 3 {
             continue;
         }
-        if let Some(a) = adapter_with_seed(key as u32, reads) {
-            return Some(a);
-        }
+        candidates.push(key as u32);
     }
-    None
+    // fastp prüft die Keime der Reihe nach und nimmt den ersten, der eine Folge ergibt. Jede
+    // Prüfung hängt nur vom Keim ab; sie laufen gleichzeitig, gewählt wird wie bei fastp.
+    let found: Vec<Option<Adapter>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = candidates
+            .iter()
+            .map(|&key| scope.spawn(move || adapter_with_seed(key, reads)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("Keimsuche"))
+            .collect()
+    });
+    found.into_iter().flatten().next()
 }
 
 /// `NucleotideTree`: Präfixbaum der Fortsetzungen mit Zählern.
@@ -886,6 +931,124 @@ impl Counts {
 mod tests {
     use super::*;
 
+    /// Der frühere Ablauf Read für Read, als Maßstab für die Fassung auf mehreren Kernen.
+    fn check_known_adapters_sequential(reads: &[Vec<u8>]) -> Option<(&'static str, u64, u64)> {
+        const MAX_CHECK_READS: u64 = 100_000;
+        const MAX_CHECK_BASES: u64 = MAX_CHECK_READS * 1000;
+        const MAX_HIT: u64 = 1000;
+        const MATCH_REQ: usize = 8;
+        const ONE_MISMATCH_FOR_EACH: usize = 16;
+        let heads: Vec<u64> = KNOWN_ADAPTERS
+            .iter()
+            .map(|(a, _)| {
+                let b = a.as_bytes();
+                let mut h = [0u8; 8];
+                let n = b.len().min(8);
+                h[..n].copy_from_slice(&b[..n]);
+                u64::from_le_bytes(h)
+            })
+            .collect();
+        let mut counts = vec![0u64; KNOWN_ADAPTERS.len()];
+        let mut mismatches = vec![0u64; KNOWN_ADAPTERS.len()];
+        let (mut checked_reads, mut checked_bases, mut cur_max) = (0u64, 0u64, 0u64);
+        for read in reads {
+            let rlen = read.len();
+            checked_reads += 1;
+            checked_bases += rlen as u64;
+            if checked_reads > MAX_CHECK_READS || checked_bases > MAX_CHECK_BASES {
+                break;
+            }
+            if cur_max > MAX_HIT {
+                break;
+            }
+            for (a, (adapter, _)) in KNOWN_ADAPTERS.iter().enumerate() {
+                let adata = adapter.as_bytes();
+                let alen = adata.len();
+                if alen >= rlen {
+                    continue;
+                }
+                if cur_max > 20 && counts[a] < cur_max / 10 {
+                    continue;
+                }
+                for pos in 0..rlen.saturating_sub(MATCH_REQ) {
+                    let cmplen = (rlen - pos).min(alen);
+                    let allowed = cmplen / ONE_MISMATCH_FOR_EACH;
+                    // Vorprüfung, ändert kein Ergebnis: Die ersten 8 Basen liegen immer im
+                    // Vergleich (Adapter ab 19 Basen, pos + 8 < rlen). Haben sie schon mehr
+                    // Unterschiede als erlaubt, passt der Adapter hier nicht.
+                    if alen >= 8 && differing_bytes(heads[a], &read[pos..pos + 8]) > allowed {
+                        continue;
+                    }
+                    let mut mismatch = 0;
+                    let mut matched = true;
+                    for i in 0..cmplen {
+                        if adata[i] != read[i + pos] {
+                            mismatch += 1;
+                            if mismatch > allowed {
+                                matched = false;
+                                break;
+                            }
+                        }
+                    }
+                    if matched {
+                        counts[a] += 1;
+                        cur_max = cur_max.max(counts[a]);
+                        mismatches[a] += mismatch as u64;
+                        break;
+                    }
+                }
+            }
+        }
+        // Größte Zahl, bei Gleichstand der erste in der Reihenfolge der Liste.
+        let mut best: Option<usize> = None;
+        for (a, &c) in counts.iter().enumerate() {
+            if c > best.map_or(0, |b| counts[b]) {
+                best = Some(a);
+            }
+        }
+        let a = best?;
+        let max = counts[a];
+        if max > checked_reads / 50 || (max > checked_reads / 200 && mismatches[a] < checked_reads)
+        {
+            Some((KNOWN_ADAPTERS[a].0, max, checked_reads))
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn known_adapters_parallel_equals_sequential() {
+        let mut x: u64 = 0x1234_5678_9abc_def1;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        // Ohne Adapter, mit wenig Adapter, mit viel Adapter (früher Abbruch).
+        for share in [0u64, 3, 40] {
+            let adapter = KNOWN_ADAPTERS[17].0.as_bytes();
+            let reads: Vec<Vec<u8>> = (0..30_000)
+                .map(|_| {
+                    let mut r: Vec<u8> = (0..150).map(|_| b"ACGT"[(next() & 3) as usize]).collect();
+                    if next() % 100 < share {
+                        let at = 40 + (next() % 100) as usize;
+                        for (i, &b) in adapter.iter().enumerate() {
+                            if at + i < r.len() {
+                                r[at + i] = b;
+                            }
+                        }
+                    }
+                    r
+                })
+                .collect();
+            assert_eq!(
+                check_known_adapters(&reads),
+                check_known_adapters_sequential(&reads)
+            );
+        }
+    }
+
     #[test]
     fn within_mismatches_matches_count() {
         let mut x: u64 = 0x2545_f491_4f6c_dd1d;
@@ -1016,6 +1179,38 @@ mod tests {
             Verdict::NBase
         );
         assert_eq!(t.filter(&rec("ACGTACGTACGTACGTACGT", b'I')), Verdict::Pass);
+    }
+
+    #[test]
+    fn unknown_adapter_is_found_by_seed() {
+        let mut x: u64 = 0x0bad_cafe_dead_beef;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        // Eine Folge, die in keiner Liste steht, als Adapter-Dimer am Anfang von 30 % der Reads,
+        // danach immer dieselbe Fortsetzung. fastp verlangt, dass die Verlängerung in beide
+        // Richtungen eindeutig bis zum Ende läuft; das ist bei Dimeren der Fall.
+        let adapter = b"GTCAGTTCAAGCTGACATCGTAGCATCGAGTCTTGCAGACCTAGTCAGCA";
+        assert!(KNOWN_ADAPTERS.iter().all(|(k, _)| !k.as_bytes().starts_with(&adapter[..12])));
+        let reads: Vec<Vec<u8>> = (0..20_000)
+            .map(|_| {
+                let mut r: Vec<u8> = (0..150).map(|_| b"ACGT"[(next() & 3) as usize]).collect();
+                if next() % 10 < 3 {
+                    r[..adapter.len()].copy_from_slice(adapter);
+                    for (i, b) in r[adapter.len()..].iter_mut().enumerate() {
+                        *b = b"TGCA"[(i * 7 + i / 3) % 4];
+                    }
+                }
+                r
+            })
+            .collect();
+        let found = detect_adapter(&reads).expect("Folge erkannt");
+        assert!(matches!(found.found, Found::Seed { .. }), "{:?}", found.found);
+        let seq = String::from_utf8(found.seq).expect("ASCII");
+        assert!(seq.as_bytes().starts_with(adapter), "gefunden {seq}");
     }
 
     #[test]

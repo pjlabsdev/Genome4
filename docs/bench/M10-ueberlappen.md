@@ -20,3 +20,10 @@ das Ausrichten schneller wird (auf dem Mac mit 10 Kernen nicht gemessen).
 Die Adaptersuche (rund 5 s, einmal je Lauf) läuft jetzt, während der Index lädt. Bei chr20 lädt
 der Index in 0,2 s, daher ist sie hier noch sichtbar; beim ganzen Genom (7,75 GB Index) verschwindet
 sie darin.
+
+## Adaptersuche auf mehreren Kernen
+
+Die Suche nach bekannten Adaptern rechnet blockweise (8.192 Reads) auf allen Kernen vor, ob ein
+Adapter einen Read trifft, und wendet danach die Regeln von fastp der Reihe nach an; die Keime der
+zweiten Suche laufen gleichzeitig. Gleiches Ergebnis (Tests, und `genome trim` schreibt für HG002
+chr20 dieselben Dateien Byte für Byte). Vorbereitung für beide Seiten: 2,7 s statt 5,2 s auf 4 Kernen.
