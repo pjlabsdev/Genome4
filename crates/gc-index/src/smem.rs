@@ -198,93 +198,16 @@ impl FmIndex {
     ///
     /// Ablauf wie in BWA-MEM (Li 2013): erst von `x` nach rechts verlängern und jeden Bereich
     /// merken, bevor er kleiner wird; dann alle gemerkten Bereiche gemeinsam nach links
-    /// verlängern, die weitest reichenden zuerst.
+    /// verlängern, die weitest reichenden zuerst. Dieselben Schritte wie [`SmemSearch`], nur am
+    /// Stück.
     pub fn smems_at(&self, read: &[u8], x: usize, min_size: u64, out: &mut Vec<Smem>) -> usize {
-        let min_size = min_size.max(1);
-        if x >= read.len() || read[x] > 3 {
-            return x + 1;
-        }
-        // Nach rechts.
-        let mut forward: Vec<(usize, BiInterval)> = Vec::new();
-        let mut iv = self.bi_start(read[x]);
-        let mut end = x + 1;
-        while end < read.len() && read[end] <= 3 {
-            let next = self.grow_right(read, x, end, iv);
-            if next.size != iv.size {
-                forward.push((end, iv));
-                if next.size < min_size {
-                    break;
-                }
-            }
-            iv = next;
-            end += 1;
-        }
-        if forward.last().is_none_or(|&(e, _)| e != end) && iv.size >= min_size {
-            forward.push((end, iv));
-        }
-        if forward.is_empty() {
-            return x + 1;
-        }
-        let reach = forward.last().map_or(x + 1, |&(e, _)| e);
-        forward.reverse();
-
-        // Nach links, alle gemeinsam; `forward` ist nach fallendem Ende geordnet.
-        let first_new = out.len();
-        let mut alive = forward;
-        let mut next_alive: Vec<(usize, BiInterval)> = Vec::with_capacity(alive.len());
-        let mut i = x as isize - 1;
+        let mut search = SmemSearch::new(self, read, x, min_size, out);
         loop {
-            let c = if i >= 0 { read[i as usize] } else { 4 };
-            next_alive.clear();
-            // Alle Bereiche dieses Schritts sind voneinander unabhängig. Ihre Zählblöcke werden
-            // erst alle angefordert und dann gezählt, so wartet der Prozessor auf mehrere
-            // Speicherzugriffe zugleich statt nacheinander. Muster, die in der Tabelle stehen,
-            // brauchen keinen Block.
-            if c <= 3 {
-                for &(e, iv) in &alive {
-                    if self.short.get(&read[i as usize..e]).is_none() {
-                        self.prefetch_row(iv.k);
-                        self.prefetch_row(iv.k + iv.size);
-                    }
-                }
+            search.prefetch(self, read);
+            if let Some(reach) = search.step(self, read, out) {
+                return reach;
             }
-            for &(e, iv) in &alive {
-                let ext = if c <= 3 {
-                    self.grow_left(read, (i + 1) as usize, e, iv)
-                } else {
-                    BiInterval {
-                        k: 0,
-                        kr: 0,
-                        size: 0,
-                    }
-                };
-                if ext.size < min_size {
-                    // Nicht weiter verlängerbar. Ein Treffer ist es nur, wenn kein weiter nach
-                    // rechts reichender Bereich diesen Schritt überlebt hat und nicht schon einer
-                    // mit demselben Anfang gemeldet wurde.
-                    let start = (i + 1) as usize;
-                    let contained = out[first_new..]
-                        .last()
-                        .is_some_and(|m| m.start as usize <= start);
-                    if next_alive.is_empty() && !contained {
-                        out.push(Smem {
-                            start: start as u32,
-                            end: e as u32,
-                            interval: iv,
-                        });
-                    }
-                } else if next_alive.last().is_none_or(|&(_, l)| l.size != ext.size) {
-                    next_alive.push((e, ext));
-                }
-            }
-            if next_alive.is_empty() {
-                break;
-            }
-            std::mem::swap(&mut alive, &mut next_alive);
-            i -= 1;
         }
-        out[first_new..].reverse();
-        reach
     }
 
     /// Dritte Seed-Runde von BWA-MEM (`bwt_seed_strategy1`): ab `x` nach rechts verlängern, bis
@@ -292,7 +215,7 @@ impl FmIndex {
     /// Position zurück, an der die nächste Suche beginnt, und den Treffer, falls es einen gibt.
     /// Anders als ein SMEM ist dieser Treffer nicht nach links verlängert und kann in einem
     /// längeren Treffer liegen; er findet Orte, die ein längerer, anderswo passender Treffer
-    /// verdeckt.
+    /// verdeckt. Dieselben Schritte wie [`ForwardSeed`], nur am Stück.
     pub fn seed_forward(
         &self,
         read: &[u8],
@@ -300,25 +223,13 @@ impl FmIndex {
         min_len: u32,
         max_size: u64,
     ) -> (usize, Option<Smem>) {
-        if x >= read.len() || read[x] > 3 {
-            return (x + 1, None);
-        }
-        let mut iv = self.bi_start(read[x]);
-        for (i, &c) in read.iter().enumerate().skip(x + 1) {
-            if c > 3 {
-                return (i + 1, None);
-            }
-            iv = self.grow_right(read, x, i, iv);
-            if iv.size < max_size && i - x >= min_len as usize {
-                let found = (iv.size > 0).then_some(Smem {
-                    start: x as u32,
-                    end: (i + 1) as u32,
-                    interval: iv,
-                });
-                return (i + 1, found);
+        let mut search = ForwardSeed::new(self, read, x, min_len, max_size);
+        loop {
+            search.prefetch(self, read);
+            if let Some(done) = search.step(self, read) {
+                return done;
             }
         }
-        (read.len(), None)
     }
 
     /// Alle längsten exakten Treffer (SMEM) eines Reads mit mindestens `min_len` Basen,
@@ -331,6 +242,276 @@ impl FmIndex {
         }
         out.retain(|m| m.len() >= min_len);
         out
+    }
+}
+
+/// Leerer Bereich.
+const NONE: BiInterval = BiInterval {
+    k: 0,
+    kr: 0,
+    size: 0,
+};
+
+/// Eine Suche wie [`FmIndex::smems_at`], in Schritte zerlegt. Jeder Schritt braucht höchstens
+/// einen Zugriff auf fernen Speicher je Bereich; [`SmemSearch::prefetch`] fordert genau diese
+/// Speicherzeilen vorher an. Wer viele Suchen abwechselnd Schritt für Schritt rechnet (erst alle
+/// anfordern, dann alle rechnen), lässt den Prozessor auf viele Zugriffe zugleich warten statt
+/// auf einen nach dem anderen. Das Ergebnis jeder Suche hängt davon nicht ab.
+#[derive(Debug, Clone)]
+pub struct SmemSearch {
+    x: usize,
+    min_size: u64,
+    phase: Phase,
+    /// Nach rechts: Ende und Bereich des Musters `read[x..end]`.
+    end: usize,
+    iv: BiInterval,
+    /// Nach rechts gemerkte Bereiche, danach die noch lebenden beim Verlängern nach links.
+    alive: Vec<(usize, BiInterval)>,
+    next_alive: Vec<(usize, BiInterval)>,
+    /// Nach links: nächste Read-Position.
+    i: isize,
+    reach: usize,
+    /// Erster Eintrag dieser Suche in `out`.
+    first_new: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Right,
+    Left,
+    Done(usize),
+}
+
+impl SmemSearch {
+    /// Beginnt die Suche an Read-Position `x`; `out` ist die Liste, an die sie später anhängt.
+    pub fn new(index: &FmIndex, read: &[u8], x: usize, min_size: u64, out: &[Smem]) -> Self {
+        let min_size = min_size.max(1);
+        let startable = x < read.len() && read[x] <= 3;
+        SmemSearch {
+            x,
+            min_size,
+            phase: if startable {
+                Phase::Right
+            } else {
+                Phase::Done(x + 1)
+            },
+            end: x + 1,
+            iv: if startable {
+                index.bi_start(read[x])
+            } else {
+                NONE
+            },
+            alive: Vec::new(),
+            next_alive: Vec::new(),
+            i: x as isize - 1,
+            reach: x + 1,
+            first_new: out.len(),
+        }
+    }
+
+    /// Fertig? Dann die Position, an der der am weitesten reichende Treffer endet.
+    pub fn finished(&self) -> Option<usize> {
+        match self.phase {
+            Phase::Done(reach) => Some(reach),
+            _ => None,
+        }
+    }
+
+    /// Fordert die Speicherzeilen an, die der nächste Schritt braucht. Ändert nichts.
+    pub fn prefetch(&self, index: &FmIndex, read: &[u8]) {
+        match self.phase {
+            Phase::Right => {
+                if self.end < read.len()
+                    && read[self.end] <= 3
+                    && index.short.get(&read[self.x..=self.end]).is_none()
+                {
+                    index.prefetch_row(self.iv.kr);
+                    index.prefetch_row(self.iv.kr + self.iv.size);
+                }
+            }
+            Phase::Left => {
+                if self.i >= 0 && read[self.i as usize] <= 3 {
+                    for &(e, iv) in &self.alive {
+                        if index.short.get(&read[self.i as usize..e]).is_none() {
+                            index.prefetch_row(iv.k);
+                            index.prefetch_row(iv.k + iv.size);
+                        }
+                    }
+                }
+            }
+            Phase::Done(_) => {}
+        }
+    }
+
+    /// Rechnet bis einschließlich des nächsten Zugriffs auf fernen Speicher. Liefert am Ende die
+    /// Position, an der der am weitesten reichende Treffer endet; die Treffer stehen dann in `out`.
+    pub fn step(&mut self, index: &FmIndex, read: &[u8], out: &mut Vec<Smem>) -> Option<usize> {
+        match self.phase {
+            Phase::Right => {
+                self.step_right(index, read);
+                None
+            }
+            Phase::Left => {
+                self.step_left(index, read, out);
+                self.finished()
+            }
+            Phase::Done(reach) => Some(reach),
+        }
+    }
+
+    fn step_right(&mut self, index: &FmIndex, read: &[u8]) {
+        let x = self.x;
+        loop {
+            if !(self.end < read.len() && read[self.end] <= 3) {
+                return self.finish_right();
+            }
+            let far = index.short.get(&read[x..=self.end]).is_none();
+            let next = index.grow_right(read, x, self.end, self.iv);
+            if next.size != self.iv.size {
+                self.alive.push((self.end, self.iv));
+                if next.size < self.min_size {
+                    return self.finish_right();
+                }
+            }
+            self.iv = next;
+            self.end += 1;
+            if far {
+                return;
+            }
+        }
+    }
+
+    fn finish_right(&mut self) {
+        let end = self.end;
+        if self.alive.last().is_none_or(|&(e, _)| e != end) && self.iv.size >= self.min_size {
+            self.alive.push((end, self.iv));
+        }
+        if self.alive.is_empty() {
+            self.phase = Phase::Done(self.x + 1);
+            return;
+        }
+        self.reach = self.alive.last().map_or(self.x + 1, |&(e, _)| e);
+        // Nach links, alle gemeinsam; nach fallendem Ende geordnet.
+        self.alive.reverse();
+        self.phase = Phase::Left;
+    }
+
+    fn step_left(&mut self, index: &FmIndex, read: &[u8], out: &mut Vec<Smem>) {
+        let i = self.i;
+        let c = if i >= 0 { read[i as usize] } else { 4 };
+        self.next_alive.clear();
+        for &(e, iv) in &self.alive {
+            let ext = if c <= 3 {
+                index.grow_left(read, (i + 1) as usize, e, iv)
+            } else {
+                NONE
+            };
+            if ext.size < self.min_size {
+                // Nicht weiter verlängerbar. Ein Treffer ist es nur, wenn kein weiter nach rechts
+                // reichender Bereich diesen Schritt überlebt hat und nicht schon einer mit
+                // demselben Anfang gemeldet wurde.
+                let start = (i + 1) as usize;
+                let contained = out[self.first_new..]
+                    .last()
+                    .is_some_and(|m| m.start as usize <= start);
+                if self.next_alive.is_empty() && !contained {
+                    out.push(Smem {
+                        start: start as u32,
+                        end: e as u32,
+                        interval: iv,
+                    });
+                }
+            } else if self
+                .next_alive
+                .last()
+                .is_none_or(|&(_, l)| l.size != ext.size)
+            {
+                self.next_alive.push((e, ext));
+            }
+        }
+        if self.next_alive.is_empty() {
+            out[self.first_new..].reverse();
+            self.phase = Phase::Done(self.reach);
+            return;
+        }
+        std::mem::swap(&mut self.alive, &mut self.next_alive);
+        self.i -= 1;
+    }
+}
+
+/// [`FmIndex::seed_forward`] in Schritte zerlegt, wie [`SmemSearch`].
+#[derive(Debug, Clone)]
+pub struct ForwardSeed {
+    x: usize,
+    min_len: u32,
+    max_size: u64,
+    iv: BiInterval,
+    /// Nächste Read-Position.
+    i: usize,
+    done: Option<(usize, Option<Smem>)>,
+}
+
+impl ForwardSeed {
+    pub fn new(index: &FmIndex, read: &[u8], x: usize, min_len: u32, max_size: u64) -> Self {
+        let startable = x < read.len() && read[x] <= 3;
+        ForwardSeed {
+            x,
+            min_len,
+            max_size,
+            iv: if startable {
+                index.bi_start(read[x])
+            } else {
+                NONE
+            },
+            i: x + 1,
+            done: (!startable).then_some((x + 1, None)),
+        }
+    }
+
+    /// Fordert die Speicherzeilen an, die der nächste Schritt braucht. Ändert nichts.
+    pub fn prefetch(&self, index: &FmIndex, read: &[u8]) {
+        if self.done.is_none()
+            && self.i < read.len()
+            && read[self.i] <= 3
+            && index.short.get(&read[self.x..=self.i]).is_none()
+        {
+            index.prefetch_row(self.iv.kr);
+            index.prefetch_row(self.iv.kr + self.iv.size);
+        }
+    }
+
+    /// Rechnet bis einschließlich des nächsten Zugriffs auf fernen Speicher. Liefert am Ende die
+    /// nächste Startposition und den Treffer, falls es einen gibt.
+    pub fn step(&mut self, index: &FmIndex, read: &[u8]) -> Option<(usize, Option<Smem>)> {
+        if let Some(done) = self.done {
+            return Some(done);
+        }
+        let x = self.x;
+        while self.i < read.len() {
+            let i = self.i;
+            let c = read[i];
+            if c > 3 {
+                self.done = Some((i + 1, None));
+                return self.done;
+            }
+            let far = index.short.get(&read[x..=i]).is_none();
+            self.iv = index.grow_right(read, x, i, self.iv);
+            if self.iv.size < self.max_size && i - x >= self.min_len as usize {
+                let found = (self.iv.size > 0).then_some(Smem {
+                    start: x as u32,
+                    end: (i + 1) as u32,
+                    interval: self.iv,
+                });
+                self.done = Some((i + 1, found));
+                return self.done;
+            }
+            self.i += 1;
+            if far {
+                return None;
+            }
+        }
+        self.done = Some((read.len(), None));
+        self.done
     }
 }
 

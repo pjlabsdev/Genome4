@@ -11,4 +11,4 @@ pub mod smem;
 
 pub use fm::{BuildError, CheckReport, FmIndex, Hit, Variant};
 pub use reference::{Contig, Hole, Reference};
-pub use smem::{BiInterval, Smem};
+pub use smem::{BiInterval, ForwardSeed, Smem, SmemSearch};

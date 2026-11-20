@@ -77,10 +77,21 @@ pub fn align_read(
 /// nach Score, dann Lage geordnet (bwa `mem_align1_core`). So gehen sie bei Paaren in die
 /// Schätzung der Insertgröße und in die Partnersuche.
 pub fn find_regions(index: &FmIndex, read: &[u8], opt: &AlignOptions) -> (Vec<Region>, f32) {
-    let l = index.reference().len();
     let intervals = collect_intervals(index, read, &opt.seed);
-    let frac_rep = repeat_fraction(&intervals, opt.seed.max_occ, read.len());
-    let seeds = locate_seeds(index, &intervals, &opt.seed);
+    regions_from_intervals(index, read, &intervals, opt)
+}
+
+/// [`find_regions`] ab den fertigen Treffern der Seed-Suche (aus [`collect_intervals`] oder
+/// [`crate::seed::collect_intervals_many`]).
+pub fn regions_from_intervals(
+    index: &FmIndex,
+    read: &[u8],
+    intervals: &[gc_index::Smem],
+    opt: &AlignOptions,
+) -> (Vec<Region>, f32) {
+    let l = index.reference().len();
+    let frac_rep = repeat_fraction(intervals, opt.seed.max_occ, read.len());
+    let seeds = locate_seeds(index, intervals, &opt.seed);
     let chains = filter_chains(chain_seeds(&seeds, l, &opt.chain), &opt.filter);
     let mut regions = Vec::new();
     for c in &chains {

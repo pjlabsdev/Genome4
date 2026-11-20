@@ -71,8 +71,27 @@ Cache, der Prozessor wartet also bei jedem Schritt auf den Hauptspeicher. Deshal
 die Zählblöcke aller Bereiche dieses Schritts angefordert (`prefetch_row`, über `gc-sys`) und erst
 dann gezählt. Die Wartezeiten überlappen sich. Am Ergebnis ändert das nichts, es ist nur ein
 Hinweis an den Prozessor. Muster, die in der Tabelle für kurze Muster stehen, brauchen keinen
-Block und werden übersprungen. Der Schritt nach rechts kann das nicht nutzen: Dort hängt jeder
-Schritt vom vorigen ab.
+Block und werden übersprungen. Innerhalb eines Reads hängt der Schritt nach rechts vom vorigen
+ab.
+
+**Mehrere Reads verschränkt** (wie BWA-MEM2). Die Suchen sind deshalb in Schritte zerlegt
+(`SmemSearch` für die ersten beiden Runden, `ForwardSeed` für die dritte): Jeder Schritt rechnet
+bis einschließlich des nächsten Zugriffs auf einen Zählblock. `collect_intervals_many` führt die
+drei Runden für 32 Reads zugleich: erst fordert jede Suche die Blöcke ihres nächsten Schritts an,
+dann rechnet jede ihren Schritt. `smems_at` und `seed_forward` gehen dieselben Schritte am Stück,
+die Ergebnisse sind gleich (Test `many_reads_at_once_give_the_same_intervals`, dazu am ganzen
+GRCh38 dieselbe BAM).
+
+**Befund.** Ein Profil (callgrind, chr20) zeigt: Die Seed-Suche wartet weniger auf den Speicher
+als angenommen, sie rechnet. Am chr20-Index, der zum Teil im Cache liegt, braucht sie für 200.000
+Reads 4,1 s, am ganzen GRCh38 6,4 s auf einem Kern; rund die Hälfte der Befehle steckt im Zählen
+(`occ4`). Das Verschränken bringt am ganzen Genom deshalb nur wenige Prozent. Seither zählt
+`occ4` in der hinteren Hälfte eines Blocks vom Zählstand des nächsten Blocks zurück, statt vom
+Anfang vorwärts, so sind es höchstens 64 statt 128 Basen. Zusammen: Seed-Suche am ganzen GRCh38
+6,0 s statt 6,4 s (jeweils bester von drei Läufen auf einem Kern, siehe
+[M10](../../bench/M10-ueberlappen.md)). Im ganzen `fq2bam` am ganzen GRCh38 auf 4 Kernen der
+Cloud ist das nicht messbar (Ausrichten 19,7 bis 20,0 s vorher wie nachher). Stand: Zweig
+`m11-seed-verschraenkt`, nicht in `main`, bis eine Messung auf dem Mac zeigt, ob es dort hilft.
 
 ## Was ein Treffer enthält
 Anfang und Ende im Read und den Doppelbereich. Die Zeilenzahl ist die rohe Häufigkeit im

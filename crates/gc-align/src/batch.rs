@@ -3,8 +3,10 @@
 //! Jeder Read und jedes Paar wird für sich gerechnet; die Ergebnisse kommen in der Reihenfolge
 //! der Eingabe zurück. Die Ausgabe hängt deshalb nicht von der Zahl der Kerne ab.
 
+use crate::finalize::mark_primary;
 use crate::pair::{InsertStats, PairedRead, estimate_insert, pair_lines};
-use crate::sam::{AlignOptions, Line, align_read, find_regions, read_lines};
+use crate::sam::{AlignOptions, Line, read_lines, regions_from_intervals};
+use crate::seed::collect_intervals_many;
 use gc_index::FmIndex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -66,11 +68,45 @@ pub fn align_reads(
     opt: &AlignOptions,
     threads: usize,
 ) -> Vec<Vec<Line>> {
-    parallel_map(reads.len(), threads, |i| {
-        let r = &reads[i];
-        let (regions, frac_rep) = align_read(index, r.seq, first_id + i as u64, opt);
-        read_lines(index, r.name, r.seq, r.qual, &regions, frac_rep, opt)
-    })
+    let found = regions_of_all(index, reads, opt, threads);
+    found
+        .into_iter()
+        .enumerate()
+        .map(|(i, (mut regions, frac_rep))| {
+            let r = &reads[i];
+            mark_primary(
+                &mut regions,
+                first_id + i as u64,
+                &opt.region.scoring,
+                &opt.finalize,
+            );
+            read_lines(index, r.name, r.seq, r.qual, &regions, frac_rep, opt)
+        })
+        .collect()
+}
+
+/// Reads je Gruppe, deren Seed-Suchen verschränkt laufen ([`collect_intervals_many`]).
+const SEED_GROUP: usize = 32;
+
+/// Bereiche aller Reads ([`crate::sam::find_regions`]), auf `threads` Kernen, die Seed-Suche in
+/// Gruppen verschränkt. Das Ergebnis ist dasselbe wie Read für Read.
+fn regions_of_all(
+    index: &FmIndex,
+    reads: &[ReadInput<'_>],
+    opt: &AlignOptions,
+    threads: usize,
+) -> Vec<(Vec<crate::region::Region>, f32)> {
+    let groups = parallel_map(reads.len().div_ceil(SEED_GROUP), threads, |g| {
+        let group = &reads[g * SEED_GROUP..((g + 1) * SEED_GROUP).min(reads.len())];
+        let seqs: Vec<&[u8]> = group.iter().map(|r| r.seq).collect();
+        let intervals = collect_intervals_many(index, &seqs, &opt.seed);
+        group
+            .iter()
+            .zip(&intervals)
+            .map(|(r, iv)| regions_from_intervals(index, r.seq, iv, opt))
+            .collect::<Vec<_>>()
+    });
+    groups.into_iter().flatten().collect()
 }
 
 /// Richtet einen Block von Paaren aus. `reads` enthält Read 1, Read 2, Read 1, ...;
@@ -88,9 +124,7 @@ pub fn align_pairs(
         "Paare brauchen eine gerade Zahl von Reads"
     );
     // Stufe 1: Bereiche je Read.
-    let found = parallel_map(reads.len(), threads, |i| {
-        find_regions(index, reads[i].seq, opt)
-    });
+    let found = regions_of_all(index, reads, opt, threads);
     let (regions, frac_rep): (Vec<_>, Vec<_>) = found.into_iter().unzip();
     // Stufe 2: Insertgröße aus dem ganzen Block.
     let pes = estimate_insert(index, &regions, opt);

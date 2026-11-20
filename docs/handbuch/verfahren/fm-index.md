@@ -50,7 +50,10 @@ denselben Block (wie `bwt_occ4` in bwa): gezählt werden C, G und T, A ergibt si
 Seed-Suche braucht immer alle vier, und immer an beiden Enden eines Bereichs: `occ4_pair(k, l)`
 (wie `bwt_2occ4` in bwa) zählt, wenn beide Enden im selben Wort der BWT liegen, nur bis `k` und
 das kurze Stück bis `l` dazu. Nach wenigen Basen sind die Bereiche der Seed-Suche eng, das ist
-dann der häufigste Fall.
+dann der häufigste Fall. Liegt `i` in der hinteren Hälfte eines Blocks, zählt `occ4` vom
+Zählstand des nächsten Blocks rückwärts (Zählstand minus die Basen von `i` bis zum Blockende,
+das Endzeichen wie vorn berücksichtigt); so sind es höchstens halb so viele Basen. Der letzte
+Block zählt immer vorwärts. Getestet an jeder Zeile in allen drei Varianten.
 
 **Zählen.** Je Base wird ein Bit gebildet (das untere ihrer zwei), gesetzt, wo die gesuchte Base
 steht. Die Wörter eines Blocks werden nicht einzeln fertig gezählt: Jedes Wort wird nur zu Summen

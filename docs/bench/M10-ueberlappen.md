@@ -36,3 +36,12 @@ auf einer Grenze von 64 Bytes und belegt daher oft zwei Speicherzeilen. Versuch:
 64 Bytes ausgerichtet. Am ganzen GRCh38-Index (standard), 4 Kerne, abwechselnd gemessen:
 Ausrichten vorher 19,7 und 20,0 s, nachher 19,8 und 20,2 s, gleiche BAM. Kein Gewinn, daher nicht
 übernommen. Vermutlich holt der Prozessor die Nachbarzeile ohnehin mit.
+
+## Seed-Suche verschränkt, Zählen vom näheren Blockende (Zweig m11-seed-verschraenkt)
+
+Nur die Seed-Suche, 200.000 Reads von HG002 chr20, ganzer GRCh38-Index (standard), ein Kern,
+je drei Läufe: vorher 6,37 bis 6,83 s, nachher Read für Read 6,19 bis 6,48 s, verschränkt
+(32 Reads) 5,99 bis 6,11 s; gleiche Treffer. Ganzes `fq2bam`, 4 Kerne, abwechselnd: vorher 19,98
+und 19,73 s, nachher 19,98 und 19,94 s Ausrichten; gleiche BAM. Der Gewinn der Seed-Suche geht im
+Rauschen der Cloud unter. Profil (callgrind, chr20): rund die Hälfte der Befehle der Seed-Suche
+steckt in `occ4`, sie ist eher durch Rechnen als durch Speicherzugriffe begrenzt.
