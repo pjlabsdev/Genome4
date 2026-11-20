@@ -27,3 +27,12 @@ Die Suche nach bekannten Adaptern rechnet blockweise (8.192 Reads) auf allen Ker
 Adapter einen Read trifft, und wendet danach die Regeln von fastp der Reihe nach an; die Keime der
 zweiten Suche laufen gleichzeitig. Gleiches Ergebnis (Tests, und `genome trim` schreibt für HG002
 chr20 dieselben Dateien Byte für Byte). Vorbereitung für beide Seiten: 2,7 s statt 5,2 s auf 4 Kernen.
+
+## Verworfen: Zählblöcke auf Speicherzeilen ausgerichtet
+
+Die Seed-Suche braucht rund 63 % der Rechenzeit beim Ausrichten (Verlängern 23 %, Orte 9 %,
+Ketten 4 %; HG002 chr20, Index standard). Ein Zählblock des Index hat 64 Bytes, liegt aber nicht
+auf einer Grenze von 64 Bytes und belegt daher oft zwei Speicherzeilen. Versuch: Tabelle an
+64 Bytes ausgerichtet. Am ganzen GRCh38-Index (standard), 4 Kerne, abwechselnd gemessen:
+Ausrichten vorher 19,7 und 20,0 s, nachher 19,8 und 20,2 s, gleiche BAM. Kein Gewinn, daher nicht
+übernommen. Vermutlich holt der Prozessor die Nachbarzeile ohnehin mit.
