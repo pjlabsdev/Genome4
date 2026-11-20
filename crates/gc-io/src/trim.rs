@@ -1194,7 +1194,11 @@ mod tests {
         // danach immer dieselbe Fortsetzung. fastp verlangt, dass die Verlängerung in beide
         // Richtungen eindeutig bis zum Ende läuft; das ist bei Dimeren der Fall.
         let adapter = b"GTCAGTTCAAGCTGACATCGTAGCATCGAGTCTTGCAGACCTAGTCAGCA";
-        assert!(KNOWN_ADAPTERS.iter().all(|(k, _)| !k.as_bytes().starts_with(&adapter[..12])));
+        assert!(
+            KNOWN_ADAPTERS
+                .iter()
+                .all(|(k, _)| !k.as_bytes().starts_with(&adapter[..12]))
+        );
         let reads: Vec<Vec<u8>> = (0..20_000)
             .map(|_| {
                 let mut r: Vec<u8> = (0..150).map(|_| b"ACGT"[(next() & 3) as usize]).collect();
@@ -1208,7 +1212,11 @@ mod tests {
             })
             .collect();
         let found = detect_adapter(&reads).expect("Folge erkannt");
-        assert!(matches!(found.found, Found::Seed { .. }), "{:?}", found.found);
+        assert!(
+            matches!(found.found, Found::Seed { .. }),
+            "{:?}",
+            found.found
+        );
         let seq = String::from_utf8(found.seq).expect("ASCII");
         assert!(seq.as_bytes().starts_with(adapter), "gefunden {seq}");
     }
