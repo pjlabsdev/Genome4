@@ -405,20 +405,116 @@ fn align_into(
         trimmer,
         ..
     } = *run;
-    let mut trim_counts = gc_io::trim::Counts::default();
     let mut opt = gc_align::AlignOptions::default();
     opt.sam.read_group = read_group.map(|rg| rg.id.clone());
     opt.sam.mate_tags = mate_tags;
-    let mut reader1 = fastq::open(first)?;
-    let mut reader2 = match second {
+    let reader1 = fastq::open(first)?;
+    let reader2 = match second {
         Some(p) => Some(fastq::open(p)?),
         None => None,
     };
     let paired = reader2.is_some();
     let started = std::time::Instant::now();
-    let (mut n_reads, mut n_lines, mut block_nr) = (0u64, 0u64, 0u64);
+    // Drei Schritte laufen gleichzeitig: Lesen (und Trimmen) des nächsten Blocks, Ausrichten
+    // des aktuellen, Schreiben des vorigen. Die Blöcke sind dieselben wie nacheinander,
+    // daher hängt die Ausgabe nicht davon ab.
+    std::thread::scope(|scope| -> Result<(u64, u64, gc_io::trim::Counts)> {
+        let (block_tx, block_rx) = std::sync::mpsc::sync_channel::<Vec<Record>>(1);
+        let (lines_tx, lines_rx) = std::sync::mpsc::sync_channel::<Vec<Vec<gc_align::Line>>>(1);
+        let reader = scope
+            .spawn(move || read_blocks(reader1, reader2, first, block_bases, trimmer, block_tx));
+        let writer = scope.spawn(move || -> Result<(u64, f64)> {
+            let (mut n_lines, mut busy) = (0u64, 0f64);
+            for lines in lines_rx {
+                let t = std::time::Instant::now();
+                n_lines += out.write(fm, &lines)?;
+                busy += t.elapsed().as_secs_f64();
+            }
+            Ok((n_lines, busy))
+        });
+        let (mut n_reads, mut block_nr, mut t_align, mut t_wait) = (0u64, 0u64, 0f64, 0f64);
+        loop {
+            let t0 = std::time::Instant::now();
+            let Ok(records) = block_rx.recv() else {
+                break;
+            };
+            t_wait += t0.elapsed().as_secs_f64();
+            let t1 = std::time::Instant::now();
+            let seqs: Vec<Vec<u8>> = records.iter().map(|r| encode_read(&r.seq)).collect();
+            let names: Vec<String> = records
+                .iter()
+                .map(|r| {
+                    let name = if paired { r.pair_key() } else { &r.name[..] };
+                    String::from_utf8_lossy(name).into_owned()
+                })
+                .collect();
+            let inputs: Vec<gc_align::ReadInput<'_>> = (0..records.len())
+                .map(|i| gc_align::ReadInput {
+                    name: &names[i],
+                    seq: &seqs[i],
+                    qual: &records[i].qual,
+                })
+                .collect();
+            let lines = if paired {
+                let (lines, pes) = gc_align::align_pairs(fm, &inputs, n_reads / 2, &opt, threads);
+                log_insert_sizes(block_nr, records.len() / 2, &pes);
+                lines
+            } else {
+                gc_align::align_reads(fm, &inputs, n_reads, &opt, threads)
+            };
+            t_align += t1.elapsed().as_secs_f64();
+            n_reads += records.len() as u64;
+            block_nr += 1;
+            if lines_tx.send(lines).is_err() {
+                // Der Schreiber hat aufgehört; sein Fehler kommt unten.
+                break;
+            }
+        }
+        drop(block_rx);
+        drop(lines_tx);
+        let written = writer
+            .join()
+            .map_err(|_| anyhow::anyhow!("Schreiben abgestürzt"))?;
+        let read = reader
+            .join()
+            .map_err(|_| anyhow::anyhow!("Lesen abgestürzt"))?;
+        let (trim_counts, t_read) = read?;
+        let (n_lines, t_write) = written?;
+        let seconds = started.elapsed().as_secs_f64();
+        gc_log::info(
+            "ALIGN.FERTIG",
+            "Ausrichten beendet",
+            json!({
+                "reads": n_reads,
+                "zeilen": n_lines,
+                "bloecke": block_nr,
+                "kerne": threads,
+                "sekunden": seconds,
+                "sekunden_lesen": t_read,
+                "sekunden_ausrichten": t_align,
+                "sekunden_schreiben": t_write,
+                "sekunden_warten_auf_lesen": t_wait,
+                "reads_je_sekunde": if seconds > 0.0 { n_reads as f64 / seconds } else { 0.0 },
+            }),
+        );
+        Ok((n_reads, n_lines, trim_counts))
+    })
+}
+
+/// Liest Blöcke von je mindestens `block_bases` Basen (nach dem Trimmen) und gibt sie weiter.
+/// Liefert die Zähler des Trimmens und die Sekunden, die das Lesen selbst gebraucht hat.
+fn read_blocks(
+    mut reader1: fastq::Reader<Box<dyn std::io::BufRead + Send>>,
+    mut reader2: Option<fastq::Reader<Box<dyn std::io::BufRead + Send>>>,
+    first: &std::path::Path,
+    block_bases: u64,
+    trimmer: Option<&gc_io::trim::Trimmer>,
+    tx: std::sync::mpsc::SyncSender<Vec<Record>>,
+) -> Result<(gc_io::trim::Counts, f64)> {
+    let mut trim_counts = gc_io::trim::Counts::default();
+    let (mut busy, mut n_reads) = (0f64, 0u64);
     loop {
-        // Einen Block lesen, bis die Zahl der Basen erreicht ist.
+        let t0 = std::time::Instant::now();
         let mut records: Vec<Record> = Vec::new();
         let mut bases = 0u64;
         while bases < block_bases {
@@ -450,6 +546,7 @@ fn align_into(
                         let report = t.trim_pair(&mut a, &mut b);
                         trim_counts.add(&report);
                         if !report.kept() {
+                            n_reads += 2;
                             continue;
                         }
                     }
@@ -466,75 +563,47 @@ fn align_into(
                 }
             }
         }
+        busy += t0.elapsed().as_secs_f64();
         if records.is_empty() {
-            break;
+            return Ok((trim_counts, busy));
         }
-        let seqs: Vec<Vec<u8>> = records.iter().map(|r| encode_read(&r.seq)).collect();
-        let names: Vec<String> = records
-            .iter()
-            .map(|r| {
-                let name = if paired { r.pair_key() } else { &r.name[..] };
-                String::from_utf8_lossy(name).into_owned()
-            })
-            .collect();
-        let inputs: Vec<gc_align::ReadInput<'_>> = (0..records.len())
-            .map(|i| gc_align::ReadInput {
-                name: &names[i],
-                seq: &seqs[i],
-                qual: &records[i].qual,
-            })
-            .collect();
-        let lines = if paired {
-            let (lines, pes) = gc_align::align_pairs(fm, &inputs, n_reads / 2, &opt, threads);
-            let used: Vec<&str> = (0..4)
-                .filter(|&d| !pes[d].failed)
-                .map(|d| gc_align::DIRECTIONS[d])
-                .collect();
-            gc_log::decision(
-                "ALIGN.INSERTGROESSE",
-                &if used.is_empty() {
-                    "keine Richtung".to_string()
-                } else {
-                    used.join(", ")
-                },
-                "aus den eindeutig liegenden Paaren dieses Blocks geschätzt",
-                json!({
-                    "block": block_nr,
-                    "paare": records.len() / 2,
-                    "richtungen": (0..4).map(|d| json!({
-                        "richtung": gc_align::DIRECTIONS[d],
-                        "paare": pes[d].n,
-                        "benutzt": !pes[d].failed,
-                        "perzentile_25_50_75": pes[d].percentiles,
-                        "mittel": pes[d].avg,
-                        "streuung": pes[d].std,
-                        "richtiges_paar_von": pes[d].low,
-                        "richtiges_paar_bis": pes[d].high,
-                    })).collect::<Vec<_>>(),
-                }),
-            );
-            lines
-        } else {
-            gc_align::align_reads(fm, &inputs, n_reads, &opt, threads)
-        };
-        n_lines += out.write(fm, &lines)?;
         n_reads += records.len() as u64;
-        block_nr += 1;
+        if tx.send(records).is_err() {
+            // Das Ausrichten hat aufgehört; dessen Fehler zählt.
+            return Ok((trim_counts, busy));
+        }
     }
-    let seconds = started.elapsed().as_secs_f64();
-    gc_log::info(
-        "ALIGN.FERTIG",
-        "Ausrichten beendet",
+}
+
+/// Protokolliert die geschätzte Insertgröße eines Blocks.
+fn log_insert_sizes(block_nr: u64, pairs: usize, pes: &[gc_align::InsertStats]) {
+    let used: Vec<&str> = (0..4)
+        .filter(|&d| !pes[d].failed)
+        .map(|d| gc_align::DIRECTIONS[d])
+        .collect();
+    gc_log::decision(
+        "ALIGN.INSERTGROESSE",
+        &if used.is_empty() {
+            "keine Richtung".to_string()
+        } else {
+            used.join(", ")
+        },
+        "aus den eindeutig liegenden Paaren dieses Blocks geschätzt",
         json!({
-            "reads": n_reads,
-            "zeilen": n_lines,
-            "bloecke": block_nr,
-            "kerne": threads,
-            "sekunden": seconds,
-            "reads_je_sekunde": if seconds > 0.0 { n_reads as f64 / seconds } else { 0.0 },
+            "block": block_nr,
+            "paare": pairs,
+            "richtungen": (0..4).map(|d| json!({
+                "richtung": gc_align::DIRECTIONS[d],
+                "paare": pes[d].n,
+                "benutzt": !pes[d].failed,
+                "perzentile_25_50_75": pes[d].percentiles,
+                "mittel": pes[d].avg,
+                "streuung": pes[d].std,
+                "richtiges_paar_von": pes[d].low,
+                "richtiges_paar_bis": pes[d].high,
+            })).collect::<Vec<_>>(),
         }),
     );
-    Ok((n_reads, n_lines, trim_counts))
 }
 
 /// Einstellungen eines Laufs von `genome fq2bam`.
@@ -769,17 +838,28 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<serde_json::Value> {
         ),
         None => None,
     };
-    let trimmer = if run.trim {
-        let Some(second) = run.fastq2 else {
-            anyhow::bail!("--trimmen gibt es nur für Paare (--fastq2 fehlt)");
-        };
-        Some(plan_trimming(run.fastq, second)?)
-    } else {
-        None
+    let second = match (run.trim, run.fastq2) {
+        (false, _) => None,
+        (true, Some(second)) => Some(second),
+        (true, None) => anyhow::bail!("--trimmen gibt es nur für Paare (--fastq2 fehlt)"),
     };
-    let st = gc_log::stage("fq2bam.index_laden", json!({}));
-    let fm = load_index(run.index)?;
-    st.finish(json!({}));
+    // Die Adaptersuche liest nur den Anfang der FASTQ und läuft, während der Index lädt.
+    let (trimmer, fm) = std::thread::scope(|scope| -> Result<_> {
+        let planned = second.map(|second| scope.spawn(move || plan_trimming(run.fastq, second)));
+        let st = gc_log::stage("fq2bam.index_laden", json!({}));
+        let fm = load_index(run.index);
+        if fm.is_ok() {
+            st.finish(json!({}));
+        }
+        let trimmer = match planned {
+            Some(h) => Some(
+                h.join()
+                    .map_err(|_| anyhow::anyhow!("Adaptersuche abgestürzt"))??,
+            ),
+            None => None,
+        };
+        Ok((trimmer, fm?))
+    })?;
     let seconds_load = started.elapsed().as_secs_f64();
 
     // 1. Ausrichten, die Sätze gehen sofort in den Sortierer.

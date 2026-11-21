@@ -113,7 +113,8 @@ Mit `--trimmen` (nur für Paare) liest `fq2bam` vor dem Laden des Index den Anfa
 für die Adaptersuche, wie fastp. Dann wird jedes Paar beim Lesen getrimmt; verworfene Paare werden
 nicht ausgerichtet und erscheinen nicht in der BAM (wie bei fastp, das sie nicht schreibt). Die
 Blöcke für die Schätzung der Insertgröße zählen die Basen nach dem Trimmen. Zwischendateien
-entstehen keine. Beide Seiten werden gleichzeitig untersucht, und eine Vorprüfung der ersten
+entstehen keine. Die Adaptersuche läuft, während der Index lädt; Lesen und Trimmen des nächsten
+Blocks laufen in einem eigenen Faden neben dem Ausrichten. Beide Seiten werden gleichzeitig untersucht, die bekannten Adapter blockweise auf allen Kernen (ein übersprungener Adapter bleibt übersprungen, daher genügt je Block die Menge der noch aktiven; Test `known_adapters_parallel_equals_sequential`), die Keime der zweiten Suche gleichzeitig (gewählt wird wie bei fastp der erste der Reihe nach, Test `unknown_adapter_is_found_by_seed`), und eine Vorprüfung der ersten
 8 Basen jedes bekannten Adapters spart Vergleiche, ohne ein Ergebnis zu ändern (Test
 `differing_bytes_counts_like_plain_loop`; an HG002 chr20 gleiche BAM, Vorbereitung 6,3 s statt
 18,3 s bei 2 x 262.144 Reads). Protokoll: `TRIM.ADAPTER`, `TRIM.POLYG`, `TRIM.FERTIG`; die Zähler stehen auch
@@ -128,6 +129,7 @@ bekannten Adapters) stehen mit Begründung im Protokoll.
 ## Validierung
 Read für Read gegen fastp 1.4.0 ([Ergebnis](../../../bench/m9/ERGEBNIS.md)): HG001 NovaSeq
 (PolyG an) und PJ MGI (PolyG aus), je 1.000.000 Paare. Alle behaltenen Reads gleich in Folge und
-Qualität, keine Abweichung im Verbleib, gleiche Zahl gekürzter Adapterbasen. `genome trim` brauchte
-9 bis 10 s statt 38 bis 40 s und ein Drittel des Speichers. Offen: Sätze, in denen eine
+Qualität, keine Abweichung im Verbleib, gleiche Zahl gekürzter Adapterbasen. Die Laufzeiten dieses
+Ausschnitts taugen nicht als Tempovergleich (siehe Ergebnis): fastp braucht für das ganze HG001
+14 min 17 s, rund 2,4 s je Million Paare. Offen: Sätze, in denen eine
 Adapterfolge erkannt wird (beide hier: keine), und die Wirkung am Ausrichten mit erzeugten Reads.

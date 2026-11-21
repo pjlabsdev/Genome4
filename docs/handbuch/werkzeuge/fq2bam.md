@@ -31,12 +31,17 @@ genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.
 | `--trimmen` | Paare vor dem Ausrichten trimmen wie fastp 1.4.0 in der alten Kette (Adapter, PolyG, Qualität, Länge); verworfene Paare werden nicht ausgerichtet, siehe [Trimmen](../verfahren/trimmen.md). Nur für Paare | aus |
 
 ## Ablauf
-1. Index laden ([FM-Index](../verfahren/fm-index.md)).
+1. Index laden ([FM-Index](../verfahren/fm-index.md)). Mit `--trimmen` läuft gleichzeitig die
+   Adaptersuche am Anfang der FASTQ.
 2. Ausrichten, Block für Block auf allen Kernen ([mehrere Kerne](../verfahren/mehrere-kerne.md),
    [Read-Paare](../verfahren/read-paare.md)), mit Lesegruppe und Partner-Angaben
    ([SAM-Ausgabe](../verfahren/sam-ausgabe.md)). Die Datensätze gehen ohne Zwischendatei in den
    Sortierer ([Sortieren](../verfahren/sortieren.md)); ist der Speicher voll, entsteht ein
-   sortierter Teil auf der Platte.
+   sortierter Teil auf der Platte. Drei Schritte laufen gleichzeitig: Ein Faden liest (und
+   trimmt) den nächsten Block, alle Kerne richten den aktuellen aus, ein Faden schreibt den
+   vorigen in den Sortierer. Die Blöcke sind dieselben wie nacheinander, die Ausgabe hängt
+   nicht davon ab. `ALIGN.FERTIG` nennt die Sekunden je Schritt und wie lange das Ausrichten auf
+   das Lesen gewartet hat.
 3. Zusammenführen der Teile. Der sortierte Strom läuft durch das Markieren der Duplikate
    ([Duplikate](../verfahren/duplikate-markieren.md)) und die Zählung nach Flags
    ([flagstat](flagstat.md)) und wird als BAM geschrieben.
