@@ -1,0 +1,11 @@
+[package]
+name = "gc-panel"
+description = "Genome 4.0: Panel-Aligner, Reads und Allele gegen viele ähnliche Sequenzen einer Genfamilie (aus hla-wgs)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+ahash = "0.8.12"
+gc-sys.workspace = true

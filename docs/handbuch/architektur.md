@@ -10,9 +10,10 @@ Stand: gebaut (Grundgerüst), Erweiterung nach Plan Abschnitt 4 und 12.
 | `gc-index` | Referenz als 2-Bit-Folge, Suffix-Array, FM-Index | `gc-log`, flate2 (nur CRC-32) |
 | `gc-bam` | BAM-Datensätze nach Ort sortieren, Duplikate markieren, Index `.bai` bauen, nach Flags zählen, Kopf anpassen | flate2 |
 | `gc-align` | Seeds sammeln und orten, Ketten; später Alignment | `gc-index` |
+| `gc-panel` | Panel-Aligner: Reads und Allele gegen viele ähnliche Sequenzen einer Genfamilie, aus hla-wgs ([Verfahren](verfahren/panel-alignment.md)) | `gc-sys`, ahash |
 | `gc-log` | Ereignisstrom und Lauf-Protokoll | serde_json |
 | `gc-schema` | Ergebnis-Hülle | serde, serde_json |
-| `gc-sys` | Systemnahes je Prozessor und Betriebssystem; bisher: Vorab-Laden in den Cache (`prefetch`) für x86_64 und aarch64 | keine |
+| `gc-sys` | Systemnahes je Prozessor und Betriebssystem: Vorab-Laden in den Cache (`prefetch`) für x86_64 und aarch64, Code mit AVX2 übersetzen, wenn der Prozessor es kann (`with_avx2`) | keine |
 | `genome` | das Programm mit allen Unterbefehlen | alle oben, clap, anyhow |
 
 Geplant: `gc-ref`, `gc-stats`, `gc-bench`, `gc-report` und die Werkzeug-
@@ -40,9 +41,10 @@ die Oberfläche. Das Programm `genome` verbindet nur.
 
 ## Unsicherer Code
 
-`unsafe` kommt genau an einer Stelle vor: beim blockweisen Index-Bau schreiben mehrere Kerne in
-getrennte, vorab zugeteilte Plätze desselben Blocks (`gc-index/src/blockwise.rs`, `fill_block`).
-Die Begründung steht dort am Code.
+Im Fachcode kommt `unsafe` genau an einer Stelle vor: beim blockweisen Index-Bau schreiben mehrere
+Kerne in getrennte, vorab zugeteilte Plätze desselben Blocks (`gc-index/src/blockwise.rs`,
+`fill_block`). Die Begründung steht dort am Code. Dazu kommen die systemnahen Befehle in `gc-sys`
+(`prefetch`, `with_avx2`), jeweils mit Begründung am Code.
 
 ## Atomares Schreiben
 

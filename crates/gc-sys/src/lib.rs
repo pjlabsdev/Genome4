@@ -24,9 +24,35 @@ pub fn prefetch<T>(value: &T) {
     let _ = p;
 }
 
+/// Führt `f` mit AVX2 übersetzt aus, wenn der Prozessor AVX2 kann, sonst wie übersetzt. Für
+/// Schleifen, die der Übersetzer erst mit AVX2 in Vektorbefehle mit 32-Bit-Maximum verwandelt
+/// (x86_64 setzt sonst nur SSE2 voraus). Das Ergebnis ist in beiden Fällen dasselbe, weil derselbe
+/// Code läuft; `f` sollte nur `#[inline(always)]`-Funktionen aufrufen, damit sie mit AVX2 übersetzt
+/// werden. Auf anderen Prozessoren läuft `f` unverändert.
+#[inline(always)]
+pub fn with_avx2<R>(f: impl FnOnce() -> R) -> R {
+    #[cfg(target_arch = "x86_64")]
+    if std::arch::is_x86_feature_detected!("avx2") {
+        #[target_feature(enable = "avx2")]
+        unsafe fn run<R>(f: impl FnOnce() -> R) -> R {
+            f()
+        }
+        // SAFETY: der Prozessor kann AVX2, das hat die Abfrage eben gezeigt.
+        return unsafe { run(f) };
+    }
+    f()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::prefetch;
+    use super::{prefetch, with_avx2};
+
+    #[test]
+    fn with_avx2_same_result() {
+        let v: Vec<i32> = (0..10_000).map(|i| (i * 7919) % 1013 - 500).collect();
+        let plain = v.iter().copied().max();
+        assert_eq!(with_avx2(|| v.iter().copied().max()), plain);
+    }
 
     #[test]
     fn prefetch_changes_nothing() {
