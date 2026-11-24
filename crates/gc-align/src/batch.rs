@@ -26,7 +26,12 @@ pub fn parallel_map<T: Send>(n: usize, threads: usize, f: impl Fn(usize) -> T + 
     if threads == 1 {
         return (0..n).map(f).collect();
     }
-    const PORTION: usize = 64;
+    // Anfangs große Portionen (wenig Abstimmung), gegen Ende kleinere: Die Portion ist ein
+    // Achtel des Rests je Kern, zwischen MIN_PORTION und MAX_PORTION. So warten am Ende eines
+    // Blocks nicht alle Kerne auf den einen, der zuletzt eine große Portion genommen hat (auf
+    // Rechnern mit langsamen Effizienzkernen besonders spürbar). Die Ausgabe hängt nicht davon ab.
+    const MIN_PORTION: usize = 4;
+    const MAX_PORTION: usize = 64;
     let next = AtomicUsize::new(0);
     let mut parts: Vec<(usize, Vec<T>)> = std::thread::scope(|scope| {
         let workers: Vec<_> = (0..threads)
@@ -34,11 +39,14 @@ pub fn parallel_map<T: Send>(n: usize, threads: usize, f: impl Fn(usize) -> T + 
                 scope.spawn(|| {
                     let mut mine = Vec::new();
                     loop {
-                        let from = next.fetch_add(PORTION, Ordering::Relaxed);
+                        let seen = next.load(Ordering::Relaxed);
+                        let portion = (n.saturating_sub(seen) / (8 * threads))
+                            .clamp(MIN_PORTION, MAX_PORTION);
+                        let from = next.fetch_add(portion, Ordering::Relaxed);
                         if from >= n {
                             break;
                         }
-                        let to = (from + PORTION).min(n);
+                        let to = (from + portion).min(n);
                         mine.push((from, (from..to).map(&f).collect::<Vec<T>>()));
                     }
                     mine
