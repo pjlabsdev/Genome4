@@ -120,9 +120,9 @@ enum Command {
         /// Ohne die Option bleiben die Reads unverändert.
         #[arg(long)]
         trimmen: bool,
-        /// Nur jede n-te Suffix-Array-Stichprobe des Index laden (Zweierpotenz). Spart
-        /// Arbeitsspeicher, kostet etwas Rechenzeit; die Ausgabe bleibt gleich.
-        #[arg(long, default_value_t = 1)]
+        /// Nur jede n-te Suffix-Array-Stichprobe des Index laden (Zweierpotenz; 0 = nach
+        /// Arbeitsspeicher). Spart Arbeitsspeicher, kostet etwas Rechenzeit; die Ausgabe bleibt gleich.
+        #[arg(long, default_value_t = 0)]
         sa_ausduennen: u32,
     },
     /// Paare trimmen wie fastp 1.4.0 und als FASTQ schreiben (für den Vergleich mit fastp;
@@ -853,7 +853,12 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<serde_json::Value> {
     let (trimmer, fm) = std::thread::scope(|scope| -> Result<_> {
         let planned = second.map(|second| scope.spawn(move || plan_trimming(run.fastq, second)));
         let st = gc_log::stage("fq2bam.index_laden", json!({}));
-        let fm = load_index_thinned(run.index, run.sa_thin);
+        let thin = if run.sa_thin == 0 {
+            plan_sa_thinning(run.index, run.memory_mb)?
+        } else {
+            run.sa_thin
+        };
+        let fm = load_index_thinned(run.index, thin);
         if fm.is_ok() {
             st.finish(json!({}));
         }
@@ -1528,6 +1533,48 @@ fn encode_read(seq: &[u8]) -> Vec<u8> {
 
 fn load_index(path: &std::path::Path) -> Result<gc_index::FmIndex> {
     load_index_thinned(path, 1)
+}
+
+/// Anteil des Arbeitsspeichers, den Index und Sortierpuffer zusammen höchstens belegen sollen.
+/// Der Rest bleibt für Lese- und Schreibpuffer, Blöcke im Fluss und das Betriebssystem.
+const MEMORY_SHARE: f64 = 0.5;
+
+/// Wählt das Ausdünnen der Suffix-Array-Stichproben nach dem Arbeitsspeicher: die kleinste
+/// Zweierpotenz (1, 2 oder 4), mit der Index und Sortierpuffer in `MEMORY_SHARE` des
+/// Arbeitsspeichers passen; passt nichts, 4. Ist der Arbeitsspeicher unbekannt, 1.
+fn plan_sa_thinning(index: &std::path::Path, memory_mb: usize) -> Result<u32> {
+    let file = std::fs::File::open(index)
+        .with_context(|| format!("Index {} nicht lesbar", index.display()))?;
+    let file_bytes = file.metadata()?.len();
+    let (rows, sa) = gc_index::FmIndex::read_sample_layout(std::io::BufReader::new(file))
+        .with_context(|| format!("Index {}", index.display()))?;
+    let ram = gc_sys::physical_memory_bytes();
+    let sample_bytes = rows.div_ceil(u64::from(sa)) * gc_index::FmIndex::SAMPLE_BYTES;
+    let sort_bytes = memory_mb as u64 * (1 << 20);
+    let need = |k: u64| file_bytes - sample_bytes + sample_bytes / k + sort_bytes;
+    let keep = match ram {
+        None => 1,
+        Some(ram) => {
+            let budget = (ram as f64 * MEMORY_SHARE) as u64;
+            [1u64, 2, 4]
+                .into_iter()
+                .find(|&k| need(k) <= budget)
+                .unwrap_or(4)
+        }
+    };
+    gc_log::info(
+        "FQ2BAM.SPEICHERPLAN",
+        "Ausdünnen der Suffix-Array-Stichproben nach Arbeitsspeicher gewählt",
+        json!({
+            "arbeitsspeicher_bytes": ram,
+            "index_bytes": file_bytes,
+            "stichproben_bytes": sample_bytes,
+            "sortierpuffer_bytes": sort_bytes,
+            "sa_ausduennen": keep,
+            "bedarf_bytes": need(keep),
+        }),
+    );
+    Ok(keep as u32)
 }
 
 fn load_index_thinned(path: &std::path::Path, keep_every: u32) -> Result<gc_index::FmIndex> {

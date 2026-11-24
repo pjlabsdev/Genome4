@@ -9,6 +9,7 @@ rust-version = "1.88"
 publish = false
 
 [workspace.dependencies]
+libc = "0.2"
 noodles = { version = "0.119", features = ["bam", "sam", "bgzf"] }
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 clap = { version = "4", features = ["derive"] }

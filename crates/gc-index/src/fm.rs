@@ -916,6 +916,32 @@ impl FmIndex {
         w.inner.flush()
     }
 
+    /// Liest nur den Kopf einer Indexdatei: Zeilenzahl und Abstand der Suffix-Array-Stichproben.
+    /// Daraus folgt der Speicher der Stichproben (Zeilen / Abstand × 5 Bytes), ohne die Datei
+    /// zu laden.
+    pub fn read_sample_layout<R: Read>(mut input: R) -> io::Result<(u64, u32)> {
+        let mut head = [0u8; 40];
+        input.read_exact(&mut head)?;
+        if &head[..4] != MAGIC || u32::from_le_bytes(head[4..8].try_into().unwrap()) != FORMAT {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Indexdatei: keine Genome-Indexdatei dieser Version",
+            ));
+        }
+        let rows = u64::from_le_bytes(head[8..16].try_into().unwrap());
+        let sa = u64::from_le_bytes(head[32..40].try_into().unwrap());
+        if sa == 0 || sa > 1024 || !sa.is_power_of_two() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Indexdatei: unzulässige Abstände",
+            ));
+        }
+        Ok((rows, sa as u32))
+    }
+
+    /// Bytes je Suffix-Array-Stichprobe.
+    pub const SAMPLE_BYTES: u64 = SA_BYTES as u64;
+
     /// Liest einen Index und prüft Format, Größen und Prüfsumme.
     pub fn read<R: Read>(input: R) -> io::Result<FmIndex> {
         Self::read_thinned(input, 1)
@@ -1357,6 +1383,8 @@ mod tests {
             assert_eq!(a, b, "keep {keep}");
         }
         assert!(FmIndex::read_thinned(&bytes[..], 3).is_err());
+        let (rows, sa) = FmIndex::read_sample_layout(&bytes[..]).unwrap();
+        assert_eq!((rows, sa), (index.rows(), index.sa_interval()));
     }
 
     #[test]

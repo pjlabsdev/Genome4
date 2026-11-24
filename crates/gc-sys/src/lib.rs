@@ -63,3 +63,36 @@ mod tests {
         assert_eq!(data.iter().sum::<u64>(), 1023 * 1024 / 2);
     }
 }
+
+/// Arbeitsspeicher des Rechners in Bytes, wenn das Betriebssystem ihn verrät (Linux, macOS und
+/// andere Unix-Systeme). Sonst `None`.
+pub fn physical_memory_bytes() -> Option<u64> {
+    #[cfg(unix)]
+    {
+        // SAFETY: `sysconf` liest nur zwei Systemwerte, ohne Zeiger.
+        let (pages, size) = unsafe {
+            (
+                libc::sysconf(libc::_SC_PHYS_PAGES),
+                libc::sysconf(libc::_SC_PAGESIZE),
+            )
+        };
+        if pages > 0 && size > 0 {
+            return Some(pages as u64 * size as u64);
+        }
+        None
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+#[cfg(test)]
+mod memory_tests {
+    #[test]
+    fn physical_memory_is_plausible_where_known() {
+        if let Some(bytes) = super::physical_memory_bytes() {
+            assert!(bytes >= 64 << 20, "{bytes}");
+        }
+    }
+}
