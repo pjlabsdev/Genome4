@@ -65,6 +65,8 @@ pub struct Sorter {
     dir: Option<PathBuf>,
     runs: Vec<PathBuf>,
     stats: SortStats,
+    /// Teil, der gerade im Hintergrund geschrieben wird; liefert seine Größe auf der Platte.
+    pending: Option<std::thread::JoinHandle<io::Result<u64>>>,
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -80,6 +82,7 @@ impl Sorter {
             dir: None,
             runs: Vec::new(),
             stats: SortStats::default(),
+            pending: None,
         }
     }
 
@@ -150,26 +153,48 @@ impl Sorter {
             }
         };
         let path = dir.join(format!("teil-{:06}.gcsort", self.runs.len()));
-        let mut file = BufWriter::with_capacity(1 << 20, File::create(&path)?);
-        file.write_all(MAGIC)?;
-        let (crc, bytes) = if std::env::var_os("GC_SORT_PARALLEL").is_some_and(|v| v == "0") {
-            self.write_run_serial(&mut file)?
+        // Der vorige Teil muss auf der Platte sein, bevor der nächste entsteht.
+        self.wait_for_pending()?;
+        if std::env::var_os("GC_SORT_PARALLEL").is_some_and(|v| v == "0") {
+            let mut file = BufWriter::with_capacity(1 << 20, File::create(&path)?);
+            file.write_all(MAGIC)?;
+            let (crc, bytes) = self.write_run_serial(&mut file)?;
+            let file = finish_run(file, self.index.len() as u64, bytes, &crc)?;
+            self.stats.runs += 1;
+            self.stats.run_bytes += file.metadata()?.len();
         } else {
-            self.write_run_parallel(&mut file)?
-        };
-        // Schluss: Zahl der Sätze, Bytes, Prüfsumme. Daran erkennt das Lesen einen
-        // abgeschnittenen oder beschädigten Teil.
-        file.write_all(&(self.index.len() as u64).to_le_bytes())?;
-        file.write_all(&bytes.to_le_bytes())?;
-        file.write_all(&crc.sum().to_le_bytes())?;
-        file.flush()?;
-        let file = file.into_inner().map_err(|e| e.into_error())?;
-        file.sync_all()?;
-        self.stats.runs += 1;
-        self.stats.run_bytes += file.metadata()?.len();
+            // Komprimieren auf mehreren Kernen in den Speicher, Schreiben im Hintergrund: Die
+            // Platte kann langsam sein (eine USB-SSD schreibt teils nur 20 MB/s), das Annehmen
+            // neuer Sätze wartet darauf nicht. Zusätzlicher Speicher: der komprimierte Teil.
+            let mut data = Vec::with_capacity(self.buf.len() / 3 + 1024);
+            data.extend_from_slice(MAGIC);
+            let (crc, bytes) = self.write_run_parallel(&mut data)?;
+            let records = self.index.len() as u64;
+            let target = path.clone();
+            self.pending = Some(std::thread::spawn(move || -> io::Result<u64> {
+                let mut file = BufWriter::with_capacity(1 << 20, File::create(&target)?);
+                file.write_all(&data)?;
+                drop(data);
+                let file = finish_run(file, records, bytes, &crc)?;
+                Ok(file.metadata()?.len())
+            }));
+            self.stats.runs += 1;
+        }
         self.runs.push(path);
         self.buf.clear();
         self.index.clear();
+        Ok(())
+    }
+
+    /// Wartet, bis der Teil im Hintergrund geschrieben ist, und meldet seinen Fehler.
+    fn wait_for_pending(&mut self) -> io::Result<()> {
+        if let Some(h) = self.pending.take() {
+            let len = match h.join() {
+                Ok(r) => r?,
+                Err(panic) => std::panic::resume_unwind(panic),
+            };
+            self.stats.run_bytes += len;
+        }
         Ok(())
     }
 
@@ -286,6 +311,7 @@ impl Sorter {
         mut self,
         mut sink: impl FnMut(&[u8]) -> io::Result<()>,
     ) -> io::Result<SortStats> {
+        self.wait_for_pending()?;
         self.sort_memory();
         if self.runs.is_empty() {
             for &(_, offset) in &self.index {
@@ -331,10 +357,30 @@ impl Sorter {
 
 impl Drop for Sorter {
     fn drop(&mut self) {
+        if let Some(h) = self.pending.take() {
+            let _ = h.join();
+        }
         if let Some(dir) = &self.dir {
             let _ = std::fs::remove_dir_all(dir);
         }
     }
+}
+
+/// Schluss eines Teils: Zahl der Sätze, Bytes, Prüfsumme. Daran erkennt das Lesen einen
+/// abgeschnittenen oder beschädigten Teil. Danach liegt der Teil sicher auf der Platte.
+fn finish_run(
+    mut file: BufWriter<File>,
+    records: u64,
+    bytes: u64,
+    crc: &flate2::Crc,
+) -> io::Result<File> {
+    file.write_all(&records.to_le_bytes())?;
+    file.write_all(&bytes.to_le_bytes())?;
+    file.write_all(&crc.sum().to_le_bytes())?;
+    file.flush()?;
+    let file = file.into_inner().map_err(|e| e.into_error())?;
+    file.sync_all()?;
+    Ok(file)
 }
 
 /// Liest einen Teil Satz für Satz und prüft am Ende Zahl, Länge und Prüfsumme.

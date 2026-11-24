@@ -36,11 +36,15 @@ Die drei Kriterien stehen in einer Zahl von 64 Bit: 31 Bit Contig (ohne Contig d
    Komprimiert wird in Stücken von 8 MB auf bis zu 8 Kernen zugleich: Jedes Stück beginnt ohne
    Vorgeschichte und endet mit einem Sync-Flush, nur das letzte schließt den Strom ab.
    Aneinandergehängt ist das ein gültiger Deflate-Strom wie bei pigz; das Lesen ist unverändert,
-   die Sätze sind dieselben. In `fq2bam` wartet das Ausrichten sonst bei jedem Teil von 2 GB
-   rund 10 s, bis der Schreiber wieder Blöcke annimmt (Cloud, ein Kern). `GC_SORT_PARALLEL=0`
-   schreibt wie bisher mit einem Kern. Gemessen (ganzes GRCh38, 421.564 Paare, 4 Kerne,
-   `--speicher-mb 64`, 4 Teile): Schreiben 2,45 s mit einem, 1,82 s mit vier Kernen; die BAM
-   ist gleich.
+   die Sätze sind dieselben. Der komprimierte Teil wird im Hintergrund auf die Platte
+   geschrieben, der Puffer nimmt sofort wieder Sätze an; erst der nächste Teil und das Ende
+   warten, bis er sicher auf der Platte liegt. Zusätzlicher Speicher: der komprimierte Teil
+   (rund ein Drittel des Puffers). In `fq2bam` stand das Ausrichten sonst bei jedem Teil still,
+   bis Komprimieren und Schreiben fertig waren; auf einer USB-SSD mit rund 20 MB/s sind das je
+   Teil von 2 GB über eine halbe Minute (am Mac beobachtet: 1 % CPU während eines Teils).
+   `GC_SORT_PARALLEL=0` schreibt wie bisher mit einem Kern und ohne Hintergrund. Gemessen (ganzes
+   GRCh38, 421.564 Paare, 4 Kerne, `--speicher-mb 64`, 4 Teile, schnelle Platte): Schreiben
+   2,45 s bisher, 1,82 s mit vier Kernen, 1,51 s zusätzlich im Hintergrund; die BAM ist gleich.
 4. Am Ende wird der Rest im Speicher sortiert. Gibt es keine Teile, wird er direkt geschrieben.
    Sonst laufen alle Teile und der Rest gemeinsam durch eine Vorrangschlange: Es kommt immer der
    Datensatz mit dem kleinsten Schlüssel, bei Gleichstand der aus dem früheren Teil. Weil die
