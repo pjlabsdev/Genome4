@@ -58,6 +58,7 @@ Auf keiner Seite steht eine Genauigkeits- oder Tempoaussage ohne Messung.
 - [Sortieren nach Ort mit festem Speicher](verfahren/sortieren.md)
 - [Duplikate markieren](verfahren/duplikate-markieren.md)
 - [BAM-Index](verfahren/bam-index.md)
+- [Panel-Alignment: Reads gegen viele ähnliche Sequenzen einer Genfamilie](verfahren/panel-alignment.md)
 
 ### Formate
 - [Ergebnis-Hülle `genome.<werkzeug>.vN`](formate/ergebnis-huelle.md)
