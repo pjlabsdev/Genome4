@@ -152,16 +152,11 @@ impl Sorter {
         let path = dir.join(format!("teil-{:06}.gcsort", self.runs.len()));
         let mut file = BufWriter::with_capacity(1 << 20, File::create(&path)?);
         file.write_all(MAGIC)?;
-        let mut crc = flate2::Crc::new();
-        let mut bytes = 0u64;
-        let mut enc = DeflateEncoder::new(file, Compression::fast());
-        for &(_, offset) in &self.index {
-            let rec = self.record_at(offset);
-            crc.update(rec);
-            bytes += rec.len() as u64;
-            enc.write_all(rec)?;
-        }
-        let mut file = enc.finish()?;
+        let (crc, bytes) = if std::env::var_os("GC_SORT_PARALLEL").is_some_and(|v| v == "0") {
+            self.write_run_serial(&mut file)?
+        } else {
+            self.write_run_parallel(&mut file)?
+        };
         // Schluss: Zahl der Sätze, Bytes, Prüfsumme. Daran erkennt das Lesen einen
         // abgeschnittenen oder beschädigten Teil.
         file.write_all(&(self.index.len() as u64).to_le_bytes())?;
@@ -176,6 +171,114 @@ impl Sorter {
         self.buf.clear();
         self.index.clear();
         Ok(())
+    }
+
+    /// Schreibt die sortierten Sätze als einen Deflate-Strom (bisheriger Weg, ein Kern).
+    fn write_run_serial(&self, file: &mut impl Write) -> io::Result<(flate2::Crc, u64)> {
+        let mut crc = flate2::Crc::new();
+        let mut bytes = 0u64;
+        let mut enc = DeflateEncoder::new(file, Compression::fast());
+        for &(_, offset) in &self.index {
+            let rec = self.record_at(offset);
+            crc.update(rec);
+            bytes += rec.len() as u64;
+            enc.write_all(rec)?;
+        }
+        enc.finish()?;
+        Ok((crc, bytes))
+    }
+
+    /// Wie `write_run_serial`, aber in Stücken von `SPILL_CHUNK` Bytes, die mehrere Kerne
+    /// zugleich komprimieren. Jedes Stück beginnt ohne Vorgeschichte und endet mit einem
+    /// Sync-Flush, nur das letzte schließt den Strom ab; aneinandergehängt ergeben sie einen
+    /// gültigen Deflate-Strom (wie bei pigz). Das Lesen bleibt unverändert. Das Ausrichten wartet
+    /// so nicht mehr viele Sekunden auf jeden Teil. Im Speicher liegen zusätzlich höchstens
+    /// `Kerne × SPILL_CHUNK` Bytes Rohdaten und ihre komprimierte Form.
+    fn write_run_parallel(&self, file: &mut impl Write) -> io::Result<(flate2::Crc, u64)> {
+        const SPILL_CHUNK: usize = 8 << 20;
+        // Stückgrenzen in `index`: jedes Stück fasst ganze Sätze bis rund SPILL_CHUNK Bytes.
+        let mut bounds = vec![0usize];
+        let mut size = 0usize;
+        for (i, &(_, offset)) in self.index.iter().enumerate() {
+            size += self.record_at(offset).len();
+            if size >= SPILL_CHUNK {
+                bounds.push(i + 1);
+                size = 0;
+            }
+        }
+        if *bounds.last().unwrap_or(&0) != self.index.len() || bounds.len() == 1 {
+            bounds.push(self.index.len());
+        }
+        let chunks: Vec<(usize, usize)> = bounds.windows(2).map(|w| (w[0], w[1])).collect();
+        let workers = std::thread::available_parallelism()
+            .map_or(1, usize::from)
+            .clamp(1, 8);
+        let mut crc = flate2::Crc::new();
+        let mut bytes = 0u64;
+        for (r, round) in chunks.chunks(workers).enumerate() {
+            let first = r * workers;
+            let done: Vec<io::Result<(Vec<u8>, flate2::Crc, u64)>> = std::thread::scope(|scope| {
+                let handles: Vec<_> = round
+                    .iter()
+                    .enumerate()
+                    .map(|(k, &(from, to))| {
+                        let last = first + k + 1 == chunks.len();
+                        scope.spawn(move || self.compress_chunk(from, to, last))
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| match h.join() {
+                        Ok(r) => r,
+                        Err(panic) => std::panic::resume_unwind(panic),
+                    })
+                    .collect()
+            });
+            for part in done {
+                let (data, part_crc, part_bytes) = part?;
+                file.write_all(&data)?;
+                crc.combine(&part_crc);
+                bytes += part_bytes;
+            }
+        }
+        Ok((crc, bytes))
+    }
+
+    /// Komprimiert die Sätze `index[from..to]` roh (Deflate ohne Kopf); `last` schließt den
+    /// Strom ab, sonst endet das Stück mit einem Sync-Flush auf einer Bytegrenze.
+    fn compress_chunk(
+        &self,
+        from: usize,
+        to: usize,
+        last: bool,
+    ) -> io::Result<(Vec<u8>, flate2::Crc, u64)> {
+        let mut raw = Vec::new();
+        for &(_, offset) in &self.index[from..to] {
+            raw.extend_from_slice(self.record_at(offset));
+        }
+        let mut crc = flate2::Crc::new();
+        crc.update(&raw);
+        let mut c = flate2::Compress::new(Compression::fast(), false);
+        let flush = if last {
+            flate2::FlushCompress::Finish
+        } else {
+            flate2::FlushCompress::Sync
+        };
+        let mut out = Vec::with_capacity(raw.len() / 2 + 1024);
+        loop {
+            let consumed = c.total_in() as usize;
+            let status = c
+                .compress_vec(&raw[consumed..], &mut out, flush)
+                .map_err(|e| io::Error::other(format!("Komprimieren: {e}")))?;
+            let all_in = c.total_in() as usize == raw.len();
+            let room_left = out.len() < out.capacity();
+            match status {
+                flate2::Status::StreamEnd => break,
+                _ if !last && all_in && room_left => break,
+                _ => out.reserve(out.capacity().max(1 << 16)),
+            }
+        }
+        Ok((out, crc, raw.len() as u64))
     }
 
     /// Gibt alle Sätze sortiert an `sink`, jeden mit seinem Längenfeld, und räumt die Teile weg.

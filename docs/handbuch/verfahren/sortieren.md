@@ -33,6 +33,14 @@ Die drei Kriterien stehen in einer Zahl von 64 Bit: 31 Bit Contig (ohne Contig d
 3. Würde der nächste Datensatz die Grenze `--speicher-mb` überschreiten, wird die Liste sortiert
    (nach Schlüssel, dann Stelle, also stabil) und der Inhalt in dieser Reihenfolge als Teil auf
    die Platte geschrieben ([Format](../formate/gcsort.md)). Der Puffer ist danach leer.
+   Komprimiert wird in Stücken von 8 MB auf bis zu 8 Kernen zugleich: Jedes Stück beginnt ohne
+   Vorgeschichte und endet mit einem Sync-Flush, nur das letzte schließt den Strom ab.
+   Aneinandergehängt ist das ein gültiger Deflate-Strom wie bei pigz; das Lesen ist unverändert,
+   die Sätze sind dieselben. In `fq2bam` wartet das Ausrichten sonst bei jedem Teil von 2 GB
+   rund 10 s, bis der Schreiber wieder Blöcke annimmt (Cloud, ein Kern). `GC_SORT_PARALLEL=0`
+   schreibt wie bisher mit einem Kern. Gemessen (ganzes GRCh38, 421.564 Paare, 4 Kerne,
+   `--speicher-mb 64`, 4 Teile): Schreiben 2,45 s mit einem, 1,82 s mit vier Kernen; die BAM
+   ist gleich.
 4. Am Ende wird der Rest im Speicher sortiert. Gibt es keine Teile, wird er direkt geschrieben.
    Sonst laufen alle Teile und der Rest gemeinsam durch eine Vorrangschlange: Es kommt immer der
    Datensatz mit dem kleinsten Schlüssel, bei Gleichstand der aus dem früheren Teil. Weil die
