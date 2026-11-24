@@ -120,6 +120,10 @@ enum Command {
         /// Ohne die Option bleiben die Reads unverändert.
         #[arg(long)]
         trimmen: bool,
+        /// Nur jede n-te Suffix-Array-Stichprobe des Index laden (Zweierpotenz). Spart
+        /// Arbeitsspeicher, kostet etwas Rechenzeit; die Ausgabe bleibt gleich.
+        #[arg(long, default_value_t = 1)]
+        sa_ausduennen: u32,
     },
     /// Paare trimmen wie fastp 1.4.0 und als FASTQ schreiben (für den Vergleich mit fastp;
     /// in der Kette trimmt `fq2bam --trimmen` ohne Zwischendateien).
@@ -619,6 +623,8 @@ struct Fq2bamRun<'a> {
     block_bases: u64,
     max_length: i64,
     trim: bool,
+    /// Nur jede n-te Suffix-Array-Stichprobe laden.
+    sa_thin: u32,
 }
 
 /// Zahlen von `flagstat` als JSON, für eine der beiden Gruppen.
@@ -847,7 +853,7 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<serde_json::Value> {
     let (trimmer, fm) = std::thread::scope(|scope| -> Result<_> {
         let planned = second.map(|second| scope.spawn(move || plan_trimming(run.fastq, second)));
         let st = gc_log::stage("fq2bam.index_laden", json!({}));
-        let fm = load_index(run.index);
+        let fm = load_index_thinned(run.index, run.sa_thin);
         if fm.is_ok() {
             st.finish(json!({}));
         }
@@ -1521,9 +1527,13 @@ fn encode_read(seq: &[u8]) -> Vec<u8> {
 }
 
 fn load_index(path: &std::path::Path) -> Result<gc_index::FmIndex> {
+    load_index_thinned(path, 1)
+}
+
+fn load_index_thinned(path: &std::path::Path, keep_every: u32) -> Result<gc_index::FmIndex> {
     let file = std::fs::File::open(path)
         .with_context(|| format!("Index {} nicht lesbar", path.display()))?;
-    gc_index::FmIndex::read(std::io::BufReader::with_capacity(1 << 20, file))
+    gc_index::FmIndex::read_thinned(std::io::BufReader::with_capacity(1 << 20, file), keep_every)
         .with_context(|| format!("Index {}", path.display()))
 }
 
@@ -2068,6 +2078,7 @@ fn main() -> Result<()> {
             max_laenge,
             log,
             trimmen,
+            sa_ausduennen,
         } => {
             let threads = if kerne == 0 {
                 std::thread::available_parallelism().map_or(1, usize::from)
@@ -2103,6 +2114,7 @@ fn main() -> Result<()> {
                 "block_basen": block_basen,
                 "max_laenge": max_laenge,
                 "trimmen": trimmen,
+                "sa_ausduennen": sa_ausduennen,
             }));
             gc_log::input_file("fastq", &fastq);
             if let Some(p) = &fastq2 {
@@ -2121,6 +2133,7 @@ fn main() -> Result<()> {
                 block_bases: block_basen,
                 max_length: max_laenge,
                 trim: trimmen,
+                sa_thin: sa_ausduennen,
             };
             match fq2bam(&run) {
                 Ok(mut result) => {
