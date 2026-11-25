@@ -24,7 +24,7 @@ pub const MAX_READ_LENGTH: usize = 1000;
 /// Größte Abdeckung mit eigenem Fach in der Verteilung.
 pub const MAX_DEPTH: usize = 1000;
 /// Breite der Fächer entlang eines Contigs.
-pub const BIN: u64 = 1_000_000;
+pub const BIN: u64 = 100_000;
 /// Schwellen, für die je Contig der Anteil der Stellen mit mindestens so viel Abdeckung zählt.
 pub const DEPTH_STEPS: [u64; 4] = [1, 10, 20, 30];
 
@@ -47,6 +47,13 @@ pub struct ContigQc {
     pub covered: [u64; 4],
     /// Summe der Abdeckung je Fach von `BIN` Stellen.
     pub bins: Vec<u64>,
+    /// Je Fach (nach dem Anfang des Reads): Hauptzeilen mit Ort, davon Duplikate, und Hauptzeilen
+    /// ohne Duplikate mit MAPQ 0.
+    pub bin_reads: Vec<u32>,
+    pub bin_dups: Vec<u32>,
+    pub bin_mapq0: Vec<u32>,
+    /// Verteilung der Abdeckung je Stelle; nur für Chromosomen 1–22, X, Y und M, sonst leer.
+    pub depth_hist: Vec<u64>,
     /// Summe der MAPQ der Hauptzeilen mit Ort ohne Duplikate (für den Mittelwert).
     pub mapq_sum: u64,
     pub mapq_reads: u64,
@@ -119,6 +126,12 @@ impl std::fmt::Display for NotSorted {
 
 impl std::error::Error for NotSorted {}
 
+/// Chromosom 1–22, X, Y oder M (mit oder ohne `chr`).
+pub fn is_main(name: &str) -> bool {
+    let n = name.strip_prefix("chr").unwrap_or(name);
+    is_autosome(name) || matches!(n, "X" | "Y" | "M" | "MT")
+}
+
 fn is_autosome(name: &str) -> bool {
     let n = name.strip_prefix("chr").unwrap_or(name);
     matches!(n.parse::<u32>(), Ok(1..=22)) && !n.starts_with('0')
@@ -130,12 +143,23 @@ impl BamQc {
         BamQc {
             contigs: contigs
                 .into_iter()
-                .map(|(name, length)| ContigQc {
-                    autosome: is_autosome(&name),
-                    bins: vec![0; length.div_ceil(BIN) as usize],
-                    name,
-                    length,
-                    ..ContigQc::default()
+                .map(|(name, length)| {
+                    let n_bins = length.div_ceil(BIN) as usize;
+                    ContigQc {
+                        autosome: is_autosome(&name),
+                        depth_hist: if is_main(&name) {
+                            vec![0; MAX_DEPTH + 1]
+                        } else {
+                            Vec::new()
+                        },
+                        bins: vec![0; n_bins],
+                        bin_reads: vec![0; n_bins],
+                        bin_dups: vec![0; n_bins],
+                        bin_mapq0: vec![0; n_bins],
+                        name,
+                        length,
+                        ..ContigQc::default()
+                    }
                 })
                 .collect(),
             flags: FlagStats::default(),
@@ -304,6 +328,12 @@ impl BamQc {
         if primary {
             c.reads += 1;
             c.duplicates += duplicate as u64;
+            let bin = ((pos / BIN) as usize).min(c.bin_reads.len().saturating_sub(1));
+            if let Some(n) = c.bin_reads.get_mut(bin) {
+                *n += 1;
+                c.bin_dups[bin] += duplicate as u32;
+                c.bin_mapq0[bin] += (!duplicate && mapq == 0) as u32;
+            }
             if !duplicate {
                 self.mapq[mapq as usize] += 1;
                 c.mapq_sum += mapq as u64;
@@ -390,6 +420,9 @@ impl BamQc {
                 if c.autosome {
                     self.depth_autosomes[0] += to - p;
                 }
+                if let Some(h) = c.depth_hist.first_mut() {
+                    *h += to - p;
+                }
                 p = to;
                 break;
             }
@@ -405,6 +438,9 @@ impl BamQc {
             }
             if c.autosome {
                 self.depth_autosomes[(d as usize).min(MAX_DEPTH)] += 1;
+            }
+            if !c.depth_hist.is_empty() {
+                c.depth_hist[(d as usize).min(MAX_DEPTH)] += 1;
             }
             p += 1;
         }
@@ -423,9 +459,12 @@ impl BamQc {
     fn skip_contigs(&mut self, to: i64) {
         let from = (self.tid + 1).max(0);
         for t in from..to.min(self.contigs.len() as i64) {
-            let c = &self.contigs[t as usize];
+            let c = &mut self.contigs[t as usize];
             if c.autosome {
                 self.depth_autosomes[0] += c.length;
+            }
+            if let Some(h) = c.depth_hist.first_mut() {
+                *h += c.length;
             }
         }
     }
@@ -588,6 +627,12 @@ mod tests {
         assert_eq!(qc.mismatches, 2);
         assert_eq!(qc.deleted_bases, 2);
         assert_eq!(qc.nm_sum, 4);
+        assert_eq!(c.bin_reads[0], 3);
+        assert_eq!(c.bin_dups[0], 1);
+        assert_eq!(c.bin_mapq0[0], 0);
+        assert_eq!(c.depth_hist[1], 12);
+        assert_eq!(c.depth_hist[0], 85);
+        assert_eq!(qc.contigs[1].depth_hist[0], 50);
         assert_eq!(qc.insert[15], 1);
         assert_eq!(qc.tags[u16::from_le_bytes(*b"NM") as usize], 2);
         assert_eq!(qc.tags[u16::from_le_bytes(*b"RG") as usize], 1);

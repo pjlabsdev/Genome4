@@ -193,6 +193,10 @@ pub fn facts(
             });
             if main {
                 v["faecher"] = json!(c.bins);
+                v["faecher_reads"] = json!(c.bin_reads);
+                v["faecher_duplikate"] = json!(c.bin_dups);
+                v["faecher_mapq0"] = json!(c.bin_mapq0);
+                v["verteilung"] = sparse(&c.depth_hist);
             }
             v
         })
@@ -342,18 +346,6 @@ fn l(de: &str, en: &str) -> String {
     format!("<span class=\"de\">{de}</span><span class=\"en\">{en}</span>")
 }
 
-/// Wie [`l`], für Text in SVG.
-fn ls(de: &str, en: &str) -> String {
-    if de == en {
-        return esc(de);
-    }
-    format!(
-        "<tspan class=\"de\">{}</tspan><tspan class=\"en\">{}</tspan>",
-        esc(de),
-        esc(en)
-    )
-}
-
 fn group_digits(int: &str, sep: char) -> String {
     let (sign, digits) = match int.strip_prefix('-') {
         Some(d) => ("-", d),
@@ -387,11 +379,6 @@ fn num_pair(x: f64, d: usize) -> (String, String) {
 fn num(x: f64, d: usize) -> String {
     let (de, en) = num_pair(x, d);
     l(&de, &en)
-}
-
-fn num_s(x: f64, d: usize) -> String {
-    let (de, en) = num_pair(x, d);
-    ls(&de, &en)
 }
 
 fn int(v: &Value) -> String {
@@ -453,212 +440,6 @@ fn dense(v: &Value, max: usize) -> Vec<u64> {
         }
     }
     out
-}
-
-const W: f64 = 760.0;
-const H: f64 = 220.0;
-const ML: f64 = 56.0;
-const MR: f64 = 12.0;
-const MT: f64 = 14.0;
-const MB: f64 = 34.0;
-
-/// Achsen mit Gitterlinien. `ymax`: oberster Wert, `yfmt` setzt die Beschriftung.
-fn axes(out: &mut String, ymax: f64, yfmt: &dyn Fn(f64) -> String, ylabel: &str) {
-    let ph = H - MT - MB;
-    for i in 0..=4 {
-        let v = ymax * i as f64 / 4.0;
-        let y = MT + ph - ph * i as f64 / 4.0;
-        let _ = write!(
-            out,
-            "<line x1=\"{ML}\" x2=\"{}\" y1=\"{y:.1}\" y2=\"{y:.1}\" class=\"grid\"/><text x=\"{}\" y=\"{:.1}\" class=\"ax\" text-anchor=\"end\">{}</text>",
-            W - MR,
-            ML - 6.0,
-            y + 4.0,
-            yfmt(v)
-        );
-    }
-    let _ = write!(
-        out,
-        "<text x=\"12\" y=\"{:.1}\" class=\"ax\" transform=\"rotate(-90 12 {:.1})\" text-anchor=\"middle\">{ylabel}</text>",
-        MT + ph / 2.0,
-        MT + ph / 2.0
-    );
-}
-
-fn nice_max(x: f64) -> f64 {
-    if x <= 0.0 {
-        return 1.0;
-    }
-    let p = 10f64.powf(x.log10().floor());
-    for m in [1.0, 2.0, 2.5, 5.0, 10.0] {
-        if m * p >= x {
-            return m * p;
-        }
-    }
-    10.0 * p
-}
-
-fn pct_axis(v: f64) -> String {
-    let d = if v > 0.0 && v < 0.02 { 1 } else { 0 };
-    let (de, en) = num_pair(v * 100.0, d);
-    ls(&format!("{de} %"), &format!("{en} %"))
-}
-
-/// Säulen mit Beschriftung darunter; Werte als Anteile.
-fn svg_bars(bars: &[(String, f64)], ylabel: &str, highlight_last: bool) -> String {
-    let ymax = nice_max(bars.iter().map(|b| b.1).fold(0.0, f64::max));
-    let mut s = format!("<svg viewBox=\"0 0 {W} {H}\" class=\"chart\" role=\"img\">");
-    axes(&mut s, ymax, &pct_axis, ylabel);
-    let pw = W - ML - MR;
-    let ph = H - MT - MB;
-    let n = bars.len().max(1) as f64;
-    let bw = pw / n;
-    for (i, (label, v)) in bars.iter().enumerate() {
-        let h = ph * v / ymax;
-        let x = ML + bw * i as f64;
-        let cls = if highlight_last && i + 1 == bars.len() {
-            "bar2"
-        } else {
-            "bar"
-        };
-        let _ = write!(
-            s,
-            "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{h:.1}\" class=\"{cls}\"><title>{}</title></rect><text x=\"{:.1}\" y=\"{:.1}\" class=\"ax\" text-anchor=\"middle\">{label}</text>",
-            x + bw * 0.12,
-            MT + ph - h,
-            bw * 0.76,
-            esc(&format!("{:.3} %", v * 100.0)),
-            x + bw / 2.0,
-            H - MB + 16.0,
-        );
-    }
-    s.push_str("</svg>");
-    s
-}
-
-/// Fläche über einer Verteilung `hist[0..=xmax]` als Anteile; x-Achse mit Werten.
-fn svg_area(
-    hist: &[u64],
-    xmax: usize,
-    ylabel: &str,
-    xlabel: &str,
-    marks: &[(f64, String)],
-) -> String {
-    let total: u64 = hist.iter().sum();
-    let total = total.max(1) as f64;
-    let xmax = xmax.max(1).min(hist.len().saturating_sub(1).max(1));
-    let values: Vec<f64> = (0..=xmax)
-        .map(|i| hist.get(i).copied().unwrap_or(0) as f64 / total)
-        .collect();
-    let ymax = nice_max(values.iter().copied().fold(0.0, f64::max));
-    let mut s = format!("<svg viewBox=\"0 0 {W} {H}\" class=\"chart\" role=\"img\">");
-    axes(&mut s, ymax, &pct_axis, ylabel);
-    let pw = W - ML - MR;
-    let ph = H - MT - MB;
-    let xp = |i: f64| ML + pw * i / xmax as f64;
-    let mut path = format!("M{:.1},{:.1}", xp(0.0), MT + ph);
-    for (i, v) in values.iter().enumerate() {
-        let _ = write!(path, " L{:.1},{:.1}", xp(i as f64), MT + ph - ph * v / ymax);
-    }
-    let _ = write!(path, " L{:.1},{:.1} Z", xp(xmax as f64), MT + ph);
-    let _ = write!(s, "<path d=\"{path}\" class=\"area\"/>");
-    let step = nice_max(xmax as f64 / 8.0).max(1.0);
-    let mut t = 0.0;
-    while t <= xmax as f64 + 1e-9 {
-        let _ = write!(
-            s,
-            "<text x=\"{:.1}\" y=\"{:.1}\" class=\"ax\" text-anchor=\"middle\">{}</text>",
-            xp(t),
-            H - MB + 16.0,
-            num_s(t, 0)
-        );
-        t += step;
-    }
-    for (x, label) in marks {
-        if *x <= xmax as f64 {
-            let _ = write!(
-                s,
-                "<line x1=\"{0:.1}\" x2=\"{0:.1}\" y1=\"{1}\" y2=\"{2:.1}\" class=\"mark\"/><text x=\"{3:.1}\" y=\"{4}\" class=\"ax mk\">{label}</text>",
-                xp(*x),
-                MT,
-                MT + ph,
-                xp(*x) + 4.0,
-                MT + 10.0
-            );
-        }
-    }
-    let _ = write!(
-        s,
-        "<text x=\"{:.1}\" y=\"{:.1}\" class=\"ax\" text-anchor=\"middle\">{xlabel}</text>",
-        ML + pw / 2.0,
-        H - 4.0
-    );
-    s.push_str("</svg>");
-    s
-}
-
-/// Abdeckung entlang der Chromosomen in Fächern, aneinandergereiht.
-fn svg_genome(contigs: &[&Value], bin: f64, ymax: f64) -> String {
-    let total: f64 = contigs
-        .iter()
-        .map(|c| c["laenge"].as_f64().unwrap_or(0.0))
-        .sum();
-    if total <= 0.0 {
-        return String::new();
-    }
-    let mut s = format!("<svg viewBox=\"0 0 {W} {H}\" class=\"chart\" role=\"img\">");
-    let ymax = nice_max(ymax);
-    axes(
-        &mut s,
-        ymax,
-        &|v| {
-            let (de, en) = num_pair(v, if ymax < 10.0 { 1 } else { 0 });
-            ls(&format!("{de}x"), &format!("{en}x"))
-        },
-        &ls("Abdeckung", "Coverage"),
-    );
-    let pw = W - ML - MR;
-    let ph = H - MT - MB;
-    let mut start = 0.0;
-    for (i, c) in contigs.iter().enumerate() {
-        let len = c["laenge"].as_f64().unwrap_or(0.0);
-        let x0 = ML + pw * start / total;
-        let x1 = ML + pw * (start + len) / total;
-        if i % 2 == 1 {
-            let _ = write!(
-                s,
-                "<rect x=\"{x0:.1}\" y=\"{MT}\" width=\"{:.1}\" height=\"{ph:.1}\" class=\"band\"/>",
-                x1 - x0
-            );
-        }
-        let name = c["name"].as_str().unwrap_or("");
-        let short = name.strip_prefix("chr").unwrap_or(name);
-        if x1 - x0 > 7.0 * short.chars().count() as f64 + 2.0 {
-            let _ = write!(
-                s,
-                "<text x=\"{:.1}\" y=\"{:.1}\" class=\"ax\" text-anchor=\"middle\">{}</text>",
-                (x0 + x1) / 2.0,
-                H - MB + 16.0,
-                esc(short)
-            );
-        }
-        let mut pts = String::new();
-        for (k, sum) in c["faecher"].as_array().into_iter().flatten().enumerate() {
-            let from = k as f64 * bin;
-            let width = (len - from).min(bin);
-            if width <= 0.0 {
-                continue;
-            }
-            let depth = sum.as_f64().unwrap_or(0.0) / width;
-            let x = ML + pw * (start + from + width / 2.0) / total;
-            let y = MT + ph - ph * depth.min(ymax) / ymax;
-            let _ = write!(pts, "{x:.1},{y:.1} ");
-        }
-        let _ = write!(s, "<polyline points=\"{pts}\" class=\"line\"/>");
-        start += len;
-    }
-    s.push_str("</svg>");
-    s
 }
 
 fn tile(value: &str, de: &str, en: &str, note: &str) -> String {
@@ -739,43 +520,132 @@ fn group_name(g: &str) -> (&'static str, &'static str) {
 /// Summen einer Art von Contigs: Länge, Reads, Duplikate, Basen, Stellen ab Schwelle, Contigs.
 type GroupSum = (u64, u64, u64, u64, [u64; 4], u64);
 
-const CSS: &str = r#"
-:root{--fg:#1d1d1f;--mut:#6e6e73;--bg:#fbfbfd;--card:#fff;--line:#e5e5ea;--acc:#2a6fdb;--acc2:#e07b39;--band:#f2f4f8}
-@media (prefers-color-scheme:dark){:root{--fg:#f2f2f7;--mut:#a1a1a6;--bg:#111114;--card:#1c1c20;--line:#333338;--acc:#5b9cff;--acc2:#ff9f5a;--band:#222228}}
-*{box-sizing:border-box}body{margin:0;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--fg);background:var(--bg)}
-main{max-width:1040px;margin:0 auto;padding:28px 20px 60px}
-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
-h1{font-size:26px;margin:0 0 4px}h2{font-size:19px;margin:34px 0 10px;padding-top:6px;border-top:1px solid var(--line)}h3{font-size:15px;margin:18px 0 6px}
-.sub{color:var(--mut);font-size:13px;word-break:break-all}
-.lang button{border:1px solid var(--line);background:var(--card);color:var(--fg);padding:5px 12px;font:inherit;font-size:13px;cursor:pointer}
-.lang button:first-child{border-radius:7px 0 0 7px}.lang button:last-child{border-radius:0 7px 7px 0;border-left:0}
-.lang button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
-body.en .de{display:none}body:not(.en) .en{display:none}
-.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin:18px 0}
-.tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
-.tile .v{font-size:22px;font-weight:600}.tile .k{font-size:13px}.tile .n{font-size:12px;color:var(--mut)}
-table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:13.5px;margin:6px 0 4px}
-th,td{padding:5px 9px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{font-weight:600;background:var(--band)}
-td.r,th.r{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-tr:last-child td{border-bottom:0}
-code{font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}
-.note{color:var(--mut);font-size:13px;margin:4px 0 0}
-.chart{width:100%;height:auto;background:var(--card);border:1px solid var(--line);border-radius:8px;margin:6px 0}
-.chart .grid{stroke:var(--line);stroke-width:1}.chart .ax{fill:var(--mut);font-size:11px}
-.chart .bar{fill:var(--acc)}.chart .bar2{fill:var(--acc2)}.chart .area{fill:var(--acc);fill-opacity:.35;stroke:var(--acc);stroke-width:1.2}
-.chart .line{fill:none;stroke:var(--acc);stroke-width:1.1}.chart .band{fill:var(--band)}.chart .mark{stroke:var(--acc2);stroke-dasharray:3 3}.chart .mk{fill:var(--acc2)}
-details{margin:6px 0}summary{cursor:pointer;color:var(--acc)}
-footer{margin-top:40px;color:var(--mut);font-size:12px}
-@media print{.lang{display:none}body{background:#fff}}
-"#;
+const CSS: &str = include_str!("bericht/seite.css");
+const JS: &str = include_str!("bericht/seite.js");
 
-const JS: &str = r#"
-function setLang(x){document.body.classList.toggle('en',x==='en');document.documentElement.lang=x;
-document.querySelectorAll('.lang button').forEach(b=>b.classList.toggle('on',b.dataset.l===x));
-try{localStorage.setItem('genome.lang',x)}catch(e){}}
-(function(){var x='de';try{x=localStorage.getItem('genome.lang')||'de'}catch(e){}
-setLang(x==='en'?'en':'de')})();
-"#;
+fn round_to(x: f64, d: i32) -> f64 {
+    let f = 10f64.powi(d);
+    (x * f).round() / f
+}
+
+/// Daten der Grafiken, aus der Faktendatei verdichtet: je Chromosom die Fächer als mittlere
+/// Abdeckung und Anteile, Verteilungen als dichte Felder bis zu einem sinnvollen Rand.
+fn viz_data(f: &Value) -> Value {
+    let cov = &f["abdeckung"]["autosomen"];
+    let auto = cov["mittel"].as_f64().unwrap_or(0.0);
+    let bin = f["abdeckung"]["fach_basen"]
+        .as_f64()
+        .unwrap_or(gc_bam::qc::BIN as f64);
+    let depth_cut = ((auto * 2.5).ceil() as usize).clamp(10, gc_bam::qc::MAX_DEPTH);
+    let mut chromosomes = Vec::new();
+    for c in f["abdeckung"]["contigs"].as_array().into_iter().flatten() {
+        if !matches!(
+            c["gruppe"].as_str(),
+            Some("autosom" | "geschlecht" | "mito")
+        ) {
+            continue;
+        }
+        let len = c["laenge"].as_f64().unwrap_or(0.0);
+        let arr = |k: &str| -> Vec<f64> {
+            c[k].as_array()
+                .into_iter()
+                .flatten()
+                .map(|v| v.as_f64().unwrap_or(0.0))
+                .collect()
+        };
+        let (sums, reads, dups, mq0) = (
+            arr("faecher"),
+            arr("faecher_reads"),
+            arr("faecher_duplikate"),
+            arr("faecher_mapq0"),
+        );
+        let depth: Vec<f64> = sums
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let width = (len - i as f64 * bin).min(bin).max(1.0);
+                round_to(s / width, 2)
+            })
+            .collect();
+        let ratio = |a: &[f64], b: &[f64], d: i32| -> Vec<f64> {
+            a.iter()
+                .zip(b)
+                .map(|(x, n)| if *n > 0.0 { round_to(x / n, d) } else { 0.0 })
+                .collect()
+        };
+        let non_dup: Vec<f64> = reads.iter().zip(&dups).map(|(r, d)| r - d).collect();
+        let mean = c["mittel"].as_f64().unwrap_or(0.0);
+        let cut = ((auto.max(mean) * 2.5).ceil() as usize).clamp(10, gc_bam::qc::MAX_DEPTH);
+        let hist = dense(&c["verteilung"], gc_bam::qc::MAX_DEPTH);
+        let len_u = c["laenge"].as_u64().unwrap_or(0);
+        let ab: Vec<Value> = (0..4)
+            .map(|i| share(c["stellen_ab"][i].as_u64().unwrap_or(0), len_u))
+            .collect();
+        chromosomes.push(json!({
+            "name": c["name"],
+            "laenge": len_u,
+            "mittel": round_to(mean, 3),
+            "reads": c["reads"],
+            "duplikate": c["duplikate"],
+            "mapq": c["mapq_mittel"],
+            "ab": ab,
+            "abdeckung": depth,
+            "fach_reads": reads,
+            "mapq0": ratio(&mq0, &non_dup, 4),
+            "dup": ratio(&dups, &reads, 4),
+            "verteilung": if hist.iter().any(|v| *v > 0) { json!(hist[..=cut]) } else { Value::Null },
+        }));
+    }
+    let mapq = dense(&f["mapq"]["verteilung"], 255);
+    let range = |a: usize, b: usize| mapq[a..=b].iter().sum::<u64>();
+    let mapq_bins: Vec<Value> = [
+        ("0", 0, 0),
+        ("1–9", 1, 9),
+        ("10–19", 10, 19),
+        ("20–29", 20, 29),
+        ("30–39", 30, 39),
+        ("40–49", 40, 49),
+        ("50–59", 50, 59),
+        ("≥ 60", 60, 255),
+    ]
+    .iter()
+    .map(|(label, a, b)| json!({ "label": label, "n": range(*a, *b) }))
+    .collect();
+    let ins = &f["insertgroesse"]["kennzahlen"];
+    let insert = if ins["n"].as_u64().unwrap_or(0) > 0 {
+        let hist = dense(&f["insertgroesse"]["verteilung"], gc_bam::qc::MAX_INSERT);
+        let p95 = ins["p95"].as_f64().unwrap_or(1000.0);
+        let cut = ((p95 * 1.4) as usize).clamp(50, gc_bam::qc::MAX_INSERT - 1);
+        json!({ "verteilung": hist[..=cut], "median": ins["median"] })
+    } else {
+        Value::Null
+    };
+    let lengths = dense(&f["read_laenge"]["verteilung"], gc_bam::qc::MAX_READ_LENGTH);
+    let read_length = if lengths.iter().filter(|c| **c > 0).count() > 1 {
+        let maxlen = lengths.iter().rposition(|c| *c > 0).unwrap_or(1);
+        json!(lengths[..=maxlen])
+    } else {
+        Value::Null
+    };
+    let depth = dense(&cov["verteilung"], gc_bam::qc::MAX_DEPTH);
+    let total: u64 = depth.iter().sum();
+    let beyond: u64 = depth[depth_cut + 1..].iter().sum();
+    json!({
+        "autosomen_mittel": auto,
+        "fach": bin,
+        "zusammenfassen": ((1_000_000.0 / bin).round() as usize).max(1),
+        "chromosomen": chromosomes,
+        "mapq": mapq_bins,
+        "insert": insert,
+        "read_laenge": read_length,
+        "tiefe": {
+            "verteilung": depth[..=depth_cut],
+            "median": cov["median"],
+            "ab_ende": beyond,
+            "stellen": total,
+        },
+    })
+}
 
 /// Setzt die HTML-Seite aus der Faktendatei.
 pub fn html(f: &Value) -> String {
@@ -794,6 +664,7 @@ pub fn html(f: &Value) -> String {
     let passed = &f["saetze"]["bestanden"];
     let cov = &f["abdeckung"]["autosomen"];
     let lauf = &f["lauf"];
+    let viz = viz_data(f);
 
     let _ = write!(
         s,
@@ -899,6 +770,37 @@ pub fn html(f: &Value) -> String {
         &l("aus der Abdeckung von X und Y", "from X and Y coverage"),
     ));
     s.push_str("</div>");
+
+    // Genom auf einen Blick und Chromosomen im Detail.
+    let _ = write!(
+        s,
+        "<h2>{}</h2><p class=\"note\">{}</p><div class=\"viz\" id=\"v-karyo\"></div><div class=\"legend\"><span>{}</span><span class=\"ramp\"></span><span>{}</span><span><i class=\"sw\" style=\"background:var(--nodata)\"></i>{}</span></div>",
+        l("Das Genom auf einen Blick", "The genome at a glance"),
+        l(
+            "Jede Leiste ist ein Chromosom, jedes Feld 1 Mio. Basen. Die Farbe zeigt die Abdeckung im Verhältnis zum Mittel der Autosomen. Rechts die mittlere Abdeckung. Ein Klick öffnet das Chromosom im Detail.",
+            "Each bar is a chromosome, each cell 1 million bases. Colour shows coverage relative to the autosome mean. Mean coverage on the right. Click to open the chromosome in detail."
+        ),
+        l("weniger (0x)", "less (0x)"),
+        l("mehr (2× Mittel)", "more (2× mean)"),
+        l("keine Reads (N-Strecken)", "no reads (N gaps)")
+    );
+    let _ = write!(
+        s,
+        "<h3>{}</h3><div class=\"viz\" id=\"v-rel\"></div><p class=\"note\">{}</p>",
+        l(
+            "Abdeckung je Chromosom im Verhältnis zu den Autosomen",
+            "Coverage per chromosome relative to the autosomes"
+        ),
+        l(
+            "1,0 entspricht zwei Kopien. Bei XY liegen X und Y nahe 0,5 (eine Kopie); Y liegt oft darunter, weil große Teile von Y nicht eindeutig kartierbar sind. chrM ist abgeschnitten (viele Mitochondrien je Zelle).",
+            "1.0 means two copies. In XY, X and Y are near 0.5 (one copy); Y is often lower because much of Y cannot be mapped uniquely. chrM is clipped (many mitochondria per cell)."
+        )
+    );
+    let _ = write!(
+        s,
+        "<h2 id=\"chromosomen\">{}</h2><div class=\"chips\" id=\"v-chips\"></div><div class=\"detail\" id=\"v-detail\"></div>",
+        l("Chromosomen im Detail", "Chromosomes in detail")
+    );
 
     // Datei und Kopf.
     let _ = write!(
@@ -1210,23 +1112,13 @@ pub fn html(f: &Value) -> String {
             "Length and quality over all primary reads. Mismatches = NM minus inserted and deleted bases, over all mapped records without duplicates and secondary lines."
         )
     );
-    let lengths = dense(&f["read_laenge"]["verteilung"], gc_bam::qc::MAX_READ_LENGTH);
-    let distinct = lengths.iter().filter(|c| **c > 0).count();
-    if distinct > 1 {
-        let maxlen = lengths.iter().rposition(|c| *c > 0).unwrap_or(1);
+    if viz["read_laenge"].is_array() {
         let _ = write!(
             s,
-            "<h3>{}</h3>{}",
+            "<h3>{}</h3><div class=\"viz\" id=\"v-readlen\"></div>",
             l(
                 "Verteilung der Read-Längen (nach dem Trimmen)",
                 "Read length distribution (after trimming)"
-            ),
-            svg_area(
-                &lengths,
-                maxlen,
-                &ls("Anteil", "Share"),
-                &ls("Länge in Basen", "Length in bases"),
-                &[]
             )
         );
     }
@@ -1240,25 +1132,7 @@ pub fn html(f: &Value) -> String {
             "How certain the location is (MAPQ)"
         )
     );
-    let mapq = dense(&f["mapq"]["verteilung"], 255);
-    let mq_total: u64 = mapq.iter().sum();
-    let mq_total = mq_total.max(1) as f64;
-    let range = |a: usize, b: usize| mapq[a..=b.min(255)].iter().sum::<u64>() as f64 / mq_total;
-    let bars = vec![
-        ("0".to_string(), range(0, 0)),
-        ("1–9".to_string(), range(1, 9)),
-        ("10–19".to_string(), range(10, 19)),
-        ("20–29".to_string(), range(20, 29)),
-        ("30–39".to_string(), range(30, 39)),
-        ("40–49".to_string(), range(40, 49)),
-        ("50–59".to_string(), range(50, 59)),
-        ("≥ 60".to_string(), range(60, 255)),
-    ];
-    s.push_str(&svg_bars(
-        &bars,
-        &ls("Anteil der Reads", "Share of reads"),
-        true,
-    ));
+    s.push_str("<div class=\"viz\" id=\"v-mapq\"></div>");
     let _ = write!(
         s,
         "<p class=\"note\">{} {} · MAPQ 0: {} · MAPQ ≥ 20: {} · MAPQ 60: {}</p>",
@@ -1284,20 +1158,7 @@ pub fn html(f: &Value) -> String {
     let ins = &f["insertgroesse"]["kennzahlen"];
     if ins["n"].as_u64().unwrap_or(0) > 0 {
         let _ = write!(s, "<h2>{}</h2>", l("Insertgröße", "Insert size"));
-        let hist = dense(&f["insertgroesse"]["verteilung"], gc_bam::qc::MAX_INSERT);
-        let p95 = ins["p95"].as_u64().unwrap_or(1000) as f64;
-        let xmax = nice_max(p95 * 1.3).min(gc_bam::qc::MAX_INSERT as f64) as usize;
-        let marks = vec![(
-            ins["median"].as_f64().unwrap_or(0.0),
-            ls("Median", "median"),
-        )];
-        s.push_str(&svg_area(
-            &hist[..gc_bam::qc::MAX_INSERT],
-            xmax,
-            &ls("Anteil der Paare", "Share of pairs"),
-            &ls("Insertgröße in Basen", "Insert size in bases"),
-            &marks,
-        ));
+        s.push_str("<div class=\"viz\" id=\"v-insert\"></div>");
         let _ = write!(
             s,
             "<p class=\"note\">{}: {} · {}: {} · {}: {} ± {} · 5–95 %: {}–{} · {}: {}</p>",
@@ -1321,51 +1182,16 @@ pub fn html(f: &Value) -> String {
     // Abdeckung.
     let _ = write!(s, "<h2>{}</h2>", l("Abdeckung", "Coverage"));
     let mean = cov["mittel"].as_f64().unwrap_or(0.0);
-    let main: Vec<&Value> = f["abdeckung"]["contigs"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|c| matches!(c["gruppe"].as_str(), Some("autosom" | "geschlecht")))
-        .collect();
     let _ = write!(
         s,
-        "<h3>{}</h3>{}",
-        l(
-            "Entlang des Genoms (Mittel je 1 Mio. Basen)",
-            "Along the genome (mean per 1 million bases)"
-        ),
-        svg_genome(
-            &main,
-            f["abdeckung"]["fach_basen"].as_f64().unwrap_or(1e6),
-            (mean * 2.0).max(1.0)
-        )
-    );
-    let _ = write!(
-        s,
-        "<p class=\"note\">{}</p>",
-        l(
-            "Einbrüche auf 0 sind meist N-Strecken der Referenz (Zentromere, kurze Arme von 13, 14, 15, 21, 22). Werte über dem doppelten Mittel sind abgeschnitten.",
-            "Drops to 0 are mostly N gaps of the reference (centromeres, short arms of 13, 14, 15, 21, 22). Values above twice the mean are cut off."
-        )
-    );
-    let depth = dense(&cov["verteilung"], gc_bam::qc::MAX_DEPTH);
-    let xmax = ((mean * 2.5).ceil() as usize).clamp(10, gc_bam::qc::MAX_DEPTH);
-    let _ = write!(
-        s,
-        "<h3>{}</h3>{}",
+        "<h3>{}</h3><div class=\"viz\" id=\"v-depth\"></div><h3>{}</h3><div class=\"viz\" id=\"v-depth-cum\"></div>",
         l(
             "Verteilung der Abdeckung je Stelle (Autosomen)",
             "Per-position coverage distribution (autosomes)"
         ),
-        svg_area(
-            &depth,
-            xmax,
-            &ls("Anteil der Stellen", "Share of positions"),
-            &ls("Abdeckung", "Coverage"),
-            &[(
-                cov["median"].as_f64().unwrap_or(0.0),
-                ls("Median", "median")
-            )]
+        l(
+            "Anteil der Stellen mit mindestens so viel Abdeckung (Autosomen)",
+            "Share of positions with at least this coverage (autosomes)"
         )
     );
     let _ = write!(
@@ -1426,14 +1252,20 @@ pub fn html(f: &Value) -> String {
             c["basen"].as_u64().unwrap_or(0),
         );
         if matches!(g, "autosom" | "geschlecht" | "mito") {
-            s.push_str(&contig_row(
-                esc(c["name"].as_str().unwrap_or("")),
+            let name = esc(c["name"].as_str().unwrap_or(""));
+            let line = contig_row(
+                name.clone(),
                 len,
                 reads,
                 dups,
                 bases,
                 covered,
                 c["mapq_mittel"].as_f64(),
+            );
+            s.push_str(&line.replacen(
+                "<tr>",
+                &format!("<tr class=\"pick\" data-c=\"{name}\">"),
+                1,
             ));
         } else {
             let entry = match others.iter_mut().find(|o| o.0 == g) {
@@ -1747,7 +1579,14 @@ pub fn html(f: &Value) -> String {
         ),
         SCHEMA
     );
-    let _ = writeln!(s, "</main><script>{JS}</script></body></html>");
+    // Daten der Grafiken; `</` darf im Skript-Block nicht vorkommen.
+    let data = serde_json::to_string(&viz)
+        .unwrap_or_else(|_| "{}".into())
+        .replace("</", "<\\/");
+    let _ = writeln!(
+        s,
+        "</main><script type=\"application/json\" id=\"g-daten\">{data}</script><script>{JS}</script></body></html>"
+    );
     s
 }
 

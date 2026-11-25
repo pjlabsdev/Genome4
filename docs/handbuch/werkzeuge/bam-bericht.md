@@ -37,7 +37,11 @@ die Abschnitte zum Lauf (Trimmen, Laufzeit, Duplikate markieren).
 ## Ausgaben
 - `<name>.html`: eine einzige Datei ohne Netzverbindung, Schrift des Systems, hell und dunkel nach
   Systemeinstellung, druckbar. Die Sprache schaltet ein Knopf oben rechts um; die Wahl bleibt im
-  Browser gespeichert, Vorgabe ist Deutsch. Die Seite enthält Kennzahlen, Datei und Kopf (`@HD`,
+  Browser gespeichert, Vorgabe ist Deutsch. Die Seite enthält Kennzahlen, das Genom auf einen
+  Blick (jedes Chromosom als Leiste in Feldern zu 1 Mio. Basen, gefärbt nach der Abdeckung im
+  Verhältnis zum Mittel der Autosomen), die Abdeckung je Chromosom im Verhältnis zu den
+  Autosomen (1,0 = zwei Kopien), jedes Chromosom im Detail (Kennzahlen, Abdeckung je 100 kb,
+  Anteil MAPQ 0, Anteil Duplikate, Verteilung der Abdeckung; Werte beim Darüberfahren), Datei und Kopf (`@HD`,
   `@SQ` nach Art der Contigs, `@RG`, `@PG`), Datensätze nach Art, Zusatzfelder mit Bedeutung,
   Reads und Basen, MAPQ, Insertgröße, Abdeckung entlang des Genoms, Verteilung der Abdeckung,
   Tabelle je Chromosom, Geschlechtschromosomen und, mit Protokoll, wie die BAM entstanden ist.

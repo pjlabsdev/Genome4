@@ -26,8 +26,12 @@ Stellen vor dem Anfang des aktuellen Datensatzes nichts mehr: Sie werden ausgez�
 Einträge aufsummiert werden. Jede fertige Stelle geht mit ihrer Abdeckung in
 
 - die Zähler des Contigs für ≥ 1, 10, 20, 30x,
-- die Summe ihres Fachs von 1 Mio. Basen (für die Grafik entlang des Genoms),
-- auf den Autosomen in die Verteilung (Abdeckung bis 1.000, darüber im letzten Fach).
+- die Summe ihres Fachs von 100.000 Basen (für die Grafiken entlang der Chromosomen),
+- auf den Autosomen in die Verteilung (Abdeckung bis 1.000, darüber im letzten Fach),
+- auf den Chromosomen 1–22, X, Y und M zusätzlich in eine Verteilung je Chromosom.
+
+Je Fach werden außerdem die Hauptzeilen nach ihrem Anfang gezählt, dazu die Duplikate und die
+Reads mit MAPQ 0. Daraus zeigt die Seite je Chromosom, wo Reads keinen eindeutigen Ort haben.
 
 Strecken ohne offene Einträge (Abdeckung 0, etwa N-Strecken oder Contigs ohne Reads) werden in
 einem Schritt gezählt. Kommt ein Datensatz mit kleinerer Contig-Nummer oder kleinerem Anfang als
@@ -38,6 +42,9 @@ Länge, N-Strecken eingerechnet, wie bei `samtools coverage`.
 
 ## Seite und Datei
 Die Zahlen gehen in die Datei [`genome.bamqc.v1`](../formate/genome-bamqc-v1.md). Die HTML-Seite
-wird nur aus dieser Datei gesetzt: Grafiken als SVG im Text, keine Bibliotheken, kein Netz. Jeder
+wird nur aus dieser Datei gesetzt. Für die Grafiken stehen verdichtete Daten (mittlere Abdeckung
+und Anteile je Fach) als JSON in der Seite; ein kleines Skript in der Seite zeichnet daraus SVG,
+mit Werten beim Darüberfahren. Keine Bibliotheken, kein Netz. Farben: eine Farbe für Mengen,
+für die Abdeckung im Verhältnis zum Mittel blau (weniger), grau (±10 %) und rot (mehr). Jeder
 Text steht in beiden Sprachen in der Seite; der Knopf blendet eine aus. Zahlen stehen ebenfalls
 zweimal, mit deutscher und englischer Schreibweise (1.234,5 und 1,234.5).
