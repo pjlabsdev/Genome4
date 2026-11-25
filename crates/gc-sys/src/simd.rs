@@ -334,10 +334,12 @@ mod imp {
         #[inline(always)]
         fn shift_fill(self, n: usize, fill: Self) -> Self {
             unsafe {
+                // `vextq(a, b, k)` nimmt die oberen Spuren von `a` ab `k`. Damit unten die
+                // unteren `n` Spuren von `fill` landen, wird `fill` zuerst um `n` gedreht.
                 Self(match n {
-                    1 => vextq_s16::<7>(fill.0, self.0),
-                    2 => vextq_s16::<6>(fill.0, self.0),
-                    4 => vextq_s16::<4>(fill.0, self.0),
+                    1 => vextq_s16::<7>(vextq_s16::<1>(fill.0, fill.0), self.0),
+                    2 => vextq_s16::<6>(vextq_s16::<2>(fill.0, fill.0), self.0),
+                    4 => vextq_s16::<4>(vextq_s16::<4>(fill.0, fill.0), self.0),
                     _ => unreachable!(),
                 })
             }
