@@ -15,7 +15,7 @@ sort, markdup, index, flagstat).
 genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.bam \
   [--lesegruppe '@RG\tID:lauf1\tSM:probe\tPL:ILLUMINA'] [--kerne 0] [--speicher-mb 2048] \
   [--temp ORDNER] [--block-basen 10000000] [--max-laenge 300] [--log DATEI] \
-  [--trimmen] [--sa-ausduennen 0]
+  [--trimmen] [--sa-ausduennen 0] [--ohne-bericht]
 ```
 
 | Option | Bedeutung | Vorgabe |
@@ -30,6 +30,7 @@ genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.
 | `--max-laenge` | längster erwarteter Read für das Markieren der Duplikate | 300 |
 | `--log` | Lauf-Protokoll | `<aus>.log.jsonl` |
 | `--trimmen` | Paare vor dem Ausrichten trimmen wie fastp 1.4.0 in der alten Kette (Adapter, PolyG, Qualität, Länge); verworfene Paare werden nicht ausgerichtet, siehe [Trimmen](../verfahren/trimmen.md). Nur für Paare | aus |
+| `--ohne-bericht` | keinen Überblick schreiben (wie vor dem Überblick) | aus |
 | `--sa-ausduennen` | nur jede n-te Suffix-Array-Stichprobe des Index laden (Zweierpotenz). 0 wählt nach dem Arbeitsspeicher: die kleinste Zahl aus 1, 2 und 4, mit der Index und Sortierpuffer in die Hälfte des Arbeitsspeichers passen (`FQ2BAM.SPEICHERPLAN` im Protokoll). Mit 2 braucht der Index von GRCh38 (standard) rund 2 GB weniger Arbeitsspeicher und das Ausrichten etwa 2 % mehr Rechenzeit, mit 4 gut 20 % mehr. Die Ausgabe bleibt byte-gleich, siehe [FM-Index](../verfahren/fm-index.md#ausdünnen-beim-laden) | 0 |
 
 ## Ablauf
@@ -48,6 +49,10 @@ genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.
    ([Duplikate](../verfahren/duplikate-markieren.md)) und die Zählung nach Flags
    ([flagstat](flagstat.md)) und wird als BAM geschrieben.
 4. Index `.bai` in einem eigenen Durchlauf über die fertige BAM ([BAM-Index](../verfahren/bam-index.md)).
+   Im selben Durchlauf entstehen die Zahlen für den Überblick
+   ([Überblick über eine BAM](../verfahren/bam-ueberblick.md)); danach schreibt `fq2bam` die
+   HTML-Seite und die JSON-Datei, mit Trimmen und Laufzeit aus dem eigenen Protokoll. Schlägt nur
+   der Überblick fehl, bleibt die BAM gültig (Warnung `BERICHT.FEHLGESCHLAGEN`).
 
 Auf der Platte liegen während des Laufs nur die Teile des Sortierens. Genome 3.x reicht die
 Daten zwischen vier Programmen durch Pipes weiter und kodiert sie dabei mehrfach neu.
@@ -56,6 +61,8 @@ Daten zwischen vier Programmen durch Pipes weiter und kodiert sie dabei mehrfach
 - `<aus>`: BAM, nach Ort sortiert, Duplikate mit Flag 1024, Kopf mit `SO:coordinate`, `@RG` und
   einer `@PG`-Zeile. Sie entsteht als `<aus>.unfertig` und bekommt ihren Namen erst am Ende.
 - `<aus>.bai`.
+- `<aus ohne .bam>.html` und `<aus ohne .bam>.bamqc.json`: Überblick über die BAM, Deutsch und
+  Englisch umschaltbar ([`bam-bericht`](bam-bericht.md)). Fehlt mit `--ohne-bericht`.
 - `<aus>.log.jsonl`: Lauf-Protokoll mit den Stufen `fq2bam.index_laden`, `fq2bam.ausrichten`,
   `fq2bam.zusammenfuehren`, `bamindex.lesen`, den Ereignissen `ALIGN.INSERTGROESSE` je Block,
   `SORT.TEIL` je Teil auf der Platte, `ALIGN.FERTIG`, `BAMINDEX.FERTIG`, `FQ2BAM.FERTIG` und im Fehlerfall `FQ2BAM.FEHLGESCHLAGEN`
@@ -64,7 +71,7 @@ Daten zwischen vier Programmen durch Pipes weiter und kodiert sie dabei mehrfach
   `sortieren` (Bytes, Teile); `duplikate` (Felder wie bei [`markdup`](markdup.md)); `flagstat`
   (Felder wie bei [`flagstat`](flagstat.md)); `index`; `sekunden` und `sekunden_schritte`
   (`index_laden`, `ausrichten_und_teile`, `zusammenfuehren_markieren_schreiben`, `bam_index`);
-  `reads_je_sekunde`; `lauf`.
+  `reads_je_sekunde`; `bericht` (Pfade, siehe [`bam-bericht`](bam-bericht.md)); `lauf`.
 
 ## Validierung
 chr20, 130.268 Paare mit 30.268 erzeugten Kopien (260.536 Datensätze):
@@ -85,8 +92,8 @@ Die Übereinstimmung des Ausrichtens selbst mit bwa steht in den Messungen zu M3
 - Nur chr20 gemessen. Für das ganze Genom fehlen: Laufzeit und Speicherspitze, ALT-Contigs,
   Platzbedarf der Teile.
 - Kein Trimmen von Adaptern (Genome 3.x: fastp), keine CRAM-Ausgabe, keine optischen Duplikate.
-- Qualitätsauswertung bisher nur die Zählung nach Flags und die Insertgröße je Block im
-  Protokoll.
+- Qualitätsauswertung: Zählung nach Flags, MAPQ, Insertgröße, Fehlerrate und Abdeckung im
+  Überblick; Kontamination und Identität fehlen.
 - Der Index braucht einen eigenen Durchlauf über die BAM.
 - Kein Fortsetzen nach einem Abbruch.
 - Eine Lesegruppe je Lauf, eine FASTQ-Datei je Richtung.

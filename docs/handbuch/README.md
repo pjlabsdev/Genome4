@@ -58,6 +58,7 @@ Auf keiner Seite steht eine Genauigkeits- oder Tempoaussage ohne Messung.
 - [Sortieren nach Ort mit festem Speicher](verfahren/sortieren.md)
 - [Duplikate markieren](verfahren/duplikate-markieren.md)
 - [BAM-Index](verfahren/bam-index.md)
+- [Überblick über eine BAM: Zahlen und Abdeckung in einem Durchlauf](verfahren/bam-ueberblick.md)
 - [Panel-Alignment: Reads gegen viele ähnliche Sequenzen einer Genfamilie](verfahren/panel-alignment.md)
 
 ### Formate
@@ -65,6 +66,7 @@ Auf keiner Seite steht eine Genauigkeits- oder Tempoaussage ohne Messung.
 - [Lauf-Protokoll `genome.log.v1`](formate/genome-log-v1.md)
 - [Indexdatei `*.gcfm`](formate/gcfm.md)
 - [Sortier-Teil `*.gcsort`](formate/gcsort.md)
+- [Überblick über eine BAM `genome.bamqc.v1`](formate/genome-bamqc-v1.md)
 
 ### Messungen
 - [Verzeichnis der Messungen](messungen.md)

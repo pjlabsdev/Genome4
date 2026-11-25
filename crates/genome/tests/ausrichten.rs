@@ -391,7 +391,41 @@ fn chain_to_marked_duplicates() {
             "{out}"
         );
         assert!(!dir.join(format!("{name}.unfertig")).exists());
+        // Der Überblick liegt daneben; `bam-bericht` setzt aus BAM und Protokoll dieselbe Datei.
+        let stem = name.trim_end_matches(".bam");
+        let html = std::fs::read_to_string(dir.join(format!("{stem}.html"))).unwrap();
+        assert!(
+            html.contains("<span class=\"en\">BAM overview</span>"),
+            "{html}"
+        );
+        let facts = std::fs::read_to_string(dir.join(format!("{stem}.bamqc.json"))).unwrap();
+        assert!(facts.contains("\"genome.bamqc.v1\""));
+        assert!(facts.contains("\"FQ2BAM.FERTIG\"") || facts.contains("\"ergebnis\""));
+        let again = dir.join(format!("{stem}-neu.html"));
+        genome(&["bam-bericht", &s(&whole), "--aus", &s(&again)]);
+        let facts_again =
+            std::fs::read_to_string(dir.join(format!("{stem}-neu.bamqc.json"))).unwrap();
+        assert_eq!(
+            facts, facts_again,
+            "bam-bericht weicht vom Überblick aus fq2bam ab"
+        );
     }
+    // Mit --ohne-bericht entsteht kein Überblick, die BAM bleibt gleich.
+    let plain_run = dir.join("ohne-bericht.bam");
+    genome(&[
+        "fq2bam",
+        &i,
+        "--fastq",
+        &a,
+        "--fastq2",
+        &b,
+        "--aus",
+        &s(&plain_run),
+        "--ohne-bericht",
+    ]);
+    assert!(bam_records(&plain_run) == after);
+    assert!(!dir.join("ohne-bericht.html").exists());
+    assert!(!dir.join("ohne-bericht.bamqc.json").exists());
     // Ungleich lange FASTQ-Dateien: Abbruch mit Fehlercode, keine BAM.
     let short = dir.join("kurz.fq");
     let text = std::fs::read_to_string(&r2).unwrap();
