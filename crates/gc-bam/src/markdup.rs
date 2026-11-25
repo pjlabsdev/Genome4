@@ -194,6 +194,9 @@ pub struct DupMarker {
     /// Schlüssel zur laufenden Nummer des bisher besten Satzes.
     pairs: HashMap<Key, u64>,
     singles: HashMap<Key, u64>,
+    /// Mitglieder von Gruppen gleicher Paare; optisch eingestuft wird erst, wenn die Gruppe das
+    /// Fenster verlässt und das behaltene Paar feststeht.
+    groups: HashMap<Key, Vec<u64>>,
     prev_tid: i32,
     prev_pos: i64,
     stats: DupStats,
@@ -518,6 +521,7 @@ impl DupMarker {
             front: 0,
             pairs: HashMap::new(),
             singles: HashMap::new(),
+            groups: HashMap::new(),
             prev_tid: 0,
             prev_pos: 0,
             stats: DupStats::default(),
@@ -646,13 +650,12 @@ impl DupMarker {
                         } else {
                             -1
                         };
-                        if let Some(rule) = self.opt.optical {
-                            let record =
-                                |n: u64| &self.queue[(n - self.front) as usize].record[4..];
-                            let (a, b) = (View { b: record(old) }, View { b: record(nr) });
-                            if rule.neighbours(a.name(), b.name()) {
-                                self.stats.optical_pair += 1;
+                        if self.opt.optical.is_some() {
+                            let members = self.groups.entry(pair).or_default();
+                            if members.is_empty() {
+                                members.push(old);
                             }
+                            members.push(nr);
                         }
                         if new_score + tie > old_score {
                             self.mark(old);
@@ -706,7 +709,30 @@ impl DupMarker {
         Ok(())
     }
 
+    /// Zählt die optischen Duplikate einer Gruppe gegen ihr endgültig behaltenes Paar. Alle
+    /// Mitglieder liegen noch im Fenster: Der Satz, der die Gruppe begann, ist ihr frühestes.
+    fn classify_optical(&mut self, key: &Key) {
+        let (Some(rule), Some(members)) = (self.opt.optical, self.groups.remove(key)) else {
+            return;
+        };
+        let Some(&kept) = self.pairs.get(key) else {
+            return;
+        };
+        let name = |n: u64| View {
+            b: &self.queue[(n - self.front) as usize].record[4..],
+        }
+        .name();
+        let optical = members
+            .iter()
+            .filter(|&&m| m != kept && rule.neighbours(name(m), name(kept)))
+            .count();
+        self.stats.optical_pair += optical as u64;
+    }
+
     fn pop(&mut self, sink: &mut impl FnMut(&[u8]) -> io::Result<()>) -> io::Result<()> {
+        if let Some(key) = self.queue.front().and_then(|e| e.pair_key) {
+            self.classify_optical(&key);
+        }
         if let Some(entry) = self.queue.pop_front() {
             self.front += 1;
             if let Some(key) = entry.pair_key {
@@ -1060,6 +1086,28 @@ mod tests {
         // Nur das Paar aus demselben Bildfeld ist optisch, je Read gezählt
         assert_eq!((with.1.duplicate_pair, with.1.optical_pair), (4, 2));
         assert_eq!((without.duplicate_pair, without.optical_pair), (4, 0));
+    }
+
+    #[test]
+    fn optical_duplicates_are_judged_against_the_finally_kept_pair() {
+        // C ist am besten und liegt zwischen A und B; A und B sind je 75 Pixel von C entfernt,
+        // aber 150 voneinander. Das Ergebnis darf nicht von der Reihenfolge abhängen.
+        let a = pair("M:1:FC:1:1101:1000:500", 1000, "50M", 1300, 30);
+        let b = pair("M:1:FC:1:1101:1150:500", 1000, "50M", 1300, 20);
+        let c = pair("M:1:FC:1:1101:1075:500", 1000, "50M", 1300, 40);
+        let count = |order: [&[Vec<u8>; 2]; 3]| {
+            let mut firsts: Vec<&Vec<u8>> = order.iter().map(|p| &p[0]).collect();
+            firsts.extend(order.iter().map(|p| &p[1]));
+            let mut marker = DupMarker::new(DupOptions::default());
+            let mut sink = |_: &[u8]| Ok(());
+            for r in firsts {
+                marker.push(r, &mut sink).unwrap();
+            }
+            marker.finish(&mut sink).unwrap().optical_pair
+        };
+        assert_eq!(count([&a, &b, &c]), 4);
+        assert_eq!(count([&c, &a, &b]), 4);
+        assert_eq!(count([&b, &c, &a]), 4);
     }
 
     #[test]

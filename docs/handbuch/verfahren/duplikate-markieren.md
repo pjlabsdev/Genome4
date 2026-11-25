@@ -93,9 +93,10 @@ erwartet im selben Feld):
 Zwischen 1.000 und 10.000 kommt nichts hinzu; die übrigen 25 Duplikate im selben Feld liegen im
 Bereich des Zufalls.
 
-Grenzen: Verglichen wird mit dem jeweils behaltenen Paar der Gruppe, nicht jedes Paar mit jedem
-(Picard prüft alle Paare einer Gruppe). Bei Gruppen aus zwei Paaren, dem häufigsten Fall, ist das
-gleich. Mit `--ohne-optisch` wird nichts eingestuft; dann sind alle Zahlen die von samtools ohne `-d`.
+Eingestuft wird erst, wenn die Gruppe das Fenster verlässt: Jedes Duplikat wird mit dem Paar
+verglichen, das am Ende behalten wird. So hängt das Ergebnis nicht von der Reihenfolge gleich
+liegender Reads ab. Grenze: Picard vergleicht zusätzlich die Duplikate untereinander; bei Gruppen
+aus zwei Paaren, dem häufigsten Fall, ist das gleich. Mit `--ohne-optisch` wird nichts eingestuft; dann sind alle Zahlen die von samtools ohne `-d`.
 
 ## Geschätzte Größe der Bibliothek
 Aus der Zahl der Paare und der doppelten Paare lässt sich schätzen, wie viele verschiedene
