@@ -252,6 +252,7 @@ name = "gc-align"
 version = "0.1.0"
 dependencies = [
  "gc-index",
+ "gc-sys",
  "libm",
 ]
 

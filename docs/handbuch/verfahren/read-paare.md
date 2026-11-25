@@ -116,9 +116,13 @@ sind (`--block-basen`). Zwei Folgen:
   ab (eine Deletion direkt nach einer Insertion gibt es nicht). `local.rs` rechnet dieselben
   Schritte in derselben Anordnung und liefert in 1.000 Prüffällen jeden Wert wie bwa (Score,
   Enden, zweitbester Score, Anfänge). Die Spuren sind feste Felder aus 16 Bytes oder 8 Werten
-  mit 16 Bit, die Schritte gesättigte Additionen, Subtraktionen und Maxima. Der Übersetzer macht
-  daraus Vektorbefehle (SSE2 auf Intel und AMD, NEON auf ARM), ohne systemnahen Code; das
-  Ergebnis ist auf jedem System dasselbe. Die erste Fassung, die jeden Wert einzeln mit 32 Bit
+  mit 16 Bit, die Schritte gesättigte Additionen, Subtraktionen und Maxima. Die Vektoren kommen
+  aus `gc-sys` (`simd.rs`): SSE2 auf Intel und AMD, NEON auf ARM, sonst gewöhnliche Felder. Ein
+  Test prüft jede Operation gegen die Felder. Vorher sollte der Übersetzer die Felder selbst in
+  Vektorbefehle verwandeln; das gelang nur zum Teil. Mit den Vektoren ist das lokale Alignment
+  2,6-mal so schnell (148 gegen 1.000 Basen) und das Ausrichten auf chr20 10 bis 15 % schneller,
+  bei gleicher BAM. Schalter `GENOME_SIMD=0` rechnet wieder mit den Feldern. Das Ergebnis ist
+  auf jedem System dasselbe. Die erste Fassung, die jeden Wert einzeln mit 32 Bit
   rechnet, bleibt als Prüfmaßstab im Test: 3.000 Zufallsfälle, beide Breiten, jeder Wert gleich.
 - **Bei der Partnersuche gefundene Bereiche** haben keinen Anteil häufiger Seeds (er bleibt 0)
   und werden für den CIGAR mit schmalem Band ausgerichtet, wie in bwa.

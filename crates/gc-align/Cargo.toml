@@ -8,4 +8,5 @@ publish.workspace = true
 
 [dependencies]
 gc-index.workspace = true
+gc-sys.workspace = true
 libm = "0.2.16"

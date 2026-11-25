@@ -12,6 +12,7 @@
 //! Vektorbefehle; systemnaher Code ist nicht nötig, und das Ergebnis ist überall dasselbe.
 
 use crate::extend::Scoring;
+use gc_sys::simd::{I16x8, Lanes, U8x16};
 
 /// Ergebnis. Unbekannte Werte sind -1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,10 +47,6 @@ trait Cell: Copy + Ord + Default + Send + Sync {
     const BYTE: bool;
     fn from_i32(v: i32) -> Self;
     fn to_i32(self) -> i32;
-    /// `self + s`, oben begrenzt; im Byte-Lauf danach um `shift` vermindert, unten bei 0 begrenzt.
-    fn add_score(self, s: Self, shift: Self) -> Self;
-    /// `self - b`, unten bei 0 begrenzt. Beide Werte sind nie negativ.
-    fn sub(self, b: Self) -> Self;
 }
 
 impl Cell for u8 {
@@ -61,14 +58,6 @@ impl Cell for u8 {
     #[inline(always)]
     fn to_i32(self) -> i32 {
         i32::from(self)
-    }
-    #[inline(always)]
-    fn add_score(self, s: Self, shift: Self) -> Self {
-        self.saturating_add(s).saturating_sub(shift)
-    }
-    #[inline(always)]
-    fn sub(self, b: Self) -> Self {
-        self.saturating_sub(b)
     }
 }
 
@@ -82,14 +71,6 @@ impl Cell for i16 {
     fn to_i32(self) -> i32 {
         i32::from(self)
     }
-    #[inline(always)]
-    fn add_score(self, s: Self, _shift: Self) -> Self {
-        self.saturating_add(s)
-    }
-    #[inline(always)]
-    fn sub(self, b: Self) -> Self {
-        (self - b).max(0)
-    }
 }
 
 /// Ein Durchlauf mit `L` Spuren: 16 (Scores in einem Byte, höchstens 255) oder 8 (16 Bit).
@@ -98,7 +79,7 @@ impl Cell for i16 {
 // Die Schleifen über die Spuren laufen absichtlich über den Index: So erkennt der Übersetzer
 // die feste Länge und setzt Vektorbefehle ein.
 #[allow(clippy::needless_range_loop)]
-fn striped<T: Cell, const L: usize>(
+fn striped<T: Cell, V: Lanes<Elem = T>, const L: usize>(
     query: &[u8],
     target: &[u8],
     sc: &Scoring,
@@ -127,49 +108,58 @@ fn striped<T: Cell, const L: usize>(
             }
         }
     }
-    let (mut h0, mut h1) = (vec![zero; slen], vec![zero; slen]);
-    let (mut e_row, mut h_max) = (vec![zero; slen], vec![zero; slen]);
-    let shift_t = T::from_i32(shift);
-    let (e_del, e_ins) = (T::from_i32(sc.e_del), T::from_i32(sc.e_ins));
-    let oe_del = T::from_i32(sc.o_del + sc.e_del);
-    let oe_ins = T::from_i32(sc.o_ins + sc.e_ins);
+    let profile: Vec<V> = profile.iter().map(|p| V::load(p)).collect();
+    let vz = V::zero();
+    let (mut h0, mut h1) = (vec![vz; slen], vec![vz; slen]);
+    let (mut e_row, mut h_max) = (vec![vz; slen], vec![vz; slen]);
+    let shift_v = V::splat(T::from_i32(shift));
+    let (e_del, e_ins) = (
+        V::splat(T::from_i32(sc.e_del)),
+        V::splat(T::from_i32(sc.e_ins)),
+    );
+    let oe_del = V::splat(T::from_i32(sc.o_del + sc.e_del));
+    let oe_ins = V::splat(T::from_i32(sc.o_ins + sc.e_ins));
+    let add = |h: V, s: V| {
+        if T::BYTE {
+            h.adds(s).subs(shift_v)
+        } else {
+            h.adds(s)
+        }
+    };
     let mut marks: Vec<(i32, i32)> = Vec::new(); // (Score, Zeile)
     let (mut gmax, mut te) = (0i32, -1i32);
     for (i, &base) in target.iter().enumerate() {
         let s = &profile[usize::from(base.min(4)) * slen..][..slen];
         // h = H der vorigen Zeile, letzte Read-Position jeder Spur, um eine Spur verschoben.
-        let mut h = zero;
-        h[1..].copy_from_slice(&h0[slen - 1][..L - 1]);
-        let mut f = zero;
-        let mut row_max = zero;
-        for (((sj, ej), h0j), h1j) in s.iter().zip(&mut e_row).zip(&h0).zip(&mut h1) {
-            for k in 0..L {
-                let v = h[k].add_score(sj[k], shift_t).max(ej[k]).max(f[k]);
-                row_max[k] = row_max[k].max(v);
-                h1j[k] = v;
-                ej[k] = ej[k].sub(e_del).max(v.sub(oe_del));
-                f[k] = f[k].sub(e_ins).max(v.sub(oe_ins));
-            }
-            h = *h0j;
+        let mut h = h0[slen - 1].shift_in_zero();
+        let mut f = vz;
+        let mut row_max = vz;
+        for j in 0..slen {
+            // `t` hängt nicht von `f` ab. Weil das begrenzte Abziehen mit dem Maximum
+            // vertauscht und `oe_ins >= e_ins` ist, gilt
+            // max(f - e_ins, max(t, f) - oe_ins) = max(f - e_ins, t - oe_ins): Die Kette von
+            // Spalte zu Spalte ist so nur zwei Schritte lang statt drei, bei gleichem Ergebnis.
+            let t = add(h, s[j]).max(e_row[j]);
+            let v = t.max(f);
+            row_max = row_max.max(v);
+            h1[j] = v;
+            e_row[j] = e_row[j].subs(e_del).max(v.subs(oe_del));
+            f = f.subs(e_ins).max(t.subs(oe_ins));
+            h = h0[j];
         }
         // Nachkorrektur: die offene Insertion von Spur zu Spur weiterreichen.
         'lazy: for _ in 0..16 {
-            f.copy_within(0..L - 1, 1);
-            f[0] = T::default();
+            f = f.shift_in_zero();
             for h1j in &mut h1 {
-                let mut open = false;
-                for k in 0..L {
-                    let v = h1j[k].max(f[k]);
-                    h1j[k] = v;
-                    f[k] = f[k].sub(e_ins);
-                    open |= f[k] > v.sub(oe_ins);
-                }
-                if !open {
+                let v = h1j.max(f);
+                *h1j = v;
+                f = f.subs(e_ins);
+                if !f.any_gt(v.subs(oe_ins)) {
                     break 'lazy;
                 }
             }
         }
-        let imax = row_max.iter().copied().max().map_or(0, T::to_i32);
+        let imax = row_max.hmax().to_i32();
         let i = i as i32;
         if imax >= min_sub {
             match marks.last_mut() {
@@ -200,8 +190,10 @@ fn striped<T: Cell, const L: usize>(
     r.te = te;
     if !(T::BYTE && r.score == 255) {
         let mut max = -1;
-        for (j, lanes) in h_max.iter().enumerate() {
-            for (k, &v) in lanes.iter().enumerate() {
+        let mut lanes = [T::default(); 16];
+        for (j, hv) in h_max.iter().enumerate() {
+            hv.store(&mut lanes);
+            for (k, &v) in lanes[..L].iter().enumerate() {
                 let (v, p) = (v.to_i32(), (j + k * slen) as i32);
                 if v > max {
                     max = v;
@@ -234,11 +226,20 @@ fn run(
     min_sub: i32,
     stop_at: i32,
 ) -> LocalResult {
-    if byte {
-        striped::<u8, 16>(query, target, sc, min_sub, stop_at)
-    } else {
-        striped::<i16, 8>(query, target, sc, min_sub, stop_at)
+    use gc_sys::simd::plain;
+    match (byte, vectors_on()) {
+        (true, true) => striped::<u8, U8x16, 16>(query, target, sc, min_sub, stop_at),
+        (false, true) => striped::<i16, I16x8, 8>(query, target, sc, min_sub, stop_at),
+        (true, false) => striped::<u8, plain::U8x16, 16>(query, target, sc, min_sub, stop_at),
+        (false, false) => striped::<i16, plain::I16x8, 8>(query, target, sc, min_sub, stop_at),
     }
+}
+
+/// Schalter `GENOME_SIMD=0`: Vektoren als gewöhnliche Felder rechnen (Stand vor den
+/// Vektorbefehlen). Das Ergebnis ist in beiden Fällen dasselbe.
+fn vectors_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("GENOME_SIMD").map_or(true, |v| v != "0"))
 }
 
 /// Dieselbe Rechnung Wert für Wert mit 32 Bit, ohne jede Rücksicht auf Tempo. Sie war die erste
