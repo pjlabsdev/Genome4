@@ -16,6 +16,9 @@ pub struct ReadOrigin {
     pub tile: u32,
     /// Lage auf der Kachel; bei MGI gibt es keine echten Koordinaten, dann `None`.
     pub xy: Option<(u32, u32)>,
+    /// MGI: laufende Nummer im Bildfeld (die Ziffern hinter der Reihe). Benachbarte DNB-Plätze
+    /// haben nahe Nummern; gemessen an PJ, siehe Handbuch „Duplikate markieren“.
+    pub serial: Option<u64>,
 }
 
 /// Erkennt die Herkunft; `None`, wenn das Namensschema unbekannt ist.
@@ -36,6 +39,7 @@ fn parse_illumina(name: &str) -> Option<ReadOrigin> {
         lane: f[3].parse().ok()?,
         tile: f[4].parse().ok()?,
         xy: Some((f[5].parse().ok()?, f[6].parse().ok()?)),
+        serial: None,
     })
 }
 
@@ -63,6 +67,7 @@ fn parse_mgi(name: &str) -> Option<ReadOrigin> {
         lane,
         tile: col * 1000 + row,
         xy: None,
+        serial: Some(rest[3..].parse().ok()?),
     })
 }
 
@@ -88,8 +93,9 @@ mod tests {
             (o.flowcell.as_str(), o.lane, o.tile, o.xy),
             ("V300012345", 1, 1002, None)
         );
+        assert_eq!(o.serial, Some(123));
         let o = parse(b"E100012345L3C012R0340012345").unwrap();
-        assert_eq!((o.lane, o.tile), (3, 12034));
+        assert_eq!((o.lane, o.tile, o.serial), (3, 12034, Some(12345)));
     }
 
     #[test]

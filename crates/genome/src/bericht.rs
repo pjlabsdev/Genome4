@@ -1558,6 +1558,19 @@ pub fn html(f: &Value) -> String {
                 l("Anteil", "Share"),
                 pct(&d["anteil_duplikate"], 3),
             ]));
+            if d["optische_duplikate_mit_partner"].is_u64() {
+                s.push_str(&row(&[
+                    l(
+                        "davon optisch (Nachbarn auf derselben Fläche)",
+                        "Of these optical (neighbours on the same surface)",
+                    ),
+                    format!(
+                        "{} ({})",
+                        int(&d["optische_duplikate_mit_partner"]),
+                        pct(&d["anteil_optisch"], 1)
+                    ),
+                ]));
+            }
             s.push_str(&row(&[
                 l(
                     "geschätzte Bibliotheksgröße (Moleküle)",

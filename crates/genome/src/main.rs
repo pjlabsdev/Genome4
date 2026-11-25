@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use gc_io::fastq::{self, PairedReader, Record, Stats};
 use gc_io::readname;
 use gc_schema::Envelope;
@@ -17,6 +17,36 @@ mod bericht;
 struct Cli {
     #[command(subcommand)]
     command: Command,
+}
+
+/// Wann ein Duplikat als optisch zählt. Ändert keine Flags, nur die Zahlen und die geschätzte
+/// Größe der Bibliothek.
+#[derive(Args, Debug, Clone, Copy)]
+struct OptischArgs {
+    /// Optische Duplikate nicht zählen (Zahlen und Bibliotheksgröße wie samtools ohne `-d`)
+    #[arg(long)]
+    ohne_optisch: bool,
+    /// Illumina: höchster Abstand in x und y in Pixeln, damit ein Duplikat optisch zählt
+    #[arg(long, default_value_t = 100)]
+    optisch_pixel: u32,
+    /// MGI/DNBSEQ: höchster Abstand der laufenden Nummer im selben Bildfeld
+    #[arg(long, default_value_t = 1000)]
+    optisch_mgi_abstand: u64,
+}
+
+impl OptischArgs {
+    fn rule(&self) -> Option<gc_bam::OpticalRule> {
+        (!self.ohne_optisch).then_some(gc_bam::OpticalRule {
+            pixel: self.optisch_pixel,
+            mgi_serial: self.optisch_mgi_abstand,
+        })
+    }
+    fn json(&self) -> serde_json::Value {
+        match self.rule() {
+            None => json!(null),
+            Some(r) => json!({ "pixel": r.pixel, "mgi_abstand": r.mgi_serial }),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -57,6 +87,8 @@ enum Command {
         /// Längster erwarteter Read einschließlich abgeschnittener Basen
         #[arg(long, default_value_t = 300)]
         max_laenge: i64,
+        #[command(flatten)]
+        optisch: OptischArgs,
         /// Kerne für BGZF (0 = alle)
         #[arg(long, default_value_t = 0)]
         kerne: usize,
@@ -115,6 +147,8 @@ enum Command {
         /// Längster erwarteter Read für das Markieren der Duplikate
         #[arg(long, default_value_t = 300)]
         max_laenge: i64,
+        #[command(flatten)]
+        optisch: OptischArgs,
         /// Lauf-Protokoll als JSON-Zeilen in diese Datei
         #[arg(long)]
         log: Option<PathBuf>,
@@ -645,6 +679,7 @@ struct Fq2bamRun<'a> {
     threads: usize,
     block_bases: u64,
     max_length: i64,
+    optical: Option<gc_bam::OpticalRule>,
     trim: bool,
     /// Nur jede n-te Suffix-Array-Stichprobe laden.
     sa_thin: u32,
@@ -699,6 +734,8 @@ fn dup_stats_json(stats: &gc_bam::DupStats) -> serde_json::Value {
         "duplikate_ohne_partner": stats.duplicate_single,
         "duplikate": duplicates,
         "anteil_duplikate": if stats.examined > 0 { duplicates as f64 / stats.examined as f64 } else { 0.0 },
+        "optische_duplikate_mit_partner": stats.optical_pair,
+        "anteil_optisch": if stats.duplicate_pair > 0 { stats.optical_pair as f64 / stats.duplicate_pair as f64 } else { 0.0 },
         "geschaetzte_bibliotheksgroesse": stats.estimated_library_size(),
         "fenster_spitze_saetze": stats.window_peak,
     })
@@ -947,6 +984,7 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
             .with_context(|| format!("{} anlegen", part.display()))?;
         let mut marker = gc_bam::DupMarker::new(gc_bam::DupOptions {
             max_length: run.max_length,
+            optical: run.optical,
         });
         let mut flags = gc_bam::FlagStats::default();
         let mut sink = |rec: &[u8]| {
@@ -1171,6 +1209,7 @@ fn markdup_bam(
     src: &std::path::Path,
     dst: &std::path::Path,
     max_length: i64,
+    optisch: OptischArgs,
     kerne: usize,
 ) -> Result<serde_json::Value> {
     let started = std::time::Instant::now();
@@ -1192,11 +1231,17 @@ fn markdup_bam(
     let mut part = dst.as_os_str().to_owned();
     part.push(".unfertig");
     let part = PathBuf::from(part);
-    let mut st = gc_log::stage("markdup.durchlauf", json!({ "max_laenge": max_length }));
+    let mut st = gc_log::stage(
+        "markdup.durchlauf",
+        json!({ "max_laenge": max_length, "optisch": optisch.json() }),
+    );
     let done = (|| -> Result<gc_bam::DupStats> {
         let mut writer = gc_io::bam::create_raw(&part, &header, new_text.as_bytes(), kerne)
             .with_context(|| format!("{} anlegen", part.display()))?;
-        let mut marker = gc_bam::DupMarker::new(gc_bam::DupOptions { max_length });
+        let mut marker = gc_bam::DupMarker::new(gc_bam::DupOptions {
+            max_length,
+            optical: optisch.rule(),
+        });
         let mut record = Vec::new();
         loop {
             record.clear();
@@ -1239,9 +1284,12 @@ fn markdup_bam(
         "duplikate_ohne_partner": stats.duplicate_single,
         "duplikate": duplicates,
         "anteil_duplikate": if stats.examined > 0 { duplicates as f64 / stats.examined as f64 } else { 0.0 },
+        "optische_duplikate_mit_partner": stats.optical_pair,
+        "anteil_optisch": if stats.duplicate_pair > 0 { stats.optical_pair as f64 / stats.duplicate_pair as f64 } else { 0.0 },
         "geschaetzte_bibliotheksgroesse": stats.estimated_library_size(),
         "fenster_spitze_saetze": stats.window_peak,
         "max_laenge": max_length,
+        "optisch": optisch.json(),
         "sekunden": seconds,
         "saetze_je_sekunde": if seconds > 0.0 { stats.read as f64 / seconds } else { 0.0 },
     });
@@ -2028,6 +2076,7 @@ fn main() -> Result<()> {
             src,
             dst,
             max_laenge,
+            optisch,
             kerne,
             log,
         } => {
@@ -2043,10 +2092,11 @@ fn main() -> Result<()> {
                 "eingabe": src.display().to_string(),
                 "ausgabe": dst.display().to_string(),
                 "max_laenge": max_laenge,
+                "optisch": optisch.json(),
                 "kerne": kerne,
             }));
             gc_log::input_file("eingabe", &src);
-            match markdup_bam(&src, &dst, max_laenge, kerne) {
+            match markdup_bam(&src, &dst, max_laenge, optisch, kerne) {
                 Ok(mut result) => {
                     result["lauf"] = json!(gc_log::run_id());
                     gc_log::run_end(true, result.clone());
@@ -2262,6 +2312,7 @@ fn main() -> Result<()> {
             kerne,
             block_basen,
             max_laenge,
+            optisch,
             log,
             trimmen,
             sa_ausduennen,
@@ -2300,6 +2351,7 @@ fn main() -> Result<()> {
                 "kerne": threads,
                 "block_basen": block_basen,
                 "max_laenge": max_laenge,
+                "optisch": optisch.json(),
                 "trimmen": trimmen,
                 "sa_ausduennen": sa_ausduennen,
                 "bericht": !ohne_bericht,
@@ -2320,6 +2372,7 @@ fn main() -> Result<()> {
                 threads,
                 block_bases: block_basen,
                 max_length: max_laenge,
+                optical: optisch.rule(),
                 trim: trimmen,
                 sa_thin: sa_ausduennen,
                 report: !ohne_bericht,
