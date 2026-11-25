@@ -166,8 +166,10 @@ pub fn facts(
             .filter(|c| c.length > 0)
             .map(|c| c.bases as f64 / c.length as f64)
     };
-    let x = mean_of("X").map(|v| v / auto_mean.max(1e-9));
-    let y = mean_of("Y").map(|v| v / auto_mean.max(1e-9));
+    // Ohne Abdeckung der Autosomen gibt es keine Bezugsgröße und keine Deutung.
+    let ratio = |v: f64| (auto_mean > 0.0).then(|| v / auto_mean);
+    let x = mean_of("X").and_then(ratio);
+    let y = mean_of("Y").and_then(ratio);
     let sex = match (x, y) {
         (Some(x), Some(y)) if x < 0.75 && y > 0.2 => "XY",
         (Some(x), Some(y)) if x > 0.8 && y < 0.05 => "XX",
@@ -279,7 +281,7 @@ pub fn facts(
             "reads": mapq_total,
             "anteil_ab_20": share(qc.mapq[20..].iter().sum(), mapq_total),
             "anteil_0": share(qc.mapq[0], mapq_total),
-            "anteil_60": share(qc.mapq[60..].iter().sum(), mapq_total),
+            "anteil_60": share(qc.mapq[60], mapq_total),
         },
         "insertgroesse": {
             "kennzahlen": summary_json(&BamQc::summary(&qc.insert[..gc_bam::qc::MAX_INSERT])),
@@ -364,7 +366,7 @@ fn group_digits(int: &str, sep: char) -> String {
 /// Zahl mit `d` Nachkommastellen in beiden Schreibweisen.
 fn num_pair(x: f64, d: usize) -> (String, String) {
     if !x.is_finite() {
-        return ("–".into(), "–".into());
+        return ("-".into(), "-".into());
     }
     let s = format!("{x:.d$}");
     let (int, frac) = match s.split_once('.') {
@@ -384,7 +386,7 @@ fn num(x: f64, d: usize) -> String {
 fn int(v: &Value) -> String {
     match v.as_f64() {
         Some(x) => num(x, 0),
-        None => "–".into(),
+        None => "-".into(),
     }
 }
 
@@ -394,13 +396,13 @@ fn pct(v: &Value, d: usize) -> String {
             let (de, en) = num_pair(100.0 * x, d);
             l(&format!("{de} %"), &format!("{en} %"))
         }
-        None => "–".into(),
+        None => "-".into(),
     }
 }
 
 fn bytes(v: &Value) -> String {
     let Some(b) = v.as_f64() else {
-        return "–".into();
+        return "-".into();
     };
     let (unit, div) = if b >= 1e9 {
         ("GB", 1e9)
@@ -502,13 +504,13 @@ fn tag_meaning(tag: &str) -> (&'static str, &'static str) {
 
 fn group_name(g: &str) -> (&'static str, &'static str) {
     match g {
-        "autosom" => ("Autosomen (chr1–22)", "Autosomes (chr1–22)"),
+        "autosom" => ("Autosomen (chr1-22)", "Autosomes (chr1-22)"),
         "geschlecht" => ("Geschlechtschromosomen (X, Y)", "Sex chromosomes (X, Y)"),
         "mito" => ("Mitochondrium (chrM)", "Mitochondrion (chrM)"),
         "decoy" => ("Decoy-Contigs", "Decoy contigs"),
         "alt" => ("ALT-Contigs", "ALT contigs"),
         "hla" => ("HLA-Contigs", "HLA contigs"),
-        "ebv" => ("Epstein-Barr-Virus (chrEBV)", "Epstein–Barr virus (chrEBV)"),
+        "ebv" => ("Epstein-Barr-Virus (chrEBV)", "Epstein-Barr virus (chrEBV)"),
         "unplatziert" => (
             "nicht zugeordnete Stücke (chrUn, _random)",
             "Unplaced pieces (chrUn, _random)",
@@ -594,18 +596,19 @@ fn viz_data(f: &Value) -> Value {
             "mapq0": ratio(&mq0, &non_dup, 4),
             "dup": ratio(&dups, &reads, 4),
             "verteilung": if hist.iter().any(|v| *v > 0) { json!(hist[..=cut]) } else { Value::Null },
+            "verteilung_stellen": hist.iter().sum::<u64>(),
         }));
     }
     let mapq = dense(&f["mapq"]["verteilung"], 255);
     let range = |a: usize, b: usize| mapq[a..=b].iter().sum::<u64>();
     let mapq_bins: Vec<Value> = [
         ("0", 0, 0),
-        ("1–9", 1, 9),
-        ("10–19", 10, 19),
-        ("20–29", 20, 29),
-        ("30–39", 30, 39),
-        ("40–49", 40, 49),
-        ("50–59", 50, 59),
+        ("1-9", 1, 9),
+        ("10-19", 10, 19),
+        ("20-29", 20, 29),
+        ("30-39", 30, 39),
+        ("40-49", 40, 49),
+        ("50-59", 50, 59),
         ("≥ 60", 60, 255),
     ]
     .iter()
@@ -616,11 +619,15 @@ fn viz_data(f: &Value) -> Value {
         let hist = dense(&f["insertgroesse"]["verteilung"], gc_bam::qc::MAX_INSERT);
         let p95 = ins["p95"].as_f64().unwrap_or(1000.0);
         let cut = ((p95 * 1.4) as usize).clamp(50, gc_bam::qc::MAX_INSERT - 1);
-        json!({ "verteilung": hist[..=cut], "median": ins["median"] })
+        json!({ "verteilung": hist[..=cut], "median": ins["median"], "gesamt": hist.iter().sum::<u64>() })
     } else {
         Value::Null
     };
-    let lengths = dense(&f["read_laenge"]["verteilung"], gc_bam::qc::MAX_READ_LENGTH);
+    let longest = f["read_laenge"]["verteilung"]
+        .as_array()
+        .and_then(|a| a.iter().filter_map(|p| p[0].as_u64()).max())
+        .unwrap_or(0) as usize;
+    let lengths = dense(&f["read_laenge"]["verteilung"], longest);
     let read_length = if lengths.iter().filter(|c| **c > 0).count() > 1 {
         let maxlen = lengths.iter().rposition(|c| *c > 0).unwrap_or(1);
         json!(lengths[..=maxlen])
@@ -668,7 +675,7 @@ pub fn html(f: &Value) -> String {
 
     let _ = write!(
         s,
-        "<!DOCTYPE html><html lang=\"de\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{} – Genome</title><style>{CSS}</style></head><body><main>",
+        "<!DOCTYPE html><html lang=\"de\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{} · Genome</title><style>{CSS}</style></head><body><main>",
         esc(&file_name)
     );
     let _ = write!(
@@ -700,8 +707,9 @@ pub fn html(f: &Value) -> String {
         &int(&passed["hauptzeilen"]),
         "Reads (Hauptzeilen)",
         "Reads (primary)",
-        &if primary > 0.0 {
-            let (de, en) = num_pair(primary / 2e6, 1);
+        &if passed["aus_paaren"].as_f64().unwrap_or(0.0) > 0.0 {
+            let paired = passed["aus_paaren"].as_f64().unwrap_or(0.0);
+            let (de, en) = num_pair(paired / 2e6, 1);
             l(&format!("{de} Mio. Paare"), &format!("{en} million pairs"))
         } else {
             String::new()
@@ -820,11 +828,11 @@ pub fn html(f: &Value) -> String {
     let hd = &f["kopf"]["hd"];
     t.push_str(&row(&[
         l("Sortierung (@HD SO)", "Sort order (@HD SO)"),
-        esc(hd["SO"].as_str().unwrap_or("–")),
+        esc(hd["SO"].as_str().unwrap_or("-")),
     ]));
     t.push_str(&row(&[
         l("SAM-Version (@HD VN)", "SAM version (@HD VN)"),
-        esc(hd["VN"].as_str().unwrap_or("–")),
+        esc(hd["VN"].as_str().unwrap_or("-")),
     ]));
     t.push_str(&row(&[
         l("Contigs der Referenz (@SQ)", "Reference contigs (@SQ)"),
@@ -1058,11 +1066,11 @@ pub fn html(f: &Value) -> String {
     s.push_str("<table>");
     s.push_str(&row(&[
         l(
-            "Read-Länge (Median, 5–95 %)",
-            "Read length (median, 5–95 %)",
+            "Read-Länge (Median, 5-95 %)",
+            "Read length (median, 5-95 %)",
         ),
         format!(
-            "{} ({}–{})",
+            "{} ({}-{})",
             int(&rl["median"]),
             int(&rl["p05"]),
             int(&rl["p95"])
@@ -1072,7 +1080,7 @@ pub fn html(f: &Value) -> String {
         l("mittlere Basenqualität", "Mean base quality"),
         match q["mittel"].as_f64() {
             Some(v) => format!("Q{}", num(v, 1)),
-            None => "–".into(),
+            None => "-".into(),
         },
     ]));
     s.push_str(&row(&[
@@ -1164,7 +1172,7 @@ pub fn html(f: &Value) -> String {
         s.push_str("<div class=\"viz\" id=\"v-insert\"></div>");
         let _ = write!(
             s,
-            "<p class=\"note\">{}: {} · {}: {} · {}: {} ± {} · 5–95 %: {}–{} · {}: {}</p>",
+            "<p class=\"note\">{}: {} · {}: {} · {}: {} ± {} · 5-95 %: {}-{} · {}: {}</p>",
             l("Paare", "Pairs"),
             int(&ins["n"]),
             l("Median", "Median"),
@@ -1238,13 +1246,13 @@ pub fn html(f: &Value) -> String {
             if len > 0 {
                 format!("{}x", num(bases as f64 / len as f64, 2))
             } else {
-                "–".into()
+                "-".into()
             },
         ];
         for c in covered {
             cells.push(pct(&share(c, len), 1));
         }
-        cells.push(mapq.map(|m| num(m, 1)).unwrap_or_else(|| "–".into()));
+        cells.push(mapq.map(|m| num(m, 1)).unwrap_or_else(|| "-".into()));
         row(&cells)
     };
     let mut others: Vec<(String, GroupSum)> = Vec::new();
@@ -1364,8 +1372,8 @@ pub fn html(f: &Value) -> String {
         }
         if let (Some(b), Some(e)) = (lauf["beginn"].as_str(), lauf["ende"].as_str()) {
             s.push_str(&row(&[
-                l("Beginn – Ende (UTC)", "Start – end (UTC)"),
-                format!("{} – {}", esc(b), esc(e)),
+                l("Beginn bis Ende (UTC)", "Start to end (UTC)"),
+                format!("{} bis {}", esc(b), esc(e)),
             ]));
         }
         if let Some(sys) = lauf["system"].as_object() {
@@ -1627,11 +1635,23 @@ pub fn output_paths(bam: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     (html.into(), json.into())
 }
 
+/// Die Faktendatei in der gemeinsamen Hülle von `gc-schema` (`schema`, `tool`, `version`,
+/// `result`); Schema und Version stehen nur in der Hülle.
+fn envelope(facts: &Value) -> anyhow::Result<String> {
+    let mut result = facts.clone();
+    if let Some(o) = result.as_object_mut() {
+        for key in ["schema", "werkzeug", "version"] {
+            o.remove(key);
+        }
+    }
+    Ok(gc_schema::Envelope::new(SCHEMA, result).to_json()?)
+}
+
 /// Schreibt beide Dateien unter vorläufigem Namen und benennt sie dann um.
 pub fn write(facts: &Value, html_path: &Path, json_path: &Path) -> anyhow::Result<()> {
     use anyhow::Context;
     for (path, text) in [
-        (json_path, serde_json::to_string_pretty(facts)? + "\n"),
+        (json_path, envelope(facts)? + "\n"),
         (html_path, html(facts)),
     ] {
         let mut part = path.as_os_str().to_owned();
@@ -1646,6 +1666,23 @@ pub fn write(facts: &Value, html_path: &Path, json_path: &Path) -> anyhow::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn faktendatei_hat_die_gemeinsame_huelle() {
+        let facts = json!({ "schema": SCHEMA, "werkzeug": "genome", "version": "x", "saetze": { "gesamt": 3 } });
+        let v: Value = serde_json::from_str(&envelope(&facts).unwrap()).unwrap();
+        assert_eq!(v["schema"], SCHEMA);
+        assert_eq!(v["tool"], "genome");
+        assert_eq!(v["result"]["saetze"]["gesamt"], 3);
+        assert!(v["result"]["schema"].is_null() && v["result"]["version"].is_null());
+    }
+
+    #[test]
+    fn keine_gedankenstriche_im_bericht() {
+        for text in [CSS, JS, include_str!("bericht.rs")] {
+            assert!(!text.contains('\u{2013}') && !text.contains('\u{2014}'));
+        }
+    }
 
     #[test]
     fn zahlen_in_beiden_sprachen() {
