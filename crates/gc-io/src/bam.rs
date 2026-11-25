@@ -131,6 +131,15 @@ pub fn create_raw(
     Ok(writer)
 }
 
+/// Namen und Längen der Contigs aus dem Kopf, in der Reihenfolge der Contig-Nummern.
+pub fn contigs(header: &sam::Header) -> Vec<(String, u64)> {
+    header
+        .reference_sequences()
+        .iter()
+        .map(|(name, map)| (name.to_string(), usize::from(map.length()) as u64))
+        .collect()
+}
+
 /// Legt eine BAM an; der Kopf kommt als SAM-Text (`@SQ`-Zeilen usw.) und wird unverändert
 /// geschrieben.
 pub fn create_from_text(

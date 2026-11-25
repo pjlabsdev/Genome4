@@ -12,6 +12,7 @@ Jedes Werkzeug hat eine Seite nach derselben [Vorlage](vorlage.md).
 | `genome markdup` | Duplikate markieren, Verfahren wie samtools | gebaut und geprüft | [markdup](markdup.md) |
 | `genome bam-index` | Index `.bai` zu einer sortierten BAM | gebaut und geprüft | [bam-index](bam-index.md) |
 | `genome flagstat` | Datensätze nach Flags zählen | gebaut und geprüft | [flagstat](flagstat.md) |
+| `genome bam-bericht` | Überblick über eine BAM als HTML (Deutsch/Englisch) und JSON | gebaut und geprüft | [bam-bericht](bam-bericht.md) |
 | `genome fq2bam` | FASTQ zur sortierten, duplikatmarkierten, indizierten BAM in einem Lauf | erste Fassung, auf chr20 geprüft | [fq2bam](fq2bam.md) |
 | `genome trim` | Paare trimmen wie fastp 1.4.0, als FASTQ (für den Vergleich) | gebaut und geprüft | [trim](trim.md) |
 | `genome index` | FM-Index bauen, prüfen, abfragen | gebaut und geprüft | [index](index.md) |

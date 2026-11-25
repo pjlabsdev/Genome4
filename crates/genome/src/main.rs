@@ -10,6 +10,8 @@ use gc_io::readname;
 use gc_schema::Envelope;
 use serde_json::json;
 
+mod bericht;
+
 #[derive(Parser)]
 #[command(name = "genome", version, about = "Genome 4.0")]
 struct Cli {
@@ -124,6 +126,27 @@ enum Command {
         /// Arbeitsspeicher). Spart Arbeitsspeicher, kostet etwas Rechenzeit; die Ausgabe bleibt gleich.
         #[arg(long, default_value_t = 0)]
         sa_ausduennen: u32,
+        /// Keinen Überblick (`<aus ohne .bam>.html` und `.bamqc.json`) schreiben
+        #[arg(long)]
+        ohne_bericht: bool,
+    },
+    /// Überblick über eine fertige, nach Ort sortierte BAM als HTML-Seite (Deutsch/Englisch)
+    /// und als JSON; mit dem Protokoll von `fq2bam` auch Trimmen und Laufzeit.
+    BamBericht {
+        /// Nach Ort sortierte BAM
+        bam: PathBuf,
+        /// Lauf-Protokoll von `fq2bam` (Vorgabe: `<bam>.log.jsonl`, wenn vorhanden)
+        #[arg(long)]
+        protokoll: Option<PathBuf>,
+        /// HTML-Seite (Vorgabe: `<bam ohne .bam>.html`); die JSON-Datei liegt daneben
+        #[arg(long)]
+        aus: Option<PathBuf>,
+        /// Kerne zum Entpacken (0 = alle)
+        #[arg(long, default_value_t = 0)]
+        kerne: usize,
+        /// Eigenes Lauf-Protokoll dieses Befehls
+        #[arg(long)]
+        log: Option<PathBuf>,
     },
     /// Paare trimmen wie fastp 1.4.0 und als FASTQ schreiben (für den Vergleich mit fastp;
     /// in der Kette trimmt `fq2bam --trimmen` ohne Zwischendateien).
@@ -625,6 +648,8 @@ struct Fq2bamRun<'a> {
     trim: bool,
     /// Nur jede n-te Suffix-Array-Stichprobe laden.
     sa_thin: u32,
+    /// Beim Index-Durchlauf die Zahlen für den Überblick sammeln.
+    report: bool,
 }
 
 /// Zahlen von `flagstat` als JSON, für eine der beiden Gruppen.
@@ -833,7 +858,7 @@ fn trim_counts_json(c: &gc_io::trim::Counts) -> serde_json::Value {
 /// Die ganze Kette in einem Lauf: ausrichten (mit Partner-Angaben) direkt in den Sortierer,
 /// beim Zusammenführen Duplikate markieren und nach Flags zählen, dann den Index schreiben.
 /// Zwischen den Schritten entsteht keine BAM; auf der Platte liegen nur die Teile des Sortierens.
-fn fq2bam(run: &Fq2bamRun<'_>) -> Result<serde_json::Value> {
+fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQc>)> {
     let started = std::time::Instant::now();
     anyhow::ensure!(run.memory_mb > 0, "--speicher-mb muss größer als 0 sein");
     anyhow::ensure!(run.max_length > 0, "--max-laenge muss größer als 0 sein");
@@ -952,7 +977,8 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<serde_json::Value> {
     let mut bai = run.dst.as_os_str().to_owned();
     bai.push(".bai");
     let bai = PathBuf::from(bai);
-    let index_result = index_bam(run.dst, &bai, run.threads)?;
+    let mut qc = run.report.then(|| gc_bam::BamQc::new(Vec::new()));
+    let index_result = index_bam(run.dst, &bai, run.threads, qc.as_mut())?;
     let seconds_index = t.elapsed().as_secs_f64();
 
     let seconds = started.elapsed().as_secs_f64();
@@ -990,7 +1016,57 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<serde_json::Value> {
         "reads_je_sekunde": if seconds > 0.0 { reads as f64 / seconds } else { 0.0 },
     });
     gc_log::info("FQ2BAM.FERTIG", "fq2bam beendet", result.clone());
+    Ok((result, qc))
+}
+
+/// Schreibt den Überblick zu einer BAM (`<name>.html` und `<name>.bamqc.json`).
+fn write_bam_report(
+    bam: &std::path::Path,
+    qc: &gc_bam::BamQc,
+    log: Option<&std::path::Path>,
+    html: Option<&std::path::Path>,
+) -> Result<serde_json::Value> {
+    let (_, _, raw) =
+        gc_io::bam::open_raw(bam, 1).with_context(|| format!("{} öffnen", bam.display()))?;
+    let header_text = String::from_utf8_lossy(&raw);
+    let events = log.map(bericht::read_log).unwrap_or_default();
+    let facts = bericht::facts(bam, &header_text, qc, &events, flag_counts_json);
+    let (default_html, default_json) = bericht::output_paths(bam);
+    let (html_path, json_path) = match html {
+        Some(h) => (h.to_path_buf(), h.with_extension("bamqc.json")),
+        None => (default_html, default_json),
+    };
+    bericht::write(&facts, &html_path, &json_path)?;
+    let result = json!({
+        "html": html_path.display().to_string(),
+        "json": json_path.display().to_string(),
+        "schema": bericht::SCHEMA,
+        "mit_protokoll": !events.is_empty(),
+    });
+    gc_log::info("BERICHT.FERTIG", "Überblick geschrieben", result.clone());
     Ok(result)
+}
+
+/// Ein Durchlauf über eine nach Ort sortierte BAM, nur für den Überblick.
+fn qc_bam(bam: &std::path::Path, kerne: usize) -> Result<gc_bam::BamQc> {
+    let (mut reader, header, _) =
+        gc_io::bam::open_raw(bam, kerne).with_context(|| format!("{} öffnen", bam.display()))?;
+    let mut qc = gc_bam::BamQc::new(gc_io::bam::contigs(&header));
+    let mut st = gc_log::stage("bericht.lesen", json!({}));
+    let mut record = Vec::new();
+    loop {
+        record.clear();
+        if !gc_io::bam::read_encoded(&mut reader, &mut record)
+            .with_context(|| format!("{} lesen", bam.display()))?
+        {
+            break;
+        }
+        qc.push(&record[4..])?;
+        st.heartbeat(30, || json!({ "saetze": qc.records }));
+    }
+    qc.finish();
+    st.finish(json!({ "saetze": qc.records }));
+    Ok(qc)
 }
 
 /// Sortiert eine BAM nach Ort. Die Ausgabe entsteht unter einem vorläufigen Namen und bekommt
@@ -1178,11 +1254,16 @@ fn index_bam(
     bam: &std::path::Path,
     dst: &std::path::Path,
     kerne: usize,
+    qc: Option<&mut gc_bam::BamQc>,
 ) -> Result<serde_json::Value> {
     let started = std::time::Instant::now();
     let (mut reader, header, _) =
         gc_io::bam::open_raw(bam, kerne).with_context(|| format!("{} öffnen", bam.display()))?;
     let n_ref = header.reference_sequences().len();
+    let mut qc = qc;
+    if let Some(qc) = qc.as_mut() {
+        **qc = gc_bam::BamQc::new(gc_io::bam::contigs(&header));
+    }
     // Stelle hinter dem zuletzt gelesenen Datensatz; am Anfang die Stelle hinter dem Kopf.
     let mut position = gc_io::bam::virtual_position(&reader);
     let mut builder = gc_bam::BaiBuilder::new(n_ref, position);
@@ -1198,8 +1279,14 @@ fn index_bam(
         }
         position = gc_io::bam::virtual_position(&reader);
         builder.push_record(&record[4..], position)?;
+        if let Some(qc) = qc.as_mut() {
+            qc.push(&record[4..])?;
+        }
         records += 1;
         st.heartbeat(30, || json!({ "saetze": records }));
+    }
+    if let Some(qc) = qc {
+        qc.finish();
     }
     st.finish(json!({ "saetze": records }));
     // Nicht die Stelle nach dem Dateiende: Dort steht noch der leere Schlussblock der BAM.
@@ -2006,7 +2093,7 @@ fn main() -> Result<()> {
                 "kerne": kerne,
             }));
             gc_log::input_file("bam", &bam);
-            match index_bam(&bam, &dst, kerne) {
+            match index_bam(&bam, &dst, kerne, None) {
                 Ok(mut result) => {
                     result["lauf"] = json!(gc_log::run_id());
                     gc_log::run_end(true, result.clone());
@@ -2112,6 +2199,58 @@ fn main() -> Result<()> {
             };
             println!("{}", Envelope::new("genome.trim.v1", result).to_json()?);
         }
+        Command::BamBericht {
+            bam,
+            protokoll,
+            aus,
+            kerne,
+            log,
+        } => {
+            gc_log::init(gc_log::Config {
+                tool: "bam-bericht".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                level: gc_log::Level::Info,
+                jsonl: log,
+                stderr: true,
+            })?;
+            gc_log::install_panic_hook();
+            let protokoll = protokoll.or_else(|| {
+                let mut name = bam.as_os_str().to_owned();
+                name.push(".log.jsonl");
+                let p = PathBuf::from(name);
+                p.exists().then_some(p)
+            });
+            gc_log::run_header(json!({
+                "bam": bam.display().to_string(),
+                "protokoll": protokoll.as_ref().map(|p| p.display().to_string()),
+                "aus": aus.as_ref().map(|p| p.display().to_string()),
+                "kerne": kerne,
+            }));
+            gc_log::input_file("bam", &bam);
+            let done = qc_bam(&bam, kerne)
+                .and_then(|qc| write_bam_report(&bam, &qc, protokoll.as_deref(), aus.as_deref()));
+            match done {
+                Ok(mut result) => {
+                    result["lauf"] = json!(gc_log::run_id());
+                    gc_log::run_end(true, result.clone());
+                    println!(
+                        "{}",
+                        Envelope::new("genome.bam-bericht.v1", result).to_json()?
+                    );
+                }
+                Err(e) => {
+                    gc_log::failure(gc_log::Failure {
+                        code: "BERICHT.FEHLGESCHLAGEN",
+                        what: "Der Überblick wurde nicht geschrieben",
+                        location: json!({ "bam": bam.display().to_string() }),
+                        cause: &format!("{e:#}"),
+                        action: "BAM mit samtools quickcheck prüfen; sie muss nach Ort sortiert sein (genome sort)",
+                    });
+                    gc_log::run_end(false, json!({ "fehler": format!("{e:#}") }));
+                    return Err(e);
+                }
+            }
+        }
         Command::Fq2bam {
             index,
             fastq,
@@ -2126,13 +2265,14 @@ fn main() -> Result<()> {
             log,
             trimmen,
             sa_ausduennen,
+            ohne_bericht,
         } => {
             let threads = if kerne == 0 {
                 std::thread::available_parallelism().map_or(1, usize::from)
             } else {
                 kerne
             };
-            let log = log.unwrap_or_else(|| {
+            let log_path = log.unwrap_or_else(|| {
                 let mut name = aus.as_os_str().to_owned();
                 name.push(".log.jsonl");
                 PathBuf::from(name)
@@ -2141,7 +2281,7 @@ fn main() -> Result<()> {
                 tool: "fq2bam".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 level: gc_log::Level::Info,
-                jsonl: Some(log),
+                jsonl: Some(log_path.clone()),
                 stderr: true,
             })?;
             gc_log::install_panic_hook();
@@ -2162,6 +2302,7 @@ fn main() -> Result<()> {
                 "max_laenge": max_laenge,
                 "trimmen": trimmen,
                 "sa_ausduennen": sa_ausduennen,
+                "bericht": !ohne_bericht,
             }));
             gc_log::input_file("fastq", &fastq);
             if let Some(p) = &fastq2 {
@@ -2181,8 +2322,22 @@ fn main() -> Result<()> {
                 max_length: max_laenge,
                 trim: trimmen,
                 sa_thin: sa_ausduennen,
+                report: !ohne_bericht,
             };
-            match fq2bam(&run) {
+            // Ein Fehler beim Überblick lässt die fertige BAM stehen: nur eine Warnung.
+            match fq2bam(&run).map(|(mut result, qc)| {
+                if let Some(qc) = &qc {
+                    match write_bam_report(&aus, qc, Some(&log_path), None) {
+                        Ok(r) => result["bericht"] = r,
+                        Err(e) => gc_log::warn(
+                            "BERICHT.FEHLGESCHLAGEN",
+                            "Überblick nicht geschrieben, die BAM ist fertig",
+                            json!({ "ursache": format!("{e:#}"), "was_tun": "genome bam-bericht <bam> nachholen" }),
+                        ),
+                    }
+                }
+                result
+            }) {
                 Ok(mut result) => {
                     result["lauf"] = json!(gc_log::run_id());
                     gc_log::run_end(true, result.clone());

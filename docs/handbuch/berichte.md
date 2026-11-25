@@ -1,6 +1,8 @@
 # Berichte
 
 Stand: geplant (Plan Abschnitt 14). Der Rahmen `gc-report` entsteht mit `fq2bam` in Meilenstein M5.
+Gebaut ist der erste eigenständige Bericht: der Überblick über eine BAM
+([`bam-bericht`](werkzeuge/bam-bericht.md)), den `fq2bam` neben jede BAM schreibt.
 
 ## Grundsatz
 
