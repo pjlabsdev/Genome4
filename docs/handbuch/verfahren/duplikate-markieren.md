@@ -79,8 +79,8 @@ PCR-Kopien meist nicht; deshalb ist ihr Anteil dort viel zu hoch. Am ganzen Geno
 129.700 von 5.391.316 Duplikaten aus Paaren optisch (2,4 %); die geschätzte Bibliothek wächst
 dadurch von 21,96 auf 22,50 Milliarden Moleküle (Mac M5, 695 s, 364 MB).
 
-Die Grenze 1000 ist am Ausschnitt belegt (1.749 Duplikat-Moleküle, beobachtet gegen zufällig
-erwartet im selben Feld):
+Die Grenze 1000 ist aus der Verteilung am Ausschnitt abgeleitet (1.749 Duplikat-Moleküle,
+beobachtet gegen zufällig erwartet im selben Feld):
 
 | Abstand der Nummer höchstens | beobachtet | zufällig erwartet |
 |---|---|---|
@@ -92,6 +92,11 @@ erwartet im selben Feld):
 
 Zwischen 1.000 und 10.000 kommt nichts hinzu; die übrigen 25 Duplikate im selben Feld liegen im
 Bereich des Zufalls.
+
+Das ist eine statistisch begründete Regel, keine gegen eine Wahrheit geprüfte Einstufung: Es gibt
+noch keinen Datensatz, in dem für jedes Duplikat bekannt ist, ob es optisch oder aus der PCR
+stammt. Bis dahin gilt die Zahl der optischen Duplikate als Schätzung; die markierten Reads hängen
+nicht davon ab.
 
 Eingestuft wird erst, wenn die Gruppe das Fenster verlässt: Jedes Duplikat wird mit dem Paar
 verglichen, das am Ende behalten wird. So hängt das Ergebnis nicht von der Reihenfolge gleich

@@ -718,10 +718,12 @@ impl DupMarker {
         let Some(&kept) = self.pairs.get(key) else {
             return;
         };
-        let name = |n: u64| View {
-            b: &self.queue[(n - self.front) as usize].record[4..],
-        }
-        .name();
+        let name = |n: u64| {
+            View {
+                b: &self.queue[(n - self.front) as usize].record[4..],
+            }
+            .name()
+        };
         let optical = members
             .iter()
             .filter(|&&m| m != kept && rule.neighbours(name(m), name(kept)))
