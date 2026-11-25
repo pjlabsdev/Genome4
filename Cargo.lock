@@ -331,6 +331,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "genome-validate"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "flate2",
+ "gc-io",
+ "gc-schema",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

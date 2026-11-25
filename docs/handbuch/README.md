@@ -37,10 +37,12 @@ Auf keiner Seite steht eine Genauigkeits- oder Tempoaussage ohne Messung.
 - [`genome bam-index`](werkzeuge/bam-index.md)
 - [`genome flagstat`](werkzeuge/flagstat.md)
 - [`genome fq2bam`](werkzeuge/fq2bam.md)
+- [`genome-validate`](werkzeuge/genome-validate.md): Prüfprogramm, Messung gegen eine bekannte Wahrheit
 - [Vorlage für neue Werkzeugseiten](werkzeuge/vorlage.md)
 
 ### Verfahren
 - [FASTQ-Prüfung und Herkunft der Lesungen](verfahren/fastq-pruefung.md)
+- [Wahrheit erzeugen und Ausrichtung prüfen](verfahren/wahrheit-simulieren.md)
 - [BAM lesen und schreiben](verfahren/bam-schreiben.md)
 - [Ausrichten auf mehreren Kernen](verfahren/mehrere-kerne.md)
 - [Suffix-Array nach SA-IS](verfahren/suffix-array-sais.md)

@@ -1,0 +1,778 @@
+{
+  "schema": "genome.validate.mapping.v1",
+  "tool": "genome-validate",
+  "version": "0.1.0",
+  "result": {
+    "bams": [
+      {
+        "bereiche": [],
+        "gesamt": {
+          "mapq20": 386865,
+          "reads": 400000,
+          "unmapped": 0,
+          "wrong": 8545,
+          "wrong_mapq20": 13
+        },
+        "je_mapq": [
+          {
+            "falsch": 8174,
+            "mapq": 0,
+            "reads": 10218
+          },
+          {
+            "falsch": 29,
+            "mapq": 1,
+            "reads": 81
+          },
+          {
+            "falsch": 28,
+            "mapq": 2,
+            "reads": 121
+          },
+          {
+            "falsch": 33,
+            "mapq": 3,
+            "reads": 145
+          },
+          {
+            "falsch": 60,
+            "mapq": 4,
+            "reads": 184
+          },
+          {
+            "falsch": 45,
+            "mapq": 5,
+            "reads": 205
+          },
+          {
+            "falsch": 20,
+            "mapq": 6,
+            "reads": 191
+          },
+          {
+            "falsch": 46,
+            "mapq": 7,
+            "reads": 228
+          },
+          {
+            "falsch": 22,
+            "mapq": 8,
+            "reads": 180
+          },
+          {
+            "falsch": 27,
+            "mapq": 9,
+            "reads": 173
+          },
+          {
+            "falsch": 12,
+            "mapq": 10,
+            "reads": 154
+          },
+          {
+            "falsch": 6,
+            "mapq": 11,
+            "reads": 145
+          },
+          {
+            "falsch": 4,
+            "mapq": 12,
+            "reads": 153
+          },
+          {
+            "falsch": 5,
+            "mapq": 13,
+            "reads": 142
+          },
+          {
+            "falsch": 13,
+            "mapq": 14,
+            "reads": 172
+          },
+          {
+            "falsch": 2,
+            "mapq": 15,
+            "reads": 162
+          },
+          {
+            "falsch": 2,
+            "mapq": 16,
+            "reads": 146
+          },
+          {
+            "falsch": 2,
+            "mapq": 17,
+            "reads": 118
+          },
+          {
+            "falsch": 0,
+            "mapq": 18,
+            "reads": 113
+          },
+          {
+            "falsch": 2,
+            "mapq": 19,
+            "reads": 104
+          },
+          {
+            "falsch": 0,
+            "mapq": 20,
+            "reads": 145
+          },
+          {
+            "falsch": 0,
+            "mapq": 21,
+            "reads": 80
+          },
+          {
+            "falsch": 0,
+            "mapq": 22,
+            "reads": 156
+          },
+          {
+            "falsch": 0,
+            "mapq": 23,
+            "reads": 113
+          },
+          {
+            "falsch": 1,
+            "mapq": 24,
+            "reads": 116
+          },
+          {
+            "falsch": 0,
+            "mapq": 25,
+            "reads": 150
+          },
+          {
+            "falsch": 0,
+            "mapq": 26,
+            "reads": 38
+          },
+          {
+            "falsch": 6,
+            "mapq": 27,
+            "reads": 371
+          },
+          {
+            "falsch": 0,
+            "mapq": 28,
+            "reads": 36
+          },
+          {
+            "falsch": 0,
+            "mapq": 29,
+            "reads": 46
+          },
+          {
+            "falsch": 0,
+            "mapq": 30,
+            "reads": 57
+          },
+          {
+            "falsch": 1,
+            "mapq": 31,
+            "reads": 54
+          },
+          {
+            "falsch": 0,
+            "mapq": 32,
+            "reads": 24
+          },
+          {
+            "falsch": 0,
+            "mapq": 33,
+            "reads": 50
+          },
+          {
+            "falsch": 0,
+            "mapq": 34,
+            "reads": 58
+          },
+          {
+            "falsch": 0,
+            "mapq": 35,
+            "reads": 46
+          },
+          {
+            "falsch": 0,
+            "mapq": 36,
+            "reads": 33
+          },
+          {
+            "falsch": 0,
+            "mapq": 37,
+            "reads": 42
+          },
+          {
+            "falsch": 0,
+            "mapq": 38,
+            "reads": 33
+          },
+          {
+            "falsch": 0,
+            "mapq": 39,
+            "reads": 65
+          },
+          {
+            "falsch": 4,
+            "mapq": 40,
+            "reads": 2081
+          },
+          {
+            "falsch": 0,
+            "mapq": 41,
+            "reads": 119
+          },
+          {
+            "falsch": 0,
+            "mapq": 42,
+            "reads": 76
+          },
+          {
+            "falsch": 0,
+            "mapq": 43,
+            "reads": 135
+          },
+          {
+            "falsch": 0,
+            "mapq": 44,
+            "reads": 118
+          },
+          {
+            "falsch": 0,
+            "mapq": 45,
+            "reads": 213
+          },
+          {
+            "falsch": 0,
+            "mapq": 46,
+            "reads": 173
+          },
+          {
+            "falsch": 0,
+            "mapq": 47,
+            "reads": 346
+          },
+          {
+            "falsch": 0,
+            "mapq": 48,
+            "reads": 586
+          },
+          {
+            "falsch": 0,
+            "mapq": 49,
+            "reads": 45
+          },
+          {
+            "falsch": 0,
+            "mapq": 50,
+            "reads": 48
+          },
+          {
+            "falsch": 0,
+            "mapq": 51,
+            "reads": 64
+          },
+          {
+            "falsch": 0,
+            "mapq": 52,
+            "reads": 82
+          },
+          {
+            "falsch": 0,
+            "mapq": 53,
+            "reads": 43
+          },
+          {
+            "falsch": 0,
+            "mapq": 54,
+            "reads": 60
+          },
+          {
+            "falsch": 0,
+            "mapq": 55,
+            "reads": 64
+          },
+          {
+            "falsch": 0,
+            "mapq": 56,
+            "reads": 78
+          },
+          {
+            "falsch": 0,
+            "mapq": 57,
+            "reads": 154
+          },
+          {
+            "falsch": 0,
+            "mapq": 58,
+            "reads": 28
+          },
+          {
+            "falsch": 0,
+            "mapq": 59,
+            "reads": 121
+          },
+          {
+            "falsch": 1,
+            "mapq": 60,
+            "reads": 380518
+          }
+        ],
+        "name": "genome4",
+        "namen_ohne_wahrheit": 0,
+        "stufen": [
+          {
+            "expected_wrong": 10218.0,
+            "mapq_from": 0,
+            "mapq_to": 0,
+            "reads": 10218,
+            "wrong": 8174
+          },
+          {
+            "expected_wrong": 495.2134846974825,
+            "mapq_from": 1,
+            "mapq_to": 9,
+            "reads": 1508,
+            "wrong": 310
+          },
+          {
+            "expected_wrong": 64.78057409196349,
+            "mapq_from": 10,
+            "mapq_to": 19,
+            "reads": 1409,
+            "wrong": 48
+          },
+          {
+            "expected_wrong": 5.522904313156607,
+            "mapq_from": 20,
+            "mapq_to": 29,
+            "reads": 1251,
+            "wrong": 7
+          },
+          {
+            "expected_wrong": 0.20781524541151153,
+            "mapq_from": 30,
+            "mapq_to": 39,
+            "reads": 462,
+            "wrong": 1
+          },
+          {
+            "expected_wrong": 0.2616502871733599,
+            "mapq_from": 40,
+            "mapq_to": 49,
+            "reads": 3892,
+            "wrong": 4
+          },
+          {
+            "expected_wrong": 0.00286242019811886,
+            "mapq_from": 50,
+            "mapq_to": 59,
+            "reads": 742,
+            "wrong": 0
+          },
+          {
+            "expected_wrong": 0.38051799999999997,
+            "mapq_from": 60,
+            "mapq_to": 60,
+            "reads": 380518,
+            "wrong": 1
+          }
+        ],
+        "uebersprungen_sekundaer_supplementaer": 0
+      },
+      {
+        "bereiche": [],
+        "gesamt": {
+          "mapq20": 386865,
+          "reads": 400000,
+          "unmapped": 0,
+          "wrong": 8535,
+          "wrong_mapq20": 13
+        },
+        "je_mapq": [
+          {
+            "falsch": 8164,
+            "mapq": 0,
+            "reads": 10218
+          },
+          {
+            "falsch": 29,
+            "mapq": 1,
+            "reads": 81
+          },
+          {
+            "falsch": 28,
+            "mapq": 2,
+            "reads": 121
+          },
+          {
+            "falsch": 33,
+            "mapq": 3,
+            "reads": 145
+          },
+          {
+            "falsch": 60,
+            "mapq": 4,
+            "reads": 182
+          },
+          {
+            "falsch": 45,
+            "mapq": 5,
+            "reads": 205
+          },
+          {
+            "falsch": 20,
+            "mapq": 6,
+            "reads": 191
+          },
+          {
+            "falsch": 46,
+            "mapq": 7,
+            "reads": 230
+          },
+          {
+            "falsch": 22,
+            "mapq": 8,
+            "reads": 178
+          },
+          {
+            "falsch": 27,
+            "mapq": 9,
+            "reads": 173
+          },
+          {
+            "falsch": 12,
+            "mapq": 10,
+            "reads": 154
+          },
+          {
+            "falsch": 6,
+            "mapq": 11,
+            "reads": 145
+          },
+          {
+            "falsch": 4,
+            "mapq": 12,
+            "reads": 155
+          },
+          {
+            "falsch": 5,
+            "mapq": 13,
+            "reads": 140
+          },
+          {
+            "falsch": 13,
+            "mapq": 14,
+            "reads": 174
+          },
+          {
+            "falsch": 2,
+            "mapq": 15,
+            "reads": 162
+          },
+          {
+            "falsch": 2,
+            "mapq": 16,
+            "reads": 146
+          },
+          {
+            "falsch": 2,
+            "mapq": 17,
+            "reads": 118
+          },
+          {
+            "falsch": 0,
+            "mapq": 18,
+            "reads": 113
+          },
+          {
+            "falsch": 2,
+            "mapq": 19,
+            "reads": 104
+          },
+          {
+            "falsch": 0,
+            "mapq": 20,
+            "reads": 143
+          },
+          {
+            "falsch": 0,
+            "mapq": 21,
+            "reads": 80
+          },
+          {
+            "falsch": 0,
+            "mapq": 22,
+            "reads": 156
+          },
+          {
+            "falsch": 0,
+            "mapq": 23,
+            "reads": 113
+          },
+          {
+            "falsch": 1,
+            "mapq": 24,
+            "reads": 116
+          },
+          {
+            "falsch": 0,
+            "mapq": 25,
+            "reads": 150
+          },
+          {
+            "falsch": 0,
+            "mapq": 26,
+            "reads": 38
+          },
+          {
+            "falsch": 6,
+            "mapq": 27,
+            "reads": 371
+          },
+          {
+            "falsch": 0,
+            "mapq": 28,
+            "reads": 36
+          },
+          {
+            "falsch": 0,
+            "mapq": 29,
+            "reads": 46
+          },
+          {
+            "falsch": 0,
+            "mapq": 30,
+            "reads": 57
+          },
+          {
+            "falsch": 1,
+            "mapq": 31,
+            "reads": 56
+          },
+          {
+            "falsch": 0,
+            "mapq": 32,
+            "reads": 24
+          },
+          {
+            "falsch": 0,
+            "mapq": 33,
+            "reads": 50
+          },
+          {
+            "falsch": 0,
+            "mapq": 34,
+            "reads": 58
+          },
+          {
+            "falsch": 0,
+            "mapq": 35,
+            "reads": 48
+          },
+          {
+            "falsch": 0,
+            "mapq": 36,
+            "reads": 33
+          },
+          {
+            "falsch": 0,
+            "mapq": 37,
+            "reads": 40
+          },
+          {
+            "falsch": 0,
+            "mapq": 38,
+            "reads": 33
+          },
+          {
+            "falsch": 0,
+            "mapq": 39,
+            "reads": 63
+          },
+          {
+            "falsch": 4,
+            "mapq": 40,
+            "reads": 2082
+          },
+          {
+            "falsch": 0,
+            "mapq": 41,
+            "reads": 120
+          },
+          {
+            "falsch": 0,
+            "mapq": 42,
+            "reads": 76
+          },
+          {
+            "falsch": 0,
+            "mapq": 43,
+            "reads": 135
+          },
+          {
+            "falsch": 0,
+            "mapq": 44,
+            "reads": 117
+          },
+          {
+            "falsch": 0,
+            "mapq": 45,
+            "reads": 214
+          },
+          {
+            "falsch": 0,
+            "mapq": 46,
+            "reads": 173
+          },
+          {
+            "falsch": 0,
+            "mapq": 47,
+            "reads": 346
+          },
+          {
+            "falsch": 0,
+            "mapq": 48,
+            "reads": 586
+          },
+          {
+            "falsch": 0,
+            "mapq": 49,
+            "reads": 45
+          },
+          {
+            "falsch": 0,
+            "mapq": 50,
+            "reads": 48
+          },
+          {
+            "falsch": 0,
+            "mapq": 51,
+            "reads": 64
+          },
+          {
+            "falsch": 0,
+            "mapq": 52,
+            "reads": 82
+          },
+          {
+            "falsch": 0,
+            "mapq": 53,
+            "reads": 43
+          },
+          {
+            "falsch": 0,
+            "mapq": 54,
+            "reads": 60
+          },
+          {
+            "falsch": 0,
+            "mapq": 55,
+            "reads": 64
+          },
+          {
+            "falsch": 0,
+            "mapq": 56,
+            "reads": 78
+          },
+          {
+            "falsch": 0,
+            "mapq": 57,
+            "reads": 154
+          },
+          {
+            "falsch": 0,
+            "mapq": 58,
+            "reads": 28
+          },
+          {
+            "falsch": 0,
+            "mapq": 59,
+            "reads": 121
+          },
+          {
+            "falsch": 1,
+            "mapq": 60,
+            "reads": 380518
+          }
+        ],
+        "name": "bwa",
+        "namen_ohne_wahrheit": 0,
+        "stufen": [
+          {
+            "expected_wrong": 10218.0,
+            "mapq_from": 0,
+            "mapq_to": 0,
+            "reads": 10218,
+            "wrong": 8164
+          },
+          {
+            "expected_wrong": 494.4993441808771,
+            "mapq_from": 1,
+            "mapq_to": 9,
+            "reads": 1506,
+            "wrong": 310
+          },
+          {
+            "expected_wrong": 64.88614954824477,
+            "mapq_from": 10,
+            "mapq_to": 19,
+            "reads": 1411,
+            "wrong": 48
+          },
+          {
+            "expected_wrong": 5.502904313156607,
+            "mapq_from": 20,
+            "mapq_to": 29,
+            "reads": 1249,
+            "wrong": 7
+          },
+          {
+            "expected_wrong": 0.20938551986764115,
+            "mapq_from": 30,
+            "mapq_to": 39,
+            "reads": 462,
+            "wrong": 1
+          },
+          {
+            "expected_wrong": 0.26182153205637865,
+            "mapq_from": 40,
+            "mapq_to": 49,
+            "reads": 3894,
+            "wrong": 4
+          },
+          {
+            "expected_wrong": 0.00286242019811886,
+            "mapq_from": 50,
+            "mapq_to": 59,
+            "reads": 742,
+            "wrong": 0
+          },
+          {
+            "expected_wrong": 0.38051799999999997,
+            "mapq_from": 60,
+            "mapq_to": 60,
+            "reads": 380518,
+            "wrong": 1
+          }
+        ],
+        "uebersprungen_sekundaer_supplementaer": 0
+      }
+    ],
+    "toleranz": 20,
+    "vergleiche": [
+      {
+        "a": "genome4",
+        "a_confident_wrong_b_right": 0,
+        "b": "bwa",
+        "b_confident_wrong_a_right": 0,
+        "both_not_right": 8531,
+        "both_right": 391451,
+        "only_a_right": 4,
+        "only_b_right": 14
+      }
+    ]
+  }
+}

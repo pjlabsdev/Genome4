@@ -1,0 +1,36 @@
+{
+  "schema": "genome.validate.reads.v1",
+  "tool": "genome-validate",
+  "version": "0.1.0",
+  "result": {
+    "contigs": 1,
+    "einstellungen": {
+      "indel_rate": 0.000125,
+      "insert_mean": 400.0,
+      "insert_sd": 60.0,
+      "length": 150,
+      "max_indel": 10,
+      "pairs": 200000,
+      "profile": {
+        "indel_rate": 0.00005,
+        "levels": [
+          2,
+          12,
+          23,
+          37
+        ],
+        "low_end": 0.15,
+        "low_start": 0.03,
+        "name": "illumina"
+      },
+      "seed": 3,
+      "snv_rate": 0.001
+    },
+    "indels": 7919,
+    "paare": 200000,
+    "referenz": "/home/user/tools/ref/chr20.fa",
+    "snvs": 63701,
+    "varianten": 71620,
+    "verworfene_stuecke": 1638
+  }
+}

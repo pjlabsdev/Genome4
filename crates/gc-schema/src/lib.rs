@@ -24,6 +24,16 @@ impl<T: Serialize> Envelope<T> {
         }
     }
 
+    /// Für Programme neben `genome` (z. B. `genome-validate`).
+    pub fn for_tool(tool: &'static str, schema: &'static str, result: T) -> Self {
+        Self {
+            schema,
+            tool,
+            version: env!("CARGO_PKG_VERSION"),
+            result,
+        }
+    }
+
     pub fn to_json(&self) -> serde_json::Result<String> {
         serde_json::to_string_pretty(self)
     }

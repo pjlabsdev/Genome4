@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/gc-align", "crates/gc-bam", "crates/gc-index", "crates/gc-io", "crates/gc-log", "crates/gc-panel", "crates/gc-schema", "crates/gc-sys", "crates/genome"]
+members = ["crates/gc-align", "crates/gc-bam", "crates/gc-index", "crates/gc-io", "crates/gc-log", "crates/gc-panel", "crates/gc-schema", "crates/gc-sys", "crates/genome", "crates/genome-validate"]
 
 [workspace.package]
 version = "0.1.0"
