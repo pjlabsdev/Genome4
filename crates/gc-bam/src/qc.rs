@@ -91,8 +91,8 @@ pub struct BamQc {
     /// Sätze mit NM-Tag (nur diese gehen in die Fehlerrate ein) und deren ausgerichtete Basen.
     pub nm_records: u64,
     pub nm_aligned_bases: u64,
-    /// Wie `samtools stats`: Summe der NM-Werte und Basen aus M, I, = und X, über alle
-    /// Hauptzeilen mit Ort (Duplikate eingeschlossen, ohne ergänzende Alignments).
+    /// Wie `samtools stats`: Summe der NM-Werte und Basen aus M, I, = und X, über alle Sätze
+    /// mit Ort außer Nebenzeilen (Duplikate und ergänzende Alignments eingeschlossen).
     pub nm_sum: u64,
     pub nm_query_bases: u64,
     /// Verteilung der Abdeckung je Stelle auf den Autosomen.
@@ -348,9 +348,11 @@ impl BamQc {
                 }
             }
         }
-        // Fehlerrate wie `samtools stats`: Hauptzeilen mit Ort, Duplikate eingeschlossen, NM je
-        // Basen aus M, I, = und X.
-        if primary && let Some(nm) = nm {
+        // Fehlerrate wie `samtools stats`: alle Sätze mit Ort außer Nebenzeilen (ergänzende
+        // Alignments und Duplikate zählen mit), NM je Basen aus M, I, = und X.
+        if flag & SECONDARY == 0
+            && let Some(nm) = nm
+        {
             let mut query = 0u64;
             for k in 0..n_cigar {
                 let o = cigar_at + 4 * k;

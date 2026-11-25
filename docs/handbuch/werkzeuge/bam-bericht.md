@@ -66,7 +66,7 @@ HG002 chr20:10–12 Mb (GIAB, novoalign, 844.606 Datensätze) gegen samtools 1.2
 | `depth -a`: Stellen mit ≥ 1, 10, 20, 30x | 2.000.052 · 1.999.228 · 1.997.578 · 1.992.359 | gleich |
 | `depth -a`: Summe der Abdeckung | 123.834.008 | gleich (ausgerichtete Basen M) |
 | `stats`: bases mapped (cigar) | 123.870.250 | 123.834.008 M + 36.242 I, gleich |
-| `stats`: error rate (NM je M+I, Hauptzeilen mit Ort einschließlich Duplikate) | 0,3619755 % | gleich (`rate_wie_samtools`) |
+| `stats`: error rate (NM je M+I, alle Sätze mit Ort außer Nebenzeilen, Duplikate und ergänzende Alignments eingeschlossen) | 0,3619755 % | gleich (`rate_wie_samtools`) |
 | `stats`: average quality | 35,6 | 35,6 |
 | `flagstat` | | gleich (gleiche Zählung wie [flagstat](flagstat.md)) |
 
