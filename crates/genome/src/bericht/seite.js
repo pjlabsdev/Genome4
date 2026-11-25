@@ -11,12 +11,12 @@
   var nfCache = {};
   function fmt(x, d) {
     d = d || 0;
-    if (x === null || x === undefined || !isFinite(x)) return '–';
+    if (x === null || x === undefined || !isFinite(x)) return '-';
     var k = L + d;
     if (!nfCache[k]) nfCache[k] = new Intl.NumberFormat(L === 'de' ? 'de-DE' : 'en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
     return nfCache[k].format(x);
   }
-  function pct(x, d) { return (x === null || x === undefined || !isFinite(x)) ? '–' : fmt(100 * x, d === undefined ? 1 : d) + ' %'; }
+  function pct(x, d) { return (x === null || x === undefined || !isFinite(x)) ? '-' : fmt(100 * x, d === undefined ? 1 : d) + ' %'; }
   function mb(x) { return fmt(x / 1e6, x < 1e7 ? 1 : 0) + ' Mb'; }
   function short(n) { return n.replace(/^chr/, ''); }
 
@@ -216,7 +216,7 @@
         var pos = ((e.clientX - r.left) * W / r.width - m.l) / pw * maxLen;
         var q2 = Math.max(0, Math.min(c.abdeckung.length - 1, Math.floor(pos / D.fach)));
         var a = q2 * D.fach;
-        showTip(e, [c.name + ' · ' + mb(a) + '–' + mb(Math.min(c.laenge, a + D.fach)),
+        showTip(e, [c.name + ' · ' + mb(a) + '-' + mb(Math.min(c.laenge, a + D.fach)),
           [fmt(c.abdeckung[q2], 1) + 'x', t('Abdeckung', 'coverage')],
           [fmt(c.abdeckung[q2] / auto, 2), t('× Mittel der Autosomen', '× autosome mean')],
           t('Klicken für Details', 'Click for details')]);
@@ -276,7 +276,7 @@
     tile(tiles, pct(c.reads > 0 ? c.duplikate / c.reads : null, 2), t('Duplikate', 'Duplicates'), '');
     tile(tiles, pct(c.ab[0], 1), t('Stellen mit ≥ 1x', 'Positions ≥ 1x'), t('N-Strecken eingerechnet', 'N gaps included'));
     tile(tiles, pct(c.ab[2], 1), t('Stellen mit ≥ 20x', 'Positions ≥ 20x'), '');
-    tile(tiles, c.mapq === null ? '–' : fmt(c.mapq, 1), t('MAPQ im Mittel', 'Mean MAPQ'), t('ohne Duplikate', 'without duplicates'));
+    tile(tiles, c.mapq === null ? '-' : fmt(c.mapq, 1), t('MAPQ im Mittel', 'Mean MAPQ'), t('ohne Duplikate', 'without duplicates'));
 
     var xs = c.abdeckung.map(function (_, i) { return Math.min(c.laenge, (i + 0.5) * D.fach); });
     var spans = [];
@@ -288,7 +288,7 @@
     }
     function tipAt(k) {
       var a = k * D.fach;
-      return [c.name + ' · ' + mb(a) + '–' + mb(Math.min(c.laenge, a + D.fach)),
+      return [c.name + ' · ' + mb(a) + '-' + mb(Math.min(c.laenge, a + D.fach)),
         [fmt(c.abdeckung[k], 1) + 'x', t('Abdeckung', 'coverage')],
         [fmt(c.abdeckung[k] / auto, 2), t('× Mittel der Autosomen', '× autosome mean')],
         [fmt(c.fach_reads[k]), 'Reads'],
@@ -323,7 +323,7 @@
     if (c.verteilung) {
       h3(host, t('Abdeckung je Stelle auf ', 'Per-position coverage on ') + c.name);
       var hx = c.verteilung.map(function (_, i) { return i; });
-      var total = c.verteilung.reduce(function (a, b) { return a + b; }, 0) || 1;
+      var total = c.verteilung_stellen || c.verteilung.reduce(function (a, b) { return a + b; }, 0) || 1;
       var share = c.verteilung.map(function (v) { return v / total; });
       area(box(host), hx.slice(1), share.slice(1), {
         h: 200, xmin: 1, xlabel: t('Abdeckung', 'Coverage'), ylabel: t('Anteil der Stellen', 'Share of positions'),
@@ -345,7 +345,7 @@
   function hist(host, h, o) {
     var xs = [], ys = [], tot = 0;
     for (var i = 0; i < h.length; i++) tot += h[i];
-    tot = tot || 1;
+    tot = o.total || tot || 1;
     for (i = o.from || 0; i < h.length; i++) { xs.push(i); ys.push(h[i] / tot); }
     o.tip = o.tip || function (k) { return [fmt(xs[k]) + (o.unit || ''), [pct(ys[k], 2), o.of], [fmt(h[xs[k]]), o.count]]; };
     return area(host, xs, ys, o);
@@ -368,6 +368,7 @@
     if (D.insert) {
       hist(document.getElementById('v-insert'), D.insert.verteilung, {
         h: 230, xlabel: t('Insertgröße in Basen', 'Insert size in bases'), ylabel: t('Anteil der Paare', 'Share of pairs'),
+        total: D.insert.gesamt,
         refs: [{ x: D.insert.median, label: 'Median ' + fmt(D.insert.median) }], unit: ' bp', of: t('der Paare', 'of pairs'), count: t('Paare', 'pairs')
       });
     }
@@ -380,7 +381,7 @@
     dh.forEach(function (v) { dt += v; });
     dt = dt || 1;
     hist(document.getElementById('v-depth'), dh, {
-      h: 230, xlabel: t('Abdeckung', 'Coverage'), ylabel: t('Anteil der Stellen', 'Share of positions'),
+      h: 230, total: D.tiefe.stellen, xlabel: t('Abdeckung', 'Coverage'), ylabel: t('Anteil der Stellen', 'Share of positions'),
       refs: [{ x: D.tiefe.median, label: 'Median ' + fmt(D.tiefe.median) + 'x' }], unit: 'x', of: t('der Stellen', 'of positions'), count: t('Stellen', 'positions')
     });
     var cxs = [], cys = [], rest = D.tiefe.ab_ende;

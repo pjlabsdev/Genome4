@@ -21,6 +21,8 @@ const SUPPLEMENTARY: u16 = 0x800;
 pub const MAX_INSERT: usize = 2000;
 /// Größte Read-Länge mit eigenem Fach.
 pub const MAX_READ_LENGTH: usize = 1000;
+/// Längste Read-Länge, die einzeln gezählt wird; längere zählen hier.
+pub const MAX_READ_LENGTH_STORED: usize = 1 << 24;
 /// Größte Abdeckung mit eigenem Fach in der Verteilung.
 pub const MAX_DEPTH: usize = 1000;
 /// Breite der Fächer entlang eines Contigs.
@@ -276,7 +278,12 @@ impl BamQc {
         }
 
         if primary {
-            self.read_length[l_seq.min(MAX_READ_LENGTH)] += 1;
+            // Wächst mit dem längsten Read; erst ab 16 Mb wird zusammengefasst.
+            let l = l_seq.min(MAX_READ_LENGTH_STORED);
+            if l >= self.read_length.len() {
+                self.read_length.resize(l + 1, 0);
+            }
+            self.read_length[l] += 1;
             let qual = &rec[qual_at..tags_at];
             if qual.first().is_some_and(|&q| q != 0xff) {
                 let (mut sum, mut q30) = (0u64, 0u64);
