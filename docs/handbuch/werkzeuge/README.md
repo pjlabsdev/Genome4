@@ -16,6 +16,7 @@ Jedes Werkzeug hat eine Seite nach derselben [Vorlage](vorlage.md).
 | `genome fq2bam` | FASTQ zur sortierten, duplikatmarkierten, indizierten BAM in einem Lauf | erste Fassung, auf chr20 geprüft | [fq2bam](fq2bam.md) |
 | `genome trim` | Paare trimmen wie fastp 1.4.0, als FASTQ (für den Vergleich) | gebaut und geprüft | [trim](trim.md) |
 | `genome index` | FM-Index bauen, prüfen, abfragen | gebaut und geprüft | [index](index.md) |
+| `genome-validate` | Prüfprogramm: Reads mit bekannter Herkunft erzeugen, Ausrichtung gegen die Wahrheit prüfen | gebaut | [genome-validate](genome-validate.md) |
 
 ## Geplant
 
