@@ -469,6 +469,12 @@ fn align_into(
     let mut opt = gc_align::AlignOptions::default();
     opt.sam.read_group = read_group.map(|rg| rg.id.clone());
     opt.sam.mate_tags = mate_tags;
+    // Vorläufig für die Messung: GC_SCHNELLWEG=an oder pruefen.
+    opt.fast = match std::env::var("GC_SCHNELLWEG").as_deref() {
+        Ok("an") => gc_align::FastMode::On,
+        Ok("pruefen") => gc_align::FastMode::Check,
+        _ => gc_align::FastMode::Off,
+    };
     let reader1 = fastq::open(first)?;
     let reader2 = match second {
         Some(p) => Some(fastq::open(p)?),
@@ -556,6 +562,10 @@ fn align_into(
                 "sekunden_schreiben": t_write,
                 "sekunden_warten_auf_lesen": t_wait,
                 "reads_je_sekunde": if seconds > 0.0 { n_reads as f64 / seconds } else { 0.0 },
+                "schnellweg": gc_align::fast::counts()
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), json!(v)))
+                    .collect::<serde_json::Map<_, _>>(),
             }),
         );
         Ok((n_reads, n_lines, trim_counts))
