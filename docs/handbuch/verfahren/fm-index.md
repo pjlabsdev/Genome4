@@ -43,6 +43,19 @@ Standard ist die Vorgabe, weil die dichteren Stichproben das Ausrichten am ganze
 ist mit jeder Variante dieselbe. Wer wenig Arbeitsspeicher hat, baut mit `--variante kompakt`.
 Jede Datei trägt ihre Abstände im Kopf, ältere Indexdateien bleiben also lesbar.
 
+### Ausdünnen beim Laden
+
+`FmIndex::read_thinned(datei, n)` behält beim Laden nur jede n-te Stichprobe (n eine
+Zweierpotenz, der Abstand wächst höchstens bis 1024). Die Stichprobe zur Zeile `r` steht an Stelle
+`r / s`; behält man jede n-te, steht die Stichprobe zur Zeile `r` mit `r` durch `n·s` teilbar an
+Stelle `r / (n·s)`. Die Textpositionen sind also dieselben, nur das Rückwärtsgehen bis zur
+nächsten Stichprobe dauert im Mittel n-mal so lange. Gelesen wird stückweise, die vollen
+Stichproben liegen nie zugleich im Speicher. Am ganzen GRCh38 (standard, 421.564 echte Paare,
+4 Kerne) brauchte das Ausrichten 31,6 s mit allen Stichproben, 32,4 s mit n = 2 und 38,9 s mit
+n = 4; die BAM war in allen drei Fällen gleich (ohne `@PG`). Mit n = 2 sinkt der Speicher für die
+Stichproben von 4,0 auf 2,0 GB. Das hilft auf Rechnern mit 16 GB, auf denen der volle Index samt
+Sortierpuffer sonst ausgelagert wird (`genome fq2bam --sa-ausduennen`).
+
 ## Suche
 `occ(c, i)` zählt die Base c in den Zeilen 0 bis i-1 der BWT: Zählstand des Blocks plus Auszählen
 der Wörter bis i. `occ4(i)` liefert die Zählung für alle vier Basen in einem Durchgang durch

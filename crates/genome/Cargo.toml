@@ -10,6 +10,7 @@ publish.workspace = true
 gc-align.workspace = true
 gc-bam.workspace = true
 gc-index.workspace = true
+gc-sys.workspace = true
 gc-io.workspace = true
 gc-log.workspace = true
 gc-schema.workspace = true

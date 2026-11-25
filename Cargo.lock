@@ -308,6 +308,9 @@ dependencies = [
 [[package]]
 name = "gc-sys"
 version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "genome"
@@ -321,6 +324,7 @@ dependencies = [
  "gc-io",
  "gc-log",
  "gc-schema",
+ "gc-sys",
  "noodles",
  "serde_json",
 ]

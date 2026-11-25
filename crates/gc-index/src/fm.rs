@@ -916,8 +916,43 @@ impl FmIndex {
         w.inner.flush()
     }
 
+    /// Liest nur den Kopf einer Indexdatei: Zeilenzahl und Abstand der Suffix-Array-Stichproben.
+    /// Daraus folgt der Speicher der Stichproben (Zeilen / Abstand × 5 Bytes), ohne die Datei
+    /// zu laden.
+    pub fn read_sample_layout<R: Read>(mut input: R) -> io::Result<(u64, u32)> {
+        let mut head = [0u8; 40];
+        input.read_exact(&mut head)?;
+        if &head[..4] != MAGIC || u32::from_le_bytes(head[4..8].try_into().unwrap()) != FORMAT {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Indexdatei: keine Genome-Indexdatei dieser Version",
+            ));
+        }
+        let rows = u64::from_le_bytes(head[8..16].try_into().unwrap());
+        let sa = u64::from_le_bytes(head[32..40].try_into().unwrap());
+        if sa == 0 || sa > 1024 || !sa.is_power_of_two() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Indexdatei: unzulässige Abstände",
+            ));
+        }
+        Ok((rows, sa as u32))
+    }
+
+    /// Bytes je Suffix-Array-Stichprobe.
+    pub const SAMPLE_BYTES: u64 = SA_BYTES as u64;
+
     /// Liest einen Index und prüft Format, Größen und Prüfsumme.
     pub fn read<R: Read>(input: R) -> io::Result<FmIndex> {
+        Self::read_thinned(input, 1)
+    }
+
+    /// Wie [`FmIndex::read`], behält aber nur jede `keep_every`-te Stichprobe des
+    /// Suffix-Arrays (eine Zweierpotenz). Der Abstand der Stichproben wächst um diesen Faktor,
+    /// der Speicher für sie sinkt um ihn. Alle Ergebnisse bleiben gleich, nur das Auffinden
+    /// der Textpositionen braucht im Mittel mehr Schritte. Ist der Abstand in der Datei schon
+    /// 1024, bleibt es dabei.
+    pub fn read_thinned<R: Read>(input: R, keep_every: u32) -> io::Result<FmIndex> {
         let bad = |m: &str| io::Error::new(io::ErrorKind::InvalidData, format!("Indexdatei: {m}"));
         let mut r = CrcReader {
             inner: input,
@@ -991,9 +1026,38 @@ impl FmIndex {
         if n_samples != rows.div_ceil(sa_interval) {
             return Err(bad("Zahl der Suffix-Array-Stichproben passt nicht"));
         }
-        let mut sa_samples = vec![0u8; n_samples as usize * SA_BYTES];
-        for chunk in sa_samples.chunks_mut(1 << 16) {
-            r.read_exact(chunk)?;
+        if keep_every == 0 || !keep_every.is_power_of_two() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Ausdünnung der Stichproben muss eine Zweierpotenz sein",
+            ));
+        }
+        let keep = u64::from(keep_every).min(1024 / sa_interval).max(1);
+        let sa_interval = sa_interval * keep;
+        let mut sa_samples = vec![0u8; rows.div_ceil(sa_interval) as usize * SA_BYTES];
+        if keep == 1 {
+            for chunk in sa_samples.chunks_mut(1 << 16) {
+                r.read_exact(chunk)?;
+            }
+        } else {
+            // Stückweise lesen, damit nie alle Stichproben zugleich im Speicher liegen.
+            let per_chunk = (keep as usize) * 8192;
+            let mut buf = vec![0u8; per_chunk * SA_BYTES];
+            let (mut left, mut seen, mut out) = (n_samples as usize, 0usize, 0usize);
+            while left > 0 {
+                let take = left.min(per_chunk);
+                r.read_exact(&mut buf[..take * SA_BYTES])?;
+                for i in 0..take {
+                    if (seen + i) % keep as usize == 0 {
+                        sa_samples[out..out + SA_BYTES]
+                            .copy_from_slice(&buf[i * SA_BYTES..(i + 1) * SA_BYTES]);
+                        out += SA_BYTES;
+                    }
+                }
+                seen += take;
+                left -= take;
+            }
+            debug_assert_eq!(out, sa_samples.len());
         }
         let computed = r.crc.sum();
         let mut stored = [0u8; 4];
@@ -1300,6 +1364,27 @@ mod tests {
                 assert_eq!(got, want);
             }
         }
+    }
+
+    #[test]
+    fn thinned_samples_find_the_same_positions() {
+        let contigs = random_genome(12);
+        let index = build(&contigs, Variant::Schnell);
+        let mut bytes = Vec::new();
+        index.write(&mut bytes).unwrap();
+        for keep in [1u32, 2, 4, 16, 4096] {
+            let thin = FmIndex::read_thinned(&bytes[..], keep).unwrap();
+            let want = (index.sa_interval() * keep).min(1024.max(index.sa_interval()));
+            assert_eq!(thin.sa_interval(), want);
+            let rows: Vec<u64> = (0..index.rows()).collect();
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            index.locate_many(&rows, &mut a);
+            thin.locate_many(&rows, &mut b);
+            assert_eq!(a, b, "keep {keep}");
+        }
+        assert!(FmIndex::read_thinned(&bytes[..], 3).is_err());
+        let (rows, sa) = FmIndex::read_sample_layout(&bytes[..]).unwrap();
+        assert_eq!((rows, sa), (index.rows(), index.sa_interval()));
     }
 
     #[test]

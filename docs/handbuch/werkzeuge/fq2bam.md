@@ -14,7 +14,8 @@ sort, markdup, index, flagstat).
 ```bash
 genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.bam \
   [--lesegruppe '@RG\tID:lauf1\tSM:probe\tPL:ILLUMINA'] [--kerne 0] [--speicher-mb 2048] \
-  [--temp ORDNER] [--block-basen 10000000] [--max-laenge 300] [--log DATEI]
+  [--temp ORDNER] [--block-basen 10000000] [--max-laenge 300] [--log DATEI] \
+  [--trimmen] [--sa-ausduennen 0]
 ```
 
 | Option | Bedeutung | Vorgabe |
@@ -29,6 +30,7 @@ genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.
 | `--max-laenge` | längster erwarteter Read für das Markieren der Duplikate | 300 |
 | `--log` | Lauf-Protokoll | `<aus>.log.jsonl` |
 | `--trimmen` | Paare vor dem Ausrichten trimmen wie fastp 1.4.0 in der alten Kette (Adapter, PolyG, Qualität, Länge); verworfene Paare werden nicht ausgerichtet, siehe [Trimmen](../verfahren/trimmen.md). Nur für Paare | aus |
+| `--sa-ausduennen` | nur jede n-te Suffix-Array-Stichprobe des Index laden (Zweierpotenz). 0 wählt nach dem Arbeitsspeicher: die kleinste Zahl aus 1, 2 und 4, mit der Index und Sortierpuffer in die Hälfte des Arbeitsspeichers passen (`FQ2BAM.SPEICHERPLAN` im Protokoll). Mit 2 braucht der Index von GRCh38 (standard) rund 2 GB weniger Arbeitsspeicher und das Ausrichten etwa 2 % mehr Rechenzeit, mit 4 gut 20 % mehr. Die Ausgabe bleibt byte-gleich, siehe [FM-Index](../verfahren/fm-index.md#ausdünnen-beim-laden) | 0 |
 
 ## Ablauf
 1. Index laden ([FM-Index](../verfahren/fm-index.md)). Mit `--trimmen` läuft gleichzeitig die
