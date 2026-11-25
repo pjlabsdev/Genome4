@@ -51,11 +51,40 @@ Abdeckung).
 Folge der Bauart: Die Reihenfolge der Datensätze ändert sich nicht, und am Datensatz ändert sich
 nur ein Bit im Flag.
 
+## Optische Duplikate
+Nicht jede Kopie stammt aus der PCR. Liegt eine Kopie auf der Fläche des Geräts direkt neben
+dem Original, hat das Gerät dasselbe Molekül zweimal gelesen (Illumina: Nachbarcluster;
+DNBSEQ: Nachbar-DNB). Solche optischen Duplikate werden genauso markiert, zählen aber bei der
+Größe der Bibliothek nicht mit, denn sie sagen nichts über die Vervielfältigung.
+
+Ein Duplikat aus einem Paar gilt als optisch, wenn es mit dem behaltenen Paar derselben Gruppe
+Flowcell, Lane und Kachel bzw. Bildfeld teilt und nahe daneben liegt:
+
+- Illumina (`…:LANE:KACHEL:X:Y`): Abstand in x und in y höchstens `--optisch-pixel` (100, wie
+  Picard).
+- MGI/DNBSEQ (`FLOWCELL L<lane> C<spalte> R<reihe> <laufende Nummer>`): Abstand der laufenden
+  Nummer höchstens `--optisch-mgi-abstand` (1000).
+
+Warum bei MGI nicht wie samtools und Genome 3.x: Dort werden `C` und `R` als x und y gelesen und
+mit `-d 300` verglichen. `C` und `R` sind aber die Nummern des Bildfelds (bei PJ 2.833 Felder,
+`C` 1 bis 36, `R` 1 bis 42, im Mittel rund 126.000 Reads je Feld). Innerhalb einer Lane liegen
+alle Felder näher als 300 beieinander, so wurde jedes Duplikat optisch genannt (an einem
+Ausschnitt von PJ 3.438 von 3.438). Gemessen an diesem Ausschnitt liegen 47 % der Duplikate im
+selben Feld wie ihr Original, zufällig wären es 2,6 %. Bei 79 % von ihnen unterscheidet sich die
+laufende Nummer um genau 1, bei 97 % um höchstens 1000; zufällig wären es unter 0,04 %. Die
+Nummer gibt also die Lage im Feld wieder.
+
+Grenzen: Verglichen wird mit dem jeweils behaltenen Paar der Gruppe, nicht jedes Paar mit jedem
+(Picard prüft alle Paare einer Gruppe). Bei Gruppen aus zwei Paaren, dem häufigsten Fall, ist das
+gleich. Der Abstand 1000 bei MGI ist am Ausschnitt gewählt und am ganzen Genom noch zu belegen.
+Mit `--ohne-optisch` wird nichts eingestuft; dann sind alle Zahlen die von samtools ohne `-d`.
+
 ## Geschätzte Größe der Bibliothek
 Aus der Zahl der Paare und der doppelten Paare lässt sich schätzen, wie viele verschiedene
 Moleküle die Bibliothek enthielt (Lander und Waterman 1988, in der Form von Picard
 `DuplicationMetrics`): gesucht ist `X` mit `C / X = 1 - exp(-N / X)`, `N` Paare, `C`
 verschiedene Paare. Gelöst wird durch Halbieren des Bereichs in 40 Schritten, wie in samtools.
+Wie bei Picard zählen optische Duplikate nicht zu `N`.
 
 ## Was die Messung über die Grenzen zeigt
 - Position und Richtung sind das einzige Merkmal. Verschiebt eine Lücke nahe am Ende das Ende

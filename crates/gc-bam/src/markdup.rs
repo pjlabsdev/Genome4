@@ -48,11 +48,61 @@ pub struct DupOptions {
     /// Längster erwarteter Read einschließlich abgeschnittener Basen (samtools `-l`, 300).
     /// Bestimmt, wie lange ein Satz im Fenster bleibt.
     pub max_length: i64,
+    /// Optische Duplikate zählen; `None` = nicht zählen (wie samtools ohne `-d`). Das Flag der
+    /// Sätze hängt nicht davon ab, nur die Zahlen und die Schätzung der Bibliotheksgröße.
+    pub optical: Option<OpticalRule>,
 }
 
 impl Default for DupOptions {
     fn default() -> Self {
-        DupOptions { max_length: 300 }
+        DupOptions {
+            max_length: 300,
+            optical: Some(OpticalRule::default()),
+        }
+    }
+}
+
+/// Wann ein Duplikat als optisch gilt (Nachbar auf derselben Fläche statt Kopie aus der PCR).
+/// Immer nötig: dieselbe Flowcell, Lane und Kachel bzw. dasselbe Bildfeld.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpticalRule {
+    /// Illumina: höchster Abstand in x und in y, in Pixeln (Picard-Vorgabe 100).
+    pub pixel: u32,
+    /// MGI/DNBSEQ: höchster Abstand der laufenden Nummer im Bildfeld. Die Namen tragen keine
+    /// Pixel; `C` und `R` sind die Nummern des Bildfelds.
+    pub mgi_serial: u64,
+}
+
+impl Default for OpticalRule {
+    fn default() -> Self {
+        OpticalRule {
+            pixel: 100,
+            mgi_serial: 1000,
+        }
+    }
+}
+
+impl OpticalRule {
+    /// Ob zwei Reads nach ihrem Namen Nachbarn auf derselben Fläche sind. Unbekannte
+    /// Namensschemata sind nie optisch.
+    pub fn neighbours(&self, a: &[u8], b: &[u8]) -> bool {
+        let (Some(a), Some(b)) = (gc_io::readname::parse(a), gc_io::readname::parse(b)) else {
+            return false;
+        };
+        if a.platform != b.platform
+            || a.flowcell != b.flowcell
+            || a.lane != b.lane
+            || a.tile != b.tile
+        {
+            return false;
+        }
+        match (a.xy, b.xy, a.serial, b.serial) {
+            (Some((ax, ay)), Some((bx, by)), _, _) => {
+                ax.abs_diff(bx) <= self.pixel && ay.abs_diff(by) <= self.pixel
+            }
+            (_, _, Some(sa), Some(sb)) => sa.abs_diff(sb) <= self.mgi_serial,
+            _ => false,
+        }
     }
 }
 
@@ -70,6 +120,9 @@ pub struct DupStats {
     /// Als Duplikat markierte Reads mit Partner.
     pub duplicate_pair: u64,
     pub duplicate_single: u64,
+    /// Davon optisch: Reads mit Partner, deren Paar neben dem behaltenen Paar auf derselben
+    /// Fläche lag (nur mit [`OpticalRule`]).
+    pub optical_pair: u64,
     /// Größte Zahl von Sätzen, die gleichzeitig im Fenster lagen.
     pub window_peak: u64,
 }
@@ -77,11 +130,13 @@ pub struct DupStats {
 impl DupStats {
     /// Geschätzte Zahl verschiedener Moleküle in der Bibliothek (Formel aus Picard
     /// `DuplicationMetrics`, wie samtools sie übernimmt); `None`, wenn sie sich nicht schätzen lässt.
+    /// Optische Duplikate zählen wie bei Picard nicht als Paare der Bibliothek; ohne
+    /// [`OpticalRule`] ist ihre Zahl 0 und das Ergebnis das von samtools.
     pub fn estimated_library_size(&self) -> Option<u64> {
-        let pairs = self.paired / 2;
+        let pairs = (self.paired - self.optical_pair.min(self.paired)) / 2;
         let unique = (self.paired - self.duplicate_pair) / 2;
         let duplicates = self.duplicate_pair / 2;
-        if pairs == 0 || duplicates == 0 || unique == 0 || pairs <= duplicates {
+        if pairs == 0 || duplicates == 0 || unique == 0 || pairs <= unique {
             return None;
         }
         let (c, n) = (unique as f64, pairs as f64);
@@ -591,6 +646,14 @@ impl DupMarker {
                         } else {
                             -1
                         };
+                        if let Some(rule) = self.opt.optical {
+                            let record =
+                                |n: u64| &self.queue[(n - self.front) as usize].record[4..];
+                            let (a, b) = (View { b: record(old) }, View { b: record(nr) });
+                            if rule.neighbours(a.name(), b.name()) {
+                                self.stats.optical_pair += 1;
+                            }
+                        }
                         if new_score + tie > old_score {
                             self.mark(old);
                             self.pairs.insert(pair, nr);
@@ -931,6 +994,96 @@ mod tests {
         // Anfang ab 1 gezählt, abgeschnittene Basen abgezogen; Ende hinter der letzten Base
         assert_eq!(mate_ends(100, &text_cigar(b"5S40M2D3M2S")), (96, 147));
         assert_eq!(mate_ends(100, &text_cigar(b"50M")), (101, 150));
+    }
+
+    #[test]
+    fn optical_neighbours_follow_the_name() {
+        let rule = OpticalRule::default();
+        // MGI: gleiches Bildfeld, laufende Nummer 1 daneben
+        assert!(rule.neighbours(
+            b"E250160857L1C001R00200000021",
+            b"E250160857L1C001R00200000022"
+        ));
+        assert!(rule.neighbours(
+            b"E250160857L1C001R00200000021",
+            b"E250160857L1C001R00200001021"
+        ));
+        assert!(!rule.neighbours(
+            b"E250160857L1C001R00200000021",
+            b"E250160857L1C001R00200001022"
+        ));
+        // anderes Bildfeld, andere Lane oder Flowcell: nie optisch, auch bei naher Nummer
+        assert!(!rule.neighbours(
+            b"E250160857L1C001R00200000021",
+            b"E250160857L1C001R00300000021"
+        ));
+        assert!(!rule.neighbours(
+            b"E250160857L1C001R00200000021",
+            b"E250160857L2C001R00200000021"
+        ));
+        assert!(!rule.neighbours(
+            b"E250160857L1C001R00200000021",
+            b"E250160051L1C001R00200000021"
+        ));
+        // Illumina: Pixelabstand in x und y
+        assert!(rule.neighbours(b"A1:1:FC:2:1101:1000:2000", b"A1:1:FC:2:1101:1100:1900"));
+        assert!(!rule.neighbours(b"A1:1:FC:2:1101:1000:2000", b"A1:1:FC:2:1101:1101:2000"));
+        assert!(!rule.neighbours(b"A1:1:FC:2:1101:1000:2000", b"A1:1:FC:2:1102:1000:2000"));
+        // unbekanntes Schema
+        assert!(!rule.neighbours(b"read1", b"read2"));
+    }
+
+    #[test]
+    fn optical_duplicates_are_counted_but_flags_stay_the_same() {
+        let mut records = Vec::new();
+        records.extend(pair("E250160857L1C001R00200000021", 1000, "50M", 1300, 30));
+        records.extend(pair("E250160857L1C001R00200000022", 1000, "50M", 1300, 20));
+        records.extend(pair("E250160857L1C002R00200000023", 1000, "50M", 1300, 10));
+        let with = run(records.clone()).unwrap();
+        let mut sorted = records;
+        sorted.sort_by_key(|r| crate::sort_key(&r[4..]));
+        let mut out = Vec::new();
+        let mut sink = |r: &[u8]| {
+            let v = View { b: &r[4..] };
+            out.push((String::from_utf8_lossy(v.name()).into_owned(), v.flag()));
+            Ok(())
+        };
+        let mut marker = DupMarker::new(DupOptions {
+            optical: None,
+            ..DupOptions::default()
+        });
+        for r in &sorted {
+            marker.push(r, &mut sink).unwrap();
+        }
+        let without = marker.finish(&mut sink).unwrap();
+        assert_eq!(with.0, out);
+        // Nur das Paar aus demselben Bildfeld ist optisch, je Read gezählt
+        assert_eq!((with.1.duplicate_pair, with.1.optical_pair), (4, 2));
+        assert_eq!((without.duplicate_pair, without.optical_pair), (4, 0));
+    }
+
+    #[test]
+    fn optical_duplicates_do_not_count_for_the_library() {
+        let base = DupStats {
+            paired: 251_952,
+            duplicate_pair: 52_830,
+            ..DupStats::default()
+        };
+        let optical = DupStats {
+            optical_pair: 20_000,
+            ..base
+        };
+        let (a, b) = (
+            base.estimated_library_size().unwrap(),
+            optical.estimated_library_size().unwrap(),
+        );
+        assert!(b > a, "{b} > {a}");
+        // Nur optische Duplikate: keine Schätzung möglich
+        let all = DupStats {
+            optical_pair: 52_830,
+            ..base
+        };
+        assert_eq!(all.estimated_library_size(), None);
     }
 
     #[test]
