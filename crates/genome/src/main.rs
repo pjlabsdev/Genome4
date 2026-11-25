@@ -160,6 +160,10 @@ enum Command {
         /// Arbeitsspeicher). Spart Arbeitsspeicher, kostet etwas Rechenzeit; die Ausgabe bleibt gleich.
         #[arg(long, default_value_t = 0)]
         sa_ausduennen: u32,
+        /// Schnellweg für leichte Reads: aus, an, oder pruefen (beide Wege rechnen, den vollen
+        /// ausgeben und Unterschiede zählen)
+        #[arg(long, default_value = "aus", value_parser = ["aus", "an", "pruefen"])]
+        schnellweg: String,
         /// Keinen Überblick (`<aus ohne .bam>.html` und `.bamqc.json`) schreiben
         #[arg(long)]
         ohne_bericht: bool,
@@ -428,6 +432,8 @@ struct SamRun<'a> {
     mate_tags: bool,
     /// Paare vor dem Ausrichten trimmen; verworfene Paare werden nicht ausgerichtet.
     trimmer: Option<&'a gc_io::trim::Trimmer>,
+    /// Schnellweg für leichte Reads ([`gc_align::FastMode`]).
+    fast: gc_align::FastMode,
 }
 
 /// Richtet Reads aus, einzeln oder als Paare, Block für Block auf `threads` Kernen.
@@ -464,17 +470,13 @@ fn align_into(
         read_group,
         mate_tags,
         trimmer,
+        fast,
         ..
     } = *run;
     let mut opt = gc_align::AlignOptions::default();
     opt.sam.read_group = read_group.map(|rg| rg.id.clone());
     opt.sam.mate_tags = mate_tags;
-    // Vorläufig für die Messung: GC_SCHNELLWEG=an oder pruefen.
-    opt.fast = match std::env::var("GC_SCHNELLWEG").as_deref() {
-        Ok("an") => gc_align::FastMode::On,
-        Ok("pruefen") => gc_align::FastMode::Check,
-        _ => gc_align::FastMode::Off,
-    };
+    opt.fast = fast;
     let reader1 = fastq::open(first)?;
     let reader2 = match second {
         Some(p) => Some(fastq::open(p)?),
@@ -695,6 +697,7 @@ struct Fq2bamRun<'a> {
     sa_thin: u32,
     /// Beim Index-Durchlauf die Zahlen für den Überblick sammeln.
     report: bool,
+    fast: gc_align::FastMode,
 }
 
 /// Zahlen von `flagstat` als JSON, für eine der beiden Gruppen.
@@ -959,6 +962,7 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
         read_group: read_group.as_ref(),
         mate_tags: true,
         trimmer: trimmer.as_ref(),
+        fast: run.fast,
     };
     let (reads, lines, trim_counts) = align_into(&fm, run.fastq, run.fastq2, &sam_run, &mut out)?;
     let trim_json = trimmer.as_ref().map(|_| trim_counts_json(&trim_counts));
@@ -2326,6 +2330,7 @@ fn main() -> Result<()> {
             log,
             trimmen,
             sa_ausduennen,
+            schnellweg,
             ohne_bericht,
         } => {
             let threads = if kerne == 0 {
@@ -2364,6 +2369,7 @@ fn main() -> Result<()> {
                 "optisch": optisch.json(),
                 "trimmen": trimmen,
                 "sa_ausduennen": sa_ausduennen,
+                "schnellweg": schnellweg,
                 "bericht": !ohne_bericht,
             }));
             gc_log::input_file("fastq", &fastq);
@@ -2386,6 +2392,11 @@ fn main() -> Result<()> {
                 trim: trimmen,
                 sa_thin: sa_ausduennen,
                 report: !ohne_bericht,
+                fast: match schnellweg.as_str() {
+                    "an" => gc_align::FastMode::On,
+                    "pruefen" => gc_align::FastMode::Check,
+                    _ => gc_align::FastMode::Off,
+                },
             };
             // Ein Fehler beim Überblick lässt die fertige BAM stehen: nur eine Warnung.
             match fq2bam(&run).map(|(mut result, qc)| {
@@ -2604,6 +2615,7 @@ fn main() -> Result<()> {
                         read_group: read_group.as_ref(),
                         mate_tags: partner_angaben,
                         trimmer: None,
+                        fast: gc_align::FastMode::Off,
                     },
                 )?;
             }

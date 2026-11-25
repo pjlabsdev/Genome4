@@ -55,6 +55,7 @@ Auf keiner Seite steht eine Genauigkeits- oder Tempoaussage ohne Messung.
 - [Reihenfolge bei Gleichstand: warum Genome 4.0 wie bwa sortiert](verfahren/reihenfolge-wie-bwa.md)
 - [Ausgabe als SAM (einzelne Reads)](verfahren/sam-ausgabe.md)
 - [Read-Paare: Insertgröße, Partnersuche, Paarbewertung](verfahren/read-paare.md)
+- [Schnellweg für leichte Reads](verfahren/schnellweg.md)
 - [Sortieren nach Ort mit festem Speicher](verfahren/sortieren.md)
 - [Duplikate markieren](verfahren/duplikate-markieren.md)
 - [BAM-Index](verfahren/bam-index.md)

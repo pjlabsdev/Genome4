@@ -26,7 +26,7 @@ Kennungen sind fest: sie ändern ihre Bedeutung nicht. Neue kommen hinzu.
 | `INDEX.BAU.PARAMETER` | info | Variante, Verfahren, Größe der Referenz, Contigs, N-Strecken | |
 | `INDEX.VERFAHREN` | info | Entscheidung zwischen direktem und blockweisem Bau, mit Grund | |
 | `ALIGN.INSERTGROESSE` | info | Paare: je Block die geschätzte Insertgröße für die vier Richtungen (Zahl der Paare, Perzentile, Mittel, Streuung, Grenzen für "richtiges Paar") und welche Richtungen benutzt werden | |
-| `ALIGN.FERTIG` | info | Ausrichten beendet: Reads, geschriebene Zeilen, Blöcke, Kerne, Laufzeit, Reads je Sekunde; Sekunden für Lesen (mit Trimmen), Ausrichten und Schreiben, die gleichzeitig laufen, und Wartezeit des Ausrichtens auf das Lesen | |
+| `ALIGN.FERTIG` | info | Ausrichten beendet: Reads, geschriebene Zeilen, Blöcke, Kerne, Laufzeit, Reads je Sekunde; Sekunden für Lesen (mit Trimmen), Ausrichten und Schreiben, die gleichzeitig laufen, und Wartezeit des Ausrichtens auf das Lesen; unter `schnellweg` die Zähler des [Schnellwegs](verfahren/schnellweg.md) | |
 | `FQ2BAM.SPEICHERPLAN` | info | fq2bam hat das Ausdünnen der Suffix-Array-Stichproben nach dem Arbeitsspeicher gewählt (`--sa-ausduennen 0`): Arbeitsspeicher, Größe von Index und Stichproben, Sortierpuffer, gewählter Faktor und erwarteter Bedarf | |
 | `SORT.TEIL` | info | Sortieren: der Speicher war voll, ein sortierter Teil liegt auf der Platte (Zahl der Teile, Bytes auf der Platte, Datensätze bisher) | |
 | `SORT.FERTIG` | info | Sortieren beendet: Datensätze, Bytes, Teile, Laufzeit, Datensätze je Sekunde | |
