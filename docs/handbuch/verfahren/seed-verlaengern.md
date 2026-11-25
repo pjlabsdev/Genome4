@@ -56,6 +56,13 @@ Zeilen schmal (rund 10 Zellen bei rund 160 Zeilen je Aufruf), der Gewinn ist des
 28 % weniger ausgeführte Befehle in der Verlängerung, in der Laufzeit mit echten Reads kein
 messbarer Unterschied, mit erzeugten Reads rund 5 % ([M6 Tempo](../../bench/M6-tempo.md)).
 
+Seit M18 rechnen die Blöcke mit Vektoren aus `gc-sys` (`simd.rs`, SSE2 oder NEON) statt mit
+Feldern, die der Übersetzer nur zum Teil in Vektorbefehle verwandelte. Auch das laufende Maximum
+läuft jetzt im Vektor: je Block drei Schritte (um 1, 2 und 4 Zellen verschoben) und der Übertrag
+aus dem Block davor. Zusammen mit dem lokalen Alignment der Partnersuche sinkt die Zeit fürs
+Ausrichten auf dem ganzen GRCh38 von 31,1 auf 25,8 s (echte Reads, 4 Kerne), bei gleicher BAM
+([M18](../../bench/M18-schnellweg.md)). `GENOME_SIMD=0` rechnet wieder mit Feldern.
+
 ## Validierung
 
 | Prüfung | Ergebnis |

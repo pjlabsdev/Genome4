@@ -5,6 +5,8 @@
 //! sein Score auf 0 fällt. Lücken öffnen nur aus einem Treffer oder Fehltreffer heraus, nie
 //! direkt aus einer anderen Lücke; ein Alignment wie `100M3I3D20M` entsteht so nicht.
 
+use gc_sys::simd::Signed16;
+
 /// Bewertung. Die Vorgaben sind die von BWA-MEM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scoring {
@@ -94,14 +96,6 @@ pub fn extend(query: &[u8], target: &[u8], sc: &Scoring, end_bonus: i32, h0: i32
 /// das jeder unterstützte Prozessor hat.
 const LANES: usize = 8;
 
-/// Die ersten `LANES` Werte als Feld fester Länge.
-#[inline(always)]
-fn lanes(s: &[i16]) -> [i16; LANES] {
-    let mut a = [0i16; LANES];
-    a.copy_from_slice(&s[..LANES]);
-    a
-}
-
 /// Bleiben alle Zwischenwerte von `extend_rows` sicher in 16 Bit? Der größte ist der höchste
 /// mögliche Score plus der Ausgleich für die Insertionsfolge, der kleinste liegt um dieselbe
 /// Größe unter dem Startwert der Folge (-16384).
@@ -132,6 +126,21 @@ fn fits_16_bit(qlen: usize, sc: &Scoring, h0: i32) -> bool {
 /// e_ins` wird daraus ein laufendes Maximum, ein einziger Rechenschritt je Zelle; alles andere
 /// hängt nur von der vorigen Zeile ab.
 fn extend_rows(
+    query: &[u8],
+    target: &[u8],
+    sc: &Scoring,
+    end_bonus: i32,
+    h0: i32,
+    stop_early: bool,
+) -> Extension {
+    if crate::local::vectors_on() {
+        extend_rows_v::<gc_sys::simd::I16x8>(query, target, sc, end_bonus, h0, stop_early)
+    } else {
+        extend_rows_v::<gc_sys::simd::plain::I16x8>(query, target, sc, end_bonus, h0, stop_early)
+    }
+}
+
+fn extend_rows_v<V: Signed16>(
     query: &[u8],
     target: &[u8],
     sc: &Scoring,
@@ -204,38 +213,40 @@ fn extend_rows(
             let points = &profile[t * stride + b..][..width];
             // 1. Paar-Score aus der Diagonale (tot bleibt tot), bester Wert ohne Insertion,
             //    Deletion für die nächste Zeile und der ausgeglichene Wert für die Insertion.
+            let (v_e_del, v_oe_del) = (V::splat(e_del), V::splat(oe_del));
+            let (v_oe_ins, v_e_ins, vz) = (V::splat(oe_ins), V::splat(e_ins), V::zero());
             for c in (0..width).step_by(LANES) {
-                let d = lanes(&h[b + c..]);
-                let p = lanes(&points[c..]);
-                let ej = lanes(&e[b + c..]);
-                let up = lanes(&ramp[c..]);
-                let (mut x, mut dn, mut g) = ([0i16; LANES], [0i16; LANES], [0i16; LANES]);
-                for l in 0..LANES {
-                    // Maske statt Verzweigung: alle Bits gesetzt, wo die Diagonale lebt.
-                    let v = (d[l] + p[l]) & -i16::from(d[l] != 0);
-                    x[l] = v.max(ej[l]);
-                    dn[l] = (ej[l] - e_del).max(v - oe_del).max(0);
-                    g[l] = v - oe_ins + up[l];
-                }
-                top[c..c + LANES].copy_from_slice(&x);
-                del[c..c + LANES].copy_from_slice(&dn);
-                run[c..c + LANES].copy_from_slice(&g);
+                let d = V::load(&h[b + c..]);
+                let p = V::load(&points[c..]);
+                let ej = V::load(&e[b + c..]);
+                let up = V::load(&ramp[c..]);
+                // Tot bleibt tot: 0, wo die Diagonale 0 ist.
+                let v = d.add_w(p).keep_if_nonzero(d);
+                v.max(ej).store(&mut top[c..]);
+                ej.sub_w(v_e_del)
+                    .max(v.sub_w(v_oe_del))
+                    .max(vz)
+                    .store(&mut del[c..]);
+                v.sub_w(v_oe_ins).add_w(up).store(&mut run[c..]);
             }
-            // 2. Insertion: laufendes Maximum der ausgeglichenen Werte links von der Zelle.
-            let mut best = i16::MIN / 2;
-            for r in &mut run[..len] {
-                let own = *r;
-                *r = best;
-                best = best.max(own);
+            // 2. Insertion: laufendes Maximum der ausgeglichenen Werte links von der Zelle, je
+            //    Block in drei Schritten (um 1, 2 und 4 Spuren verschoben) und mit dem Übertrag
+            //    aus dem Block davor. Werte hinter `len` gehen nicht in die Zeile ein.
+            let mut carry = V::splat(i16::MIN / 2);
+            for c in (0..width).step_by(LANES) {
+                let x = V::load(&run[c..]);
+                let mut incl = x.max(x.shift_fill(1, carry));
+                incl = incl.max(incl.shift_fill(2, carry));
+                incl = incl.max(incl.shift_fill(4, carry));
+                incl.shift_fill(1, carry).store(&mut run[c..]);
+                carry = V::splat(incl.hmax());
             }
             // 3. Zelle fertig: H(i, j).
             for c in (0..width).step_by(LANES) {
-                let (x, r, up) = (lanes(&top[c..]), lanes(&run[c..]), lanes(&ramp[c..]));
-                let mut o = [0i16; LANES];
-                for l in 0..LANES {
-                    o[l] = x[l].max(r[l] - up[l] + e_ins).max(0);
-                }
-                out[c..c + LANES].copy_from_slice(&o);
+                let (x, r, up) = (V::load(&top[c..]), V::load(&run[c..]), V::load(&ramp[c..]));
+                x.max(r.sub_w(up).add_w(v_e_ins))
+                    .max(vz)
+                    .store(&mut out[c..]);
             }
             // 4. Zurückschreiben: H um eins versetzt als Diagonale der nächsten Zeile.
             h[b + 1..=n].copy_from_slice(&out[..len]);

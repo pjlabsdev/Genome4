@@ -27,6 +27,19 @@ pub trait Lanes: Copy {
     fn store(self, out: &mut [Self::Elem]);
 }
 
+/// Rechnen mit Vorzeichen für `I16x8`, ohne Sättigung (die Werte bleiben weit innerhalb von 16
+/// Bit; das prüft der Aufrufer).
+pub trait Signed16: Lanes<Elem = i16> {
+    /// `self + o`, überlaufend wie `wrapping_add`.
+    fn add_w(self, o: Self) -> Self;
+    /// `self - o`, überlaufend wie `wrapping_sub`.
+    fn sub_w(self, o: Self) -> Self;
+    /// `self` dort, wo `d` nicht 0 ist, sonst 0.
+    fn keep_if_nonzero(self, d: Self) -> Self;
+    /// Um `n` Spuren nach oben verschoben (n = 1, 2 oder 4), unten mit den Werten von `fill`.
+    fn shift_fill(self, n: usize, fill: Self) -> Self;
+}
+
 #[cfg(target_arch = "x86_64")]
 mod imp {
     use super::Lanes;
@@ -146,6 +159,47 @@ mod imp {
             unsafe { _mm_storeu_si128(out.as_mut_ptr().cast(), self.0) }
         }
     }
+
+    impl super::Signed16 for I16x8 {
+        #[inline(always)]
+        fn add_w(self, o: Self) -> Self {
+            unsafe { Self(_mm_add_epi16(self.0, o.0)) }
+        }
+        #[inline(always)]
+        fn sub_w(self, o: Self) -> Self {
+            unsafe { Self(_mm_sub_epi16(self.0, o.0)) }
+        }
+        #[inline(always)]
+        fn keep_if_nonzero(self, d: Self) -> Self {
+            unsafe {
+                Self(_mm_andnot_si128(
+                    _mm_cmpeq_epi16(d.0, _mm_setzero_si128()),
+                    self.0,
+                ))
+            }
+        }
+        #[inline(always)]
+        fn shift_fill(self, n: usize, fill: Self) -> Self {
+            unsafe {
+                let (moved, low) = match n {
+                    1 => (
+                        _mm_slli_si128::<2>(self.0),
+                        _mm_srli_si128::<14>(_mm_slli_si128::<14>(fill.0)),
+                    ),
+                    2 => (
+                        _mm_slli_si128::<4>(self.0),
+                        _mm_srli_si128::<12>(_mm_slli_si128::<12>(fill.0)),
+                    ),
+                    4 => (
+                        _mm_slli_si128::<8>(self.0),
+                        _mm_srli_si128::<8>(_mm_slli_si128::<8>(fill.0)),
+                    ),
+                    _ => unreachable!(),
+                };
+                Self(_mm_or_si128(moved, low))
+            }
+        }
+    }
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -258,6 +312,37 @@ mod imp {
             unsafe { vst1q_s16(out.as_mut_ptr(), self.0) }
         }
     }
+
+    impl super::Signed16 for I16x8 {
+        #[inline(always)]
+        fn add_w(self, o: Self) -> Self {
+            unsafe { Self(vaddq_s16(self.0, o.0)) }
+        }
+        #[inline(always)]
+        fn sub_w(self, o: Self) -> Self {
+            unsafe { Self(vsubq_s16(self.0, o.0)) }
+        }
+        #[inline(always)]
+        fn keep_if_nonzero(self, d: Self) -> Self {
+            unsafe {
+                Self(vreinterpretq_s16_u16(vandq_u16(
+                    vtstq_s16(d.0, d.0),
+                    vreinterpretq_u16_s16(self.0),
+                )))
+            }
+        }
+        #[inline(always)]
+        fn shift_fill(self, n: usize, fill: Self) -> Self {
+            unsafe {
+                Self(match n {
+                    1 => vextq_s16::<7>(fill.0, self.0),
+                    2 => vextq_s16::<6>(fill.0, self.0),
+                    4 => vextq_s16::<4>(fill.0, self.0),
+                    _ => unreachable!(),
+                })
+            }
+        }
+    }
 }
 
 /// Dieselben Operationen mit gewöhnlichen Feldern: auf anderen Prozessoren im Einsatz, überall
@@ -321,6 +406,29 @@ pub mod plain {
     }
     plain_lanes!(U8x16, u8, 16, |a, b| a.saturating_sub(b));
     plain_lanes!(I16x8, i16, 8, |a, b| a.saturating_sub(b).max(0));
+
+    impl super::Signed16 for I16x8 {
+        #[inline(always)]
+        fn add_w(self, o: Self) -> Self {
+            Self(std::array::from_fn(|k| self.0[k].wrapping_add(o.0[k])))
+        }
+        #[inline(always)]
+        fn sub_w(self, o: Self) -> Self {
+            Self(std::array::from_fn(|k| self.0[k].wrapping_sub(o.0[k])))
+        }
+        #[inline(always)]
+        fn keep_if_nonzero(self, d: Self) -> Self {
+            Self(std::array::from_fn(
+                |k| if d.0[k] != 0 { self.0[k] } else { 0 },
+            ))
+        }
+        #[inline(always)]
+        fn shift_fill(self, n: usize, fill: Self) -> Self {
+            Self(std::array::from_fn(|k| {
+                if k < n { fill.0[k] } else { self.0[k - n] }
+            }))
+        }
+    }
 }
 
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
@@ -367,6 +475,35 @@ mod tests {
             assert_eq!(va.hmax(), pa.hmax());
             assert_eq!(get(V::splat(a[0])), getp(P::splat(a[0])));
             assert_eq!(get(V::zero()), getp(P::zero()));
+        }
+    }
+
+    #[test]
+    fn signed_16_equals_plain_arrays() {
+        let mut s = 0x1234_5678_9abc_def1;
+        let get = |v: I16x8| {
+            let mut o = [0i16; 8];
+            v.store(&mut o);
+            o
+        };
+        for _ in 0..20_000 {
+            let mut vals = || -> [i16; 8] {
+                std::array::from_fn(|_| match next(&mut s) % 3 {
+                    0 => 0,
+                    1 => (next(&mut s) % 40) as i16 - 20,
+                    _ => next(&mut s) as i16 / 2,
+                })
+            };
+            let (a, b, f) = (vals(), vals(), vals());
+            let (va, vb, vf) = (I16x8::load(&a), I16x8::load(&b), I16x8::load(&f));
+            let (pa, pb, pf) = (plain::I16x8(a), plain::I16x8(b), plain::I16x8(f));
+            assert_eq!(get(va.add_w(vb)), pa.add_w(pb).0);
+            assert_eq!(get(va.sub_w(vb)), pa.sub_w(pb).0);
+            assert_eq!(get(va.keep_if_nonzero(vb)), pa.keep_if_nonzero(pb).0);
+            assert_eq!(get(va.max(vb)), pa.max(pb).0);
+            for n in [1, 2, 4] {
+                assert_eq!(get(va.shift_fill(n, vf)), pa.shift_fill(n, pf).0);
+            }
         }
     }
 

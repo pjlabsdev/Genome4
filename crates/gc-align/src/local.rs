@@ -237,7 +237,7 @@ fn run(
 
 /// Schalter `GENOME_SIMD=0`: Vektoren als gewöhnliche Felder rechnen (Stand vor den
 /// Vektorbefehlen). Das Ergebnis ist in beiden Fällen dasselbe.
-fn vectors_on() -> bool {
+pub(crate) fn vectors_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("GENOME_SIMD").map_or(true, |v| v != "0"))
 }
