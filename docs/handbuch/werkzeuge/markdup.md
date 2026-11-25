@@ -59,7 +59,10 @@ Partner-Angaben `MC` und `ms` tragen. Die schreibt `genome index sam --partner-a
 
 Optische Einstufung (Regel: [Verfahren](../verfahren/duplikate-markieren.md#optische-duplikate)):
 Bauteiltests für MGI- und Illumina-Namen und dafür, dass die Flags mit und ohne Einstufung
-gleich bleiben. Die Messung am ganzen Genom von PJ steht noch aus.
+gleich bleiben. Ganzes Genom von PJ (360 Mio. Paare, MGI): 129.700 von 5.391.316 Duplikaten aus
+Paaren optisch (2,4 %), 695 s, 364 MB auf dem Mac M5; mit `--ohne-optisch` 736 s, 354 MB und
+dieselbe Bibliotheksgröße wie zuvor (21,96 Milliarden). Die Sätze beider Ausgaben und der
+Eingabe sind gleich (md5 über `samtools view`), der Kopf unterscheidet sich nur in der `@PG`-Zeile.
 
 ## Grenzen
 - Welche Reads Flag 1024 bekommen, ist das Verfahren von samtools in der Vorgabe; die

@@ -74,10 +74,28 @@ selben Feld wie ihr Original, zufällig wären es 2,6 %. Bei 79 % von ihnen unte
 laufende Nummer um genau 1, bei 97 % um höchstens 1000; zufällig wären es unter 0,04 %. Die
 Nummer gibt also die Lage im Feld wieder.
 
+Der Ausschnitt umfasst nur 40 der 2.833 Felder. Nachbarn im selben Feld liegen immer beide darin,
+PCR-Kopien meist nicht; deshalb ist ihr Anteil dort viel zu hoch. Am ganzen Genom von PJ sind
+129.700 von 5.391.316 Duplikaten aus Paaren optisch (2,4 %); die geschätzte Bibliothek wächst
+dadurch von 21,96 auf 22,50 Milliarden Moleküle (Mac M5, 695 s, 364 MB).
+
+Die Grenze 1000 ist am Ausschnitt belegt (1.749 Duplikat-Moleküle, beobachtet gegen zufällig
+erwartet im selben Feld):
+
+| Abstand der Nummer höchstens | beobachtet | zufällig erwartet |
+|---|---|---|
+| 1 | 646 | 0,000 |
+| 10 | 651 | 0,000 |
+| 100 | 651 | 0,002 |
+| 1.000 | 797 | 0,018 |
+| 10.000 | 797 | 0,18 |
+
+Zwischen 1.000 und 10.000 kommt nichts hinzu; die übrigen 25 Duplikate im selben Feld liegen im
+Bereich des Zufalls.
+
 Grenzen: Verglichen wird mit dem jeweils behaltenen Paar der Gruppe, nicht jedes Paar mit jedem
 (Picard prüft alle Paare einer Gruppe). Bei Gruppen aus zwei Paaren, dem häufigsten Fall, ist das
-gleich. Der Abstand 1000 bei MGI ist am Ausschnitt gewählt und am ganzen Genom noch zu belegen.
-Mit `--ohne-optisch` wird nichts eingestuft; dann sind alle Zahlen die von samtools ohne `-d`.
+gleich. Mit `--ohne-optisch` wird nichts eingestuft; dann sind alle Zahlen die von samtools ohne `-d`.
 
 ## Geschätzte Größe der Bibliothek
 Aus der Zahl der Paare und der doppelten Paare lässt sich schätzen, wie viele verschiedene
