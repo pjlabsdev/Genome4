@@ -728,7 +728,10 @@ pub fn html(f: &Value) -> String {
         &pct(&dup_share, 2),
         "Duplikate",
         "duplicates",
-        &l("Hauptzeilen mit Flag 1024", "primary reads with flag 1024"),
+        &l(
+            "von allen Hauptzeilen (Flag 1024)",
+            "of all primary reads (flag 1024)",
+        ),
     ));
     s.push_str(&tile(
         &format!("{}x", num(cov["mittel"].as_f64().unwrap_or(0.0), 1)),
@@ -1166,7 +1169,10 @@ pub fn html(f: &Value) -> String {
             int(&ins["n"]),
             l("Median", "Median"),
             int(&ins["median"]),
-            l("Mittel ± Streuung", "Mean ± SD"),
+            l(
+                "Mittel ± Streuung (Paare bis 2.000 Basen; samtools schneidet Ausreißer anders ab)",
+                "Mean ± SD (pairs up to 2,000 bases; samtools trims outliers differently)"
+            ),
             num(ins["mittel"].as_f64().unwrap_or(0.0), 1),
             num(ins["streuung"].as_f64().unwrap_or(0.0), 1),
             int(&ins["p05"]),
@@ -1401,11 +1407,15 @@ pub fn html(f: &Value) -> String {
                     "Zusammenführen, Duplikate markieren, BAM schreiben",
                     "Merge, mark duplicates, write BAM",
                 ),
-                (
-                    "bam_index",
-                    "Index und dieser Überblick",
-                    "Index and this overview",
-                ),
+                if p["bericht"] == true {
+                    (
+                        "bam_index",
+                        "Index und Zahlen für den Überblick",
+                        "Index and overview numbers",
+                    )
+                } else {
+                    ("bam_index", "Index", "Index")
+                },
             ] {
                 if let Some(v) = steps.get(k).and_then(|v| v.as_f64()) {
                     s.push_str(&row(&[l(de, en), duration(v)]));

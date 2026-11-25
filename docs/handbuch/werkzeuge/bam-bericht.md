@@ -66,7 +66,7 @@ HG002 chr20:10–12 Mb (GIAB, novoalign, 844.606 Datensätze) gegen samtools 1.2
 | `depth -a`: Stellen mit ≥ 1, 10, 20, 30x | 2.000.052 · 1.999.228 · 1.997.578 · 1.992.359 | gleich |
 | `depth -a`: Summe der Abdeckung | 123.834.008 | gleich (ausgerichtete Basen M) |
 | `stats`: bases mapped (cigar) | 123.870.250 | 123.834.008 M + 36.242 I, gleich |
-| `stats`: error rate (NM je M+I) | 0,3619755 % | gleich (`rate_wie_samtools`) |
+| `stats`: error rate (NM je M+I, Hauptzeilen mit Ort einschließlich Duplikate) | 0,3619755 % | gleich (`rate_wie_samtools`) |
 | `stats`: average quality | 35,6 | 35,6 |
 | `flagstat` | | gleich (gleiche Zählung wie [flagstat](flagstat.md)) |
 
@@ -78,6 +78,8 @@ Index allein, also grob 150 ns je Datensatz einschließlich Schreiben der Seite.
 30x (rund 730 Mio. Datensätze) sind das geschätzt 1 bis 2 Minuten; am Mac nicht gemessen.
 
 ## Grenzen
+- Duplikate: Die Kachel nennt den Anteil an allen Hauptzeilen. `fq2bam` nennt im Abschnitt zum
+  Markieren den Anteil an den bewerteten Reads; der ist etwas höher (PJ 30x: 0,75 % gegen 0,79 %).
 - Insertgröße: Paare mit TLEN über 2.000 stehen nur gezählt im letzten Fach; Mittel und
   Streuung gelten bis 2.000. `samtools stats` schneidet anders ab, die Werte weichen deshalb
   leicht ab (chr20-Ausschnitt: 555,5 ± 151,6 gegen 550,6 ± 143,8).

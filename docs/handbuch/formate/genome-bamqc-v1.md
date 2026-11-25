@@ -16,7 +16,7 @@ der Seite steht hier. Verteilungen stehen dünn besetzt als `[[wert, anzahl], �
 | `insertgroesse` | `kennzahlen` (`n`, `mittel`, `streuung`, `median`, `p05`, `p95` bis `max`), `ueber_max`, `max` (2.000), `verteilung` |
 | `read_laenge` | `kennzahlen`, `verteilung` (Hauptzeilen) |
 | `qualitaet` | `basen`, `mittel`, `anteil_q30` (Hauptzeilen) |
-| `fehler` | `ausgerichtete_basen` (M, =, X), `fehlpaarungen` (NM minus I und D), `rate`, `nm_summe`, `rate_wie_samtools` (NM je M+I), `saetze_mit_nm`, `insertierte_basen`, `deletierte_basen`, `soft_clip_basen` |
+| `fehler` | `ausgerichtete_basen` (M, =, X), `fehlpaarungen` (NM minus I und D), `rate`, `nm_summe`, `rate_wie_samtools` (NM je M+I über alle Hauptzeilen mit Ort, Duplikate eingeschlossen, wie `samtools stats`), `saetze_mit_nm`, `insertierte_basen`, `deletierte_basen`, `soft_clip_basen` |
 | `abdeckung.autosomen` | `laenge`, `mittel`, `median`, `p05`, `p95`, `anteil_ab` (`1`, `10`, `20`, `30`), `verteilung` (Stellen je Abdeckung bis `max` = 1.000) |
 | `abdeckung` | `fach_basen` (100.000), `schwellen`, `geschlecht` (`x_zu_autosomen`, `y_zu_autosomen`, `deutung`: `XY`, `XX`, `unklar`, `unbekannt`), `gekuerzte_stuecke` |
 | `abdeckung.contigs[]` | `name`, `gruppe`, `laenge`, `reads` (Hauptzeilen mit Ort), `duplikate`, `basen`, `mittel`, `stellen_ab` (Stellen mit ≥ 1, 10, 20, 30x), `mapq_mittel`; für Chromosomen 1–22, X, Y, M zusätzlich je Fach von 100.000 Basen `faecher` (Summe der Abdeckung), `faecher_reads` (Hauptzeilen mit Ort nach ihrem Anfang), `faecher_duplikate`, `faecher_mapq0` (Hauptzeilen ohne Duplikate mit MAPQ 0) und `verteilung` (Stellen je Abdeckung bis 1.000) |

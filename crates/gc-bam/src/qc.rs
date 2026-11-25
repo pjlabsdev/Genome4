@@ -91,8 +91,8 @@ pub struct BamQc {
     /// Sätze mit NM-Tag (nur diese gehen in die Fehlerrate ein) und deren ausgerichtete Basen.
     pub nm_records: u64,
     pub nm_aligned_bases: u64,
-    /// Summe der NM-Werte und dazu ausgerichtete plus eingefügte Basen, wie `samtools stats`
-    /// seine Fehlerrate bildet.
+    /// Wie `samtools stats`: Summe der NM-Werte und Basen aus M, I, = und X, über alle
+    /// Hauptzeilen mit Ort (Duplikate eingeschlossen, ohne ergänzende Alignments).
     pub nm_sum: u64,
     pub nm_query_bases: u64,
     /// Verteilung der Abdeckung je Stelle auf den Autosomen.
@@ -348,6 +348,20 @@ impl BamQc {
                 }
             }
         }
+        // Fehlerrate wie `samtools stats`: Hauptzeilen mit Ort, Duplikate eingeschlossen, NM je
+        // Basen aus M, I, = und X.
+        if primary && let Some(nm) = nm {
+            let mut query = 0u64;
+            for k in 0..n_cigar {
+                let o = cigar_at + 4 * k;
+                let op = u32::from_le_bytes([rec[o], rec[o + 1], rec[o + 2], rec[o + 3]]);
+                if matches!(op & 0xf, 0 | 1 | 7 | 8) {
+                    query += (op >> 4) as u64;
+                }
+            }
+            self.nm_sum += nm.max(0) as u64;
+            self.nm_query_bases += query;
+        }
         if duplicate || failed || flag & SECONDARY != 0 {
             return Ok(());
         }
@@ -400,8 +414,6 @@ impl BamQc {
             self.mismatches += (nm - ins as i64 - del as i64).max(0) as u64;
             self.nm_records += 1;
             self.nm_aligned_bases += aligned;
-            self.nm_sum += nm.max(0) as u64;
-            self.nm_query_bases += aligned + ins;
         }
         Ok(())
     }
