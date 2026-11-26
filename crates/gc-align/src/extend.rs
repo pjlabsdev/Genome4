@@ -140,6 +140,10 @@ fn extend_rows(
     }
 }
 
+thread_local! {
+    static SCRATCH: std::cell::RefCell<Vec<i16>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 fn extend_rows_v<V: Signed16>(
     query: &[u8],
     target: &[u8],
@@ -155,8 +159,20 @@ fn extend_rows_v<V: Signed16>(
     let oe_del = (sc.o_del + sc.e_del) as i16;
     let oe_ins = (sc.o_ins + sc.e_ins) as i16;
     // Je Spalte j: h = H(i-1, j-1), e = E(i, j).
-    let mut h = vec![0i16; n_q + 2 + LANES];
-    let mut e = vec![0i16; n_q + 2 + LANES];
+    // Alle Arbeitsfelder liegen in einem Puffer je Kern, der von Aufruf zu Aufruf bleibt: Das
+    // Anlegen und Freigeben kostete rund ein Zehntel der Rechenzeit. Jedes Feld beginnt mit 0
+    // wie zuvor, das Ergebnis ist dasselbe.
+    let stride = n_q + LANES;
+    let cols = n_q + 2 + LANES;
+    let mut pool = SCRATCH.with(|c| std::mem::take(&mut *c.borrow_mut()));
+    pool.clear();
+    pool.resize(2 * cols + 5 * stride + 4 * stride, 0);
+    let (h, rest) = pool.split_at_mut(cols);
+    let (e, rest) = rest.split_at_mut(cols);
+    let (profile, rest) = rest.split_at_mut(5 * stride);
+    let (top, rest) = rest.split_at_mut(stride);
+    let (del, rest) = rest.split_at_mut(stride);
+    let (run, out) = rest.split_at_mut(stride);
     h[0] = h0 as i16;
     if qlen >= 1 {
         h[1] = (h0 - i32::from(oe_ins)).max(0) as i16;
@@ -175,20 +191,14 @@ fn extend_rows_v<V: Signed16>(
         .min(limit(sc.o_del, sc.e_del));
 
     // Alle Felder haben `LANES` Plätze Luft, damit ganze Blöcke gelesen werden können.
-    let stride = n_q + LANES;
-    let mut profile = vec![0i16; 5 * stride];
     for (a, row) in profile.chunks_exact_mut(stride).enumerate() {
         for (p, &q) in row.iter_mut().zip(query) {
             *p = sc.score(a as u8, q) as i16;
         }
     }
     let ramp: Vec<i16> = (0..=stride).map(|k| (k as i32 * sc.e_ins) as i16).collect();
-    // Arbeitsfelder einer Zeile: bester Wert ohne Insertion, neue Deletion, laufendes Maximum,
-    // fertige Zelle.
-    let mut top = vec![0i16; stride];
-    let mut del = vec![0i16; stride];
-    let mut run = vec![0i16; stride];
-    let mut out = vec![0i16; stride];
+    // Arbeitsfelder einer Zeile (oben im Puffer): bester Wert ohne Insertion, neue Deletion,
+    // laufendes Maximum, fertige Zelle.
 
     let (mut max, mut max_i, mut max_j) = (h0, -1i32, -1i32);
     let (mut max_ie, mut gscore, mut max_off) = (-1i32, -1i32, 0i32);
@@ -292,8 +302,8 @@ fn extend_rows_v<V: Signed16>(
             let bound = max.min(gscore - 1);
             if (rest == 0 || m + rest <= bound)
                 && nothing_left_to_gain(
-                    &h,
-                    &e,
+                    h,
+                    e,
                     (beg as usize, end as usize),
                     n_q,
                     sc.matching,
@@ -315,6 +325,7 @@ fn extend_rows_v<V: Signed16>(
         }
         end = (j + 2).min(qlen);
     }
+    SCRATCH.with(|c| *c.borrow_mut() = pool);
     Extension {
         score: max,
         query_len: max_j + 1,
