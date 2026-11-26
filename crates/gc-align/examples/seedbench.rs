@@ -50,6 +50,29 @@ fn main() {
         println!("reads {} {times:?}", reads.len());
         return;
     }
+    // LOCT=1: Orten mit und ohne Doppelte (A-B-B-A).
+    if std::env::var("LOCT").is_ok_and(|v| v == "1") {
+        let opt = SeedOptions::default();
+        let ivs: Vec<_> = reads
+            .iter()
+            .map(|r| collect_intervals(&index, r, &opt))
+            .collect();
+        let mut times = Vec::new();
+        for unique in [false, true, true, false] {
+            let o = SeedOptions {
+                locate_unique: unique,
+                ..opt.clone()
+            };
+            let t = std::time::Instant::now();
+            let n: usize = ivs
+                .iter()
+                .map(|iv| gc_align::seed::locate_seeds(&index, iv, &o).len())
+                .sum();
+            times.push((unique, n, t.elapsed()));
+        }
+        println!("{times:?}");
+        return;
+    }
     let opt = SeedOptions::default();
     let t = std::time::Instant::now();
     let mut n = 0;

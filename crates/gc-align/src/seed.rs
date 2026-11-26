@@ -27,6 +27,9 @@ pub struct SeedOptions {
     /// Tabelle der kurzen Muster und überlappende Speicherzugriffe. Gleiche Bereiche; aus sucht
     /// jedes Stück einzeln von vorn.
     pub fast_pieces_together: bool,
+    /// Beim Orten jede Zeile des Index je Read nur einmal nachschlagen. Gleiche Orte; aus ortet
+    /// jede Zeile so oft, wie sie in den Treffern vorkommt.
+    pub locate_unique: bool,
 }
 
 impl Default for SeedOptions {
@@ -40,6 +43,7 @@ impl Default for SeedOptions {
             interleave: true,
             regroup: true,
             fast_pieces_together: true,
+            locate_unique: true,
         }
     }
 }
@@ -298,7 +302,18 @@ pub fn locate_seeds(index: &FmIndex, intervals: &[Smem], opt: &SeedOptions) -> V
         }
     }
     let mut positions = Vec::with_capacity(rows.len());
-    index.locate_many(&rows, &mut positions);
+    if opt.locate_unique {
+        // Dieselbe Zeile kommt oft aus mehreren Treffern (derselbe Treffer aus mehreren Runden,
+        // ein Treffer als Anfang eines längeren). Jede Zeile nur einmal orten.
+        let mut unique = rows.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        let mut found = Vec::with_capacity(unique.len());
+        index.locate_many(&unique, &mut found);
+        positions.extend(rows.iter().map(|r| found[unique.binary_search(r).unwrap()]));
+    } else {
+        index.locate_many(&rows, &mut positions);
+    }
     let mut seeds = Vec::with_capacity(rows.len());
     for (&rbeg, &i) in positions.iter().zip(&owner) {
         let m = &intervals[i];
@@ -393,8 +408,17 @@ mod tests {
                 },
             ] {
                 let many = collect_intervals_many(&index, &views, &opt);
+                let plain = SeedOptions {
+                    locate_unique: false,
+                    ..opt.clone()
+                };
                 for (read, got) in reads.iter().zip(&many) {
                     assert_eq!(got, &collect_intervals(&index, read, &opt));
+                    // Jede Zeile einmal orten gibt dieselben Seeds.
+                    assert_eq!(
+                        locate_seeds(&index, got, &opt),
+                        locate_seeds(&index, got, &plain)
+                    );
                 }
             }
         }

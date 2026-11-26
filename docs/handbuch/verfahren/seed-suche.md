@@ -133,3 +133,20 @@ Stranggrenze oder eine gefüllte N-Strecke reichen; diese fallen erst beim Orten
 
 ## Literatur
 Li 2012 (FMD-Index), Li 2013 (BWA-MEM, SMEM als Seeds), siehe [Literatur](../literatur.md).
+
+## Jede Zeile einmal orten
+Dieselbe Zeile des Index kommt in den Treffern eines Reads oft mehrfach vor: derselbe Treffer
+aus mehreren Runden oder ein Treffer, der Anfang eines längeren ist. Auf 87.698 HG002-MGI-Reads,
+die der Schnellweg nicht nimmt (Index GRCh38), waren 23 % der 5,17 Mio. zu ortenden Zeilen
+doppelt. `locate_seeds` ortet jede Zeile je Read nur einmal und verteilt die Orte danach wieder;
+die Seeds sind dieselben. Schalter: `SeedOptions::locate_unique = false` ortet wieder jede
+Zeile so oft, wie sie vorkommt.
+
+| Messung (2026-11-26, 1 Kern, A-B-B-A, `LOCT=1 REST=1 seedbench`) | mehrfach | einmal |
+|---|---|---|
+| Orten der 87.698 Reads | 8,87 s / 8,81 s | 8,04 s / 8,53 s |
+| `fq2bam`, 200.000 Paare | BAM byte-gleich | BAM byte-gleich |
+
+Geprüft und verworfen: den Ort eines einmaligen Treffers aus einem schon georteten einmaligen
+Treffer desselben Reads über die Diagonale vorhersagen (mit Vergleich gegen den Text eindeutig).
+Das trifft nur 5 % der Zeilen; fast alle Zeilen stammen aus Treffern mit vielen Fundstellen.
