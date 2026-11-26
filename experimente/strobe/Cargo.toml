@@ -1,0 +1,10 @@
+[package]
+name = "strobe"
+version = "0.0.1"
+edition = "2021"
+[dependencies]
+rayon = "1"
+[workspace]
+
+[profile.release]
+debug = 1
