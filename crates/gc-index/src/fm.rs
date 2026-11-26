@@ -102,6 +102,9 @@ pub struct FmIndex {
     pub(crate) short: crate::smem::ShortTable,
     /// Zwischenspeicher für `locate_many` (leer = aus), siehe [`FmIndex::enable_locate_cache`].
     locate_cache: LocateCache,
+    /// `true`: `occ4` zählt immer mit Schleifen und Verzweigungen wie früher, siehe
+    /// [`FmIndex::set_occ_plain`].
+    occ_plain: bool,
 }
 
 /// Plätze des Zwischenspeichers. Gehört nicht zum Inhalt des Index: Vergleiche sehen ihn nicht,
@@ -173,6 +176,17 @@ fn pairs(bits: u64) -> u64 {
 fn fold(sums: u64) -> u64 {
     const B: u64 = 0x0F0F_0F0F_0F0F_0F0F;
     ((sums & B) + ((sums >> 4) & B)).wrapping_mul(0x0101_0101_0101_0101) >> 56
+}
+
+/// Gesetzte Bits zweier Wörter. Wo der Prozessor einen Befehl zum Zählen hat (Apple M und
+/// alle 64-Bit-ARM, x86 mit `popcnt`), zählt dieser; sonst die Halbbyte-Summen wie oben.
+#[inline]
+fn count2(a: u64, b: u64) -> u64 {
+    if cfg!(any(target_arch = "aarch64", target_feature = "popcnt")) {
+        u64::from(a.count_ones() + b.count_ones())
+    } else {
+        fold(pairs(a) + pairs(b))
+    }
 }
 
 /// Größter Abstand der Zählstände: sieben Wörter BWT je Block, als Zweierpotenz also vier.
@@ -324,6 +338,7 @@ impl Builder {
             reference,
             short: crate::smem::ShortTable::default(),
             locate_cache: LocateCache::default(),
+            occ_plain: false,
         };
         index.short = crate::smem::ShortTable::build(&index);
         index
@@ -582,6 +597,69 @@ impl FmIndex {
     /// Zählblock (bwa: `bwt_occ4`). Dasselbe wie viermal `occ`.
     #[inline]
     pub fn occ4(&self, i: u64) -> [u64; 4] {
+        if self.occ_interval == 128 && !self.occ_plain {
+            let within = i & 127;
+            let base = (i >> 7) as usize * 8;
+            if within <= 64 || base + 16 <= self.blocks.len() {
+                return self.occ4_128(i);
+            }
+        }
+        self.occ4_plain(i)
+    }
+
+    /// Schaltet das Zählen ohne Verzweigung ab (`true`) oder wieder ein. Nur zum Vergleichen:
+    /// Beide Wege geben dieselben Zahlen.
+    pub fn set_occ_plain(&mut self, plain: bool) {
+        self.occ_plain = plain;
+    }
+
+    /// `occ4` für Blöcke zu 128 Basen ohne Schleife und ohne Sprung nach der Blockhälfte.
+    /// Vorn (bis 64 Basen in den Block) wird vom Zählstand dieses Blocks vorwärts gezählt,
+    /// hinten vom Zählstand des nächsten Blocks rückwärts; welche Hälfte, entscheidet sich für
+    /// jeden Zugriff anders und war für den Prozessor kaum vorherzusagen. Hier werden in beiden
+    /// Fällen genau zwei Wörter mit einer Maske gezählt, die Wahl der Hälfte ist eine Auswahl
+    /// von Werten statt eines Sprungs. Gleiche Zahlen wie `occ4_plain`. Im letzten Block gibt
+    /// es keinen nächsten; dort ruft `occ4` für die hintere Hälfte `occ4_plain`.
+    #[inline]
+    fn occ4_128(&self, i: u64) -> [u64; 4] {
+        let base = (i >> 7) as usize * 8;
+        let within = (i & 127) as u32;
+        let back = within > 64;
+        let counts = base + 8 * usize::from(back);
+        let words = base + 4 + 2 * usize::from(back);
+        // Basen 0..x der beiden Wörter: vorn die gezählten, hinten die nicht gezählten.
+        let x = within - 64 * u32::from(back);
+        let below = u128::MAX.checked_shr(128 - 2 * x).unwrap_or(0);
+        let flip = 0u128.wrapping_sub(u128::from(back));
+        let mask = (below ^ flip) & (u128::from(EVEN) << 64 | u128::from(EVEN));
+        let (m0, m1) = (mask as u64, (mask >> 64) as u64);
+        let w: &[u64; 2] = self.blocks[words..words + 2].try_into().unwrap();
+        let (w0, w1) = (w[0], w[1]);
+        let (l0, h0) = (w0 & m0, (w0 >> 1) & m0);
+        let (l1, h1) = (w1 & m1, (w1 >> 1) & m1);
+        let (b0, b1) = (l0 & h0, l1 & h1);
+        let c = count2(l0 ^ b0, l1 ^ b1);
+        let g = count2(h0 ^ b0, h1 ^ b1);
+        let t = count2(b0, b1);
+        let n = if back { 64 - x } else { x };
+        // Das Endzeichen ist als Code 0 gespeichert, zählt aber nicht als A.
+        let block_start = i - u64::from(within);
+        let (lo, hi) = if back {
+            (i, block_start + 128)
+        } else {
+            (block_start, i)
+        };
+        let a = u64::from(n) - c - g - t - u64::from(self.primary >= lo && self.primary < hi);
+        // Vorn wird addiert, hinten abgezogen: `sign` ist 0 oder alle Bits.
+        let sign = 0u64.wrapping_sub(u64::from(back));
+        let have: &[u64; 4] = self.blocks[counts..counts + 4].try_into().unwrap();
+        let at = |j: usize, v: u64| have[j].wrapping_add((v ^ sign).wrapping_sub(sign));
+        [at(0, a), at(1, c), at(2, g), at(3, t)]
+    }
+
+    /// `occ4` mit Schleifen über die Wörter des Blocks, für jeden Abstand der Zählstände.
+    #[inline]
+    fn occ4_plain(&self, i: u64) -> [u64; 4] {
         let interval = u64::from(self.occ_interval);
         let stride = 4 + (self.occ_interval / 32) as usize;
         let base = (i >> self.occ_shift) as usize * stride;
@@ -1208,6 +1286,7 @@ impl FmIndex {
             reference,
             short: crate::smem::ShortTable::default(),
             locate_cache: LocateCache::default(),
+            occ_plain: false,
         };
         index.short = crate::smem::ShortTable::build(&index);
         Ok(index)
@@ -1451,11 +1530,16 @@ mod tests {
         }
         assert_eq!(counts.iter().sum::<u64>(), index.rows() - 1);
         // occ4 in allen Varianten (es zählt je nach Lage vom Anfang oder vom Ende des Blocks)
-        for variant in [Variant::Standard, Variant::Kompakt, Variant::Schnell] {
-            let index = build(&contigs, variant);
+        // und auf beiden Wegen (ohne Verzweigung und mit Schleifen)
+        for (variant, plain) in [Variant::Standard, Variant::Kompakt, Variant::Schnell]
+            .into_iter()
+            .flat_map(|v| [(v, false), (v, true)])
+        {
+            let mut index = build(&contigs, variant);
+            index.set_occ_plain(plain);
             let mut counts = [0u64; 4];
             for row in 0..=index.rows() {
-                assert_eq!(index.occ4(row), counts, "{variant:?} occ4({row})");
+                assert_eq!(index.occ4(row), counts, "{variant:?} {plain} occ4({row})");
                 if row < index.rows() && row != index.primary {
                     counts[index.bwt(row) as usize] += 1;
                 }

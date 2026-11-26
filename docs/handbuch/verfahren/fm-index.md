@@ -75,6 +75,17 @@ zusammengezählt. Je Halbbyte kommen höchstens 2 dazu, sieben Wörter passen al
 ein Block hat höchstens vier. Das braucht keinen besonderen Befehl des Prozessors und läuft auf
 jedem Rechner gleich.
 
+**Zählen bei Blöcken zu 128 Basen.** Für den häufigsten Abstand (`b` = 128, Varianten
+`standard` und `kompakt`) hat `occ4` einen eigenen Weg: Vorn wie hinten werden genau zwei Wörter
+mit einer Maske gezählt, ob vorwärts oder rückwärts, ist eine Auswahl von Werten statt eines
+Sprungs (welche Blockhälfte, wechselt von Zugriff zu Zugriff und ist kaum vorherzusagen). Wo der
+Prozessor einen Befehl zum Zählen gesetzter Bits hat (alle 64-Bit-ARM wie Apple M, x86 mit
+`popcnt`), zählt dieser statt der Halbbyte-Summen. Ohne den Befehl bringt der Weg nichts, mit
+ihm braucht die Seed-Suche allein in der Cloud (x86 mit `-C target-cpu=native`, 200.000
+HG002-Reads, ganzes GRCh38, ein Kern, abwechselnd je dreimal) 7,5 bis 7,8 s statt 8,8 bis 8,9 s,
+mit denselben Treffern. Schalter zurück: `FmIndex::set_occ_plain(true)`; Messprogramm
+`examples/seedbench` mit `OCC_PLAIN=1`. Der letzte Block zählt hinten weiter mit dem alten Weg.
+
 **Abstände.** `b` und `s` sind Zweierpotenzen, `b` höchstens 128. Block und Stelle im Block
 ergeben sich durch Schieben und Maskieren. Eine echte Division je Zugriff kostete mehr als das
 Zählen selbst ([M6 Tempo](../../bench/M6-tempo.md)).
@@ -128,7 +139,7 @@ N-Strecke berührt. Übrig bleiben die gefilterten Treffer.
 
 ## Prüfung
 Siehe [Werkzeug index](../werkzeuge/index.md), Abschnitt Validierung. Tests: Treffer gegen naive
-Suche in beiden Varianten, `occ` und `occ4` gegen direktes Zählen an jeder Zeile, `occ4_pair` gegen
+Suche in beiden Varianten, `occ` und `occ4` (auf beiden Wegen) gegen direktes Zählen an jeder Zeile, `occ4_pair` gegen
 zweimal `occ4` für jeden Anfang und 140 Längen, `locate_many` gegen `locate` für alle Zeilen und
 für zufällige Mengen mit Wiederholungen, Datei-Rundreise,
 beschädigte und abgeschnittene Dateien, Vollprüfung erkennt eine geänderte Base und eine geänderte

@@ -5,10 +5,12 @@ use std::io::BufRead;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let index = gc_index::FmIndex::read(std::io::BufReader::new(
+    let mut index = gc_index::FmIndex::read(std::io::BufReader::new(
         std::fs::File::open(&args[1]).unwrap(),
     ))
     .unwrap();
+    // OCC_PLAIN=1: Zählen mit Schleifen wie früher.
+    index.set_occ_plain(std::env::var("OCC_PLAIN").is_ok_and(|v| v == "1"));
     let group: usize = args.get(3).map_or(32, |g| g.parse().unwrap());
     let reads: Vec<Vec<u8>> = std::io::BufReader::new(std::fs::File::open(&args[2]).unwrap())
         .lines()
