@@ -86,10 +86,12 @@ impl Gpu {
         if !adapter.features().contains(wgpu::Features::SUBGROUP) {
             return Err(format!("Grafikeinheit {name} kann keine Untergruppen"));
         }
-        if info.subgroup_min_size < 16 {
+        // Wie breit die Untergruppen wirklich sind, sagt erst der Rechenkern selbst (wgpu meldet
+        // für Metal nur die Untergrenze 4, Apple rechnet mit 32). Er meldet zu schmale.
+        if info.subgroup_max_size < 16 {
             return Err(format!(
-                "Grafikeinheit {name}: Untergruppen ab {} Fäden, nötig sind 16",
-                info.subgroup_min_size
+                "Grafikeinheit {name}: Untergruppen höchstens {} Fäden, nötig sind 16",
+                info.subgroup_max_size
             ));
         }
         let limits = adapter.limits();
@@ -259,6 +261,13 @@ impl Gpu {
             .map_err(|e| format!("Grafikeinheit: {e}"))?;
         let res: &[u32] = bytemuck::cast_slice(&data[..res_size as usize]);
         let rows = &data[res_size as usize..];
+        if let Some(i) = (0..jobs.len()).find(|&i| res[4 * i + 3] != 0) {
+            return Err(format!(
+                "Grafikeinheit {}: Untergruppe zu schmal ({} Fäden, nötig sind 16)",
+                self.name,
+                res[4 * i + 3]
+            ));
+        }
         let out = descs
             .iter()
             .enumerate()

@@ -52,9 +52,17 @@ fn main(
     @builtin(workgroup_id) wid: vec3<u32>,
     @builtin(num_workgroups) nwg: vec3<u32>,
     @builtin(subgroup_invocation_id) sl: u32,
+    @builtin(subgroup_size) sg: u32,
 ) {
     let id = wid.x + wid.y * nwg.x;
     if (id >= P.n_jobs) {
+        return;
+    }
+    // Zu schmale Untergruppen: melden, der Prozessor rechnet.
+    if (sg < 16u || sg % 16u != 0u) {
+        if (sl == 0u) {
+            result[id * 4u + 3u] = sg;
+        }
         return;
     }
     let k = sl % L;
