@@ -14,7 +14,19 @@ fn main() {
     };
     let sc = Scoring::default();
     let tlen: usize = std::env::args().nth(1).map_or(1000, |a| a.parse().unwrap());
-    let jobs: Vec<(Vec<u8>, Vec<u8>)> = (0..2000).map(|_| (r(148), r(tlen))).collect();
+    let mut jobs: Vec<(Vec<u8>, Vec<u8>)> = (0..2000).map(|_| (r(148), r(tlen))).collect();
+    // HIT=1: in jedes dritte Fenster eine Kopie des Reads mit zwei Fehlern setzen, wie bei
+    // einer gelungenen Partnersuche.
+    if std::env::var("HIT").is_ok_and(|v| v == "1") {
+        for (n, (q, t)) in jobs.iter_mut().enumerate() {
+            if n % 3 == 0 && t.len() > q.len() + 10 {
+                let at = (t.len() - q.len()) / 2;
+                t[at..at + q.len()].copy_from_slice(q);
+                t[at + 40] = (t[at + 40] + 1) % 4;
+                t[at + 90] = (t[at + 90] + 2) % 4;
+            }
+        }
+    }
     let t = std::time::Instant::now();
     let mut acc = 0i64;
     let mode = std::env::var("PAIR").unwrap_or_default();
