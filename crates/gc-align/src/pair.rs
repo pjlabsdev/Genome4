@@ -904,6 +904,26 @@ mod tests {
             .collect();
         let mut opt = AlignOptions::default();
         let (ahead, _) = crate::batch::align_pairs(&index, &reads, 0, &opt, 3);
+        // Mit einem Rechenkern, der die Schritte der Grafikeinheit auf dem Prozessor geht.
+        #[derive(Debug)]
+        struct Steps;
+        impl crate::local::RescueKernel for Steps {
+            fn forward(
+                &self,
+                jobs: &[(&[u8], &[u8])],
+                sc: &crate::extend::Scoring,
+            ) -> Option<Vec<crate::local::Forward>> {
+                Some(
+                    jobs.iter()
+                        .map(|(q, t)| crate::local::kernel_reference(q, t, sc))
+                        .collect(),
+                )
+            }
+        }
+        opt.rescue_kernel = Some(std::sync::Arc::new(Steps));
+        let (kernel, _) = crate::batch::align_pairs(&index, &reads, 0, &opt, 3);
+        assert_eq!(ahead, kernel);
+        opt.rescue_kernel = None;
         opt.pair.batch_rescue = false;
         let (single, _) = crate::batch::align_pairs(&index, &reads, 0, &opt, 3);
         assert_eq!(ahead, single);

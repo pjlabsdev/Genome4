@@ -169,6 +169,11 @@ enum Command {
         /// treffen immer wieder dieselben Stellen des Index; die Ausgabe bleibt gleich
         #[arg(long, default_value_t = 64)]
         ortsspeicher_mb: usize,
+        /// Grafikeinheit für die Partnersuche: aus oder an. Mit an rechnet die Grafikeinheit
+        /// desselben Geräts die lokalen Ausrichtungen der Partnersuche; die Ausgabe bleibt gleich.
+        /// Ohne nutzbare Grafikeinheit rechnet der Prozessor (Warnung im Protokoll)
+        #[arg(long, default_value = "aus", value_parser = ["aus", "an"])]
+        grafikeinheit: String,
         /// Keinen Überblick (`<aus ohne .bam>.html` und `.bamqc.json`) schreiben
         #[arg(long)]
         ohne_bericht: bool,
@@ -439,6 +444,8 @@ struct SamRun<'a> {
     trimmer: Option<&'a gc_io::trim::Trimmer>,
     /// Schnellweg für leichte Reads ([`gc_align::FastMode`]).
     fast: gc_align::FastMode,
+    /// Rechenkern für die Partnersuche (Grafikeinheit); ohne rechnet der Prozessor.
+    rescue_kernel: Option<&'a std::sync::Arc<dyn gc_align::local::RescueKernel>>,
 }
 
 /// Richtet Reads aus, einzeln oder als Paare, Block für Block auf `threads` Kernen.
@@ -476,12 +483,14 @@ fn align_into(
         mate_tags,
         trimmer,
         fast,
+        rescue_kernel,
         ..
     } = *run;
     let mut opt = gc_align::AlignOptions::default();
     opt.sam.read_group = read_group.map(|rg| rg.id.clone());
     opt.sam.mate_tags = mate_tags;
     opt.fast = fast;
+    opt.rescue_kernel = rescue_kernel.cloned();
     let reader1 = fastq::open(first)?;
     let reader2 = match second {
         Some(p) => Some(fastq::open(p)?),
@@ -702,6 +711,8 @@ struct Fq2bamRun<'a> {
     sa_thin: u32,
     /// Zwischenspeicher für das Orten der Seeds in MB (0 = aus).
     locate_cache_mb: usize,
+    /// Partnersuche auf der Grafikeinheit.
+    gpu: bool,
     /// Beim Index-Durchlauf die Zahlen für den Überblick sammeln.
     report: bool,
     fast: gc_align::FastMode,
@@ -965,6 +976,7 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
         memory_bytes: run.memory_mb.saturating_mul(1 << 20),
         temp_dir: run.temp.to_path_buf(),
     })));
+    let kernel = if run.gpu { open_gpu_kernel() } else { None };
     let sam_run = SamRun {
         block_bases: run.block_bases,
         threads: run.threads,
@@ -973,6 +985,7 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
         mate_tags: true,
         trimmer: trimmer.as_ref(),
         fast: run.fast,
+        rescue_kernel: kernel.as_ref(),
     };
     let (reads, lines, trim_counts) = align_into(&fm, run.fastq, run.fastq2, &sam_run, &mut out)?;
     let trim_json = trimmer.as_ref().map(|_| trim_counts_json(&trim_counts));
@@ -1701,6 +1714,61 @@ const MEMORY_SHARE: f64 = 0.5;
 /// Wählt das Ausdünnen der Suffix-Array-Stichproben nach dem Arbeitsspeicher: die kleinste
 /// Zweierpotenz (1, 2 oder 4), mit der Index und Sortierpuffer in `MEMORY_SHARE` des
 /// Arbeitsspeichers passen; passt nichts, 4. Ist der Arbeitsspeicher unbekannt, 1.
+/// Die Grafikeinheit als Rechenkern der Partnersuche.
+#[derive(Debug)]
+struct GpuKernel(gc_gpu::Gpu);
+
+impl gc_align::local::RescueKernel for GpuKernel {
+    fn forward(
+        &self,
+        jobs: &[(&[u8], &[u8])],
+        sc: &gc_align::Scoring,
+    ) -> Option<Vec<gc_align::local::Forward>> {
+        let k = gc_gpu::KernelScoring {
+            matching: sc.matching as u32,
+            mismatch: sc.mismatch as u32,
+            ambiguous: sc.ambiguous as u32,
+            o_del: sc.o_del as u32,
+            e_del: sc.e_del as u32,
+            o_ins: sc.o_ins as u32,
+            e_ins: sc.e_ins as u32,
+        };
+        match self.0.forward(jobs, &k) {
+            Ok(r) => Some(r),
+            Err(cause) => {
+                gc_log::warn(
+                    "GPU.FEHLER",
+                    "Grafikeinheit ausgefallen, der Prozessor rechnet diesen Block",
+                    json!({ "ursache": cause }),
+                );
+                None
+            }
+        }
+    }
+}
+
+/// Öffnet die Grafikeinheit; ohne nutzbare eine Warnung, und der Prozessor rechnet.
+fn open_gpu_kernel() -> Option<std::sync::Arc<dyn gc_align::local::RescueKernel>> {
+    match gc_gpu::Gpu::open() {
+        Ok(gpu) => {
+            gc_log::info(
+                "GPU.BEREIT",
+                "Grafikeinheit für die Partnersuche",
+                json!({ "geraet": gpu.name }),
+            );
+            Some(std::sync::Arc::new(GpuKernel(gpu)))
+        }
+        Err(cause) => {
+            gc_log::warn(
+                "GPU.FEHLT",
+                "Keine nutzbare Grafikeinheit, der Prozessor rechnet die Partnersuche",
+                json!({ "ursache": cause }),
+            );
+            None
+        }
+    }
+}
+
 /// Plätze des Ortsspeichers als Zweierpotenz: größte, die in `mb` passt (8 Bytes je Platz).
 fn locate_cache_bits(mb: usize) -> u32 {
     let slots = mb.saturating_mul(1 << 20) / 8;
@@ -2347,6 +2415,7 @@ fn main() -> Result<()> {
             trimmen,
             sa_ausduennen,
             ortsspeicher_mb,
+            grafikeinheit,
             schnellweg,
             ohne_bericht,
         } => {
@@ -2387,6 +2456,7 @@ fn main() -> Result<()> {
                 "trimmen": trimmen,
                 "sa_ausduennen": sa_ausduennen,
                 "ortsspeicher_mb": ortsspeicher_mb,
+                "grafikeinheit": grafikeinheit,
                 "schnellweg": schnellweg,
                 "bericht": !ohne_bericht,
             }));
@@ -2410,6 +2480,7 @@ fn main() -> Result<()> {
                 trim: trimmen,
                 sa_thin: sa_ausduennen,
                 locate_cache_mb: ortsspeicher_mb,
+                gpu: grafikeinheit == "an",
                 report: !ohne_bericht,
                 fast: match schnellweg.as_str() {
                     "an" => gc_align::FastMode::On,
@@ -2636,6 +2707,7 @@ fn main() -> Result<()> {
                         mate_tags: partner_angaben,
                         trimmer: None,
                         fast: gc_align::FastMode::Off,
+                        rescue_kernel: None,
                     },
                 )?;
             }

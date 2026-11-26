@@ -83,6 +83,61 @@ pub fn align_reads(
     })
 }
 
+/// Die gesammelten Fenster der Partnersuche mit einem Rechenkern: Vorwärtslauf dort, Anfang des
+/// Alignments auf dem Prozessor. Fenster, die der Kern nicht genau so rechnen kann (zu lange
+/// Reads), und alle, wenn der Kern ausfällt, rechnet der Prozessor wie bisher.
+fn rescue_with_kernel(
+    index: &FmIndex,
+    reads: &[ReadInput<'_>],
+    jobs: &[(usize, usize, crate::pair::RescueWindow)],
+    opt: &AlignOptions,
+    threads: usize,
+    kernel: &dyn crate::local::RescueKernel,
+) -> Vec<(crate::pair::RescueWindow, crate::local::LocalResult)> {
+    use crate::local::{from_rows, rows_exact, with_start};
+    let sc = &opt.region.scoring;
+    let min_sub = opt.finalize.min_seed_len * sc.matching;
+    let prepared = parallel_map(jobs.len(), threads, |j| {
+        let (i, k, w) = jobs[j];
+        let mate = reads[2 * i + k].seq;
+        let q = crate::pair::rescue_query(mate, w.is_rev);
+        let t = index.text_range(w.rb as u64, w.re as u64);
+        let on_kernel = rows_exact(q.len(), sc);
+        (q, t, on_kernel)
+    });
+    let picked: Vec<usize> = (0..jobs.len()).filter(|&j| prepared[j].2).collect();
+    let refs: Vec<(&[u8], &[u8])> = picked
+        .iter()
+        .map(|&j| (&prepared[j].0[..], &prepared[j].1[..]))
+        .collect();
+    let forward = kernel.forward(&refs, sc);
+    let mut slot = vec![usize::MAX; jobs.len()];
+    if forward.is_some() {
+        for (n, &j) in picked.iter().enumerate() {
+            slot[j] = n;
+        }
+    }
+    parallel_map(jobs.len(), threads, |j| {
+        let (i, k, w) = jobs[j];
+        let (q, t, _) = &prepared[j];
+        let r = match (&forward, slot[j]) {
+            (Some(f), n) if n != usize::MAX => {
+                let (gmax, te, qe, rows) = &f[n];
+                with_start(
+                    q,
+                    t,
+                    sc,
+                    true,
+                    min_sub,
+                    from_rows(*gmax, *te, *qe, rows, sc, min_sub),
+                )
+            }
+            _ => rescue_align(index, reads[2 * i + k].seq, &w, opt),
+        };
+        (w, r)
+    })
+}
+
 /// Richtet einen Block von Paaren aus. `reads` enthält Read 1, Read 2, Read 1, ...;
 /// `first_pair_id` ist die laufende Nummer des ersten Paares. Je Paar seine Ausgabezeilen,
 /// dazu die für den Block geschätzte Insertgröße.
@@ -132,10 +187,13 @@ pub fn align_pairs(
         .enumerate()
         .flat_map(|(i, p)| (0..2).flat_map(move |k| p[k].iter().map(move |w| (i, k, *w))))
         .collect();
-    let results = parallel_map(jobs.len(), threads, |j| {
-        let (i, k, w) = jobs[j];
-        (w, rescue_align(index, reads[2 * i + k].seq, &w, opt))
-    });
+    let results = match &opt.rescue_kernel {
+        Some(kernel) => rescue_with_kernel(index, reads, &jobs, opt, threads, kernel.as_ref()),
+        None => parallel_map(jobs.len(), threads, |j| {
+            let (i, k, w) = jobs[j];
+            (w, rescue_align(index, reads[2 * i + k].seq, &w, opt))
+        }),
+    };
     // Je Paar und Read der Abschnitt seiner Ergebnisse.
     let mut spans = vec![[(0usize, 0usize); 2]; if planned.is_empty() { 0 } else { n_pairs }];
     let mut at = 0;

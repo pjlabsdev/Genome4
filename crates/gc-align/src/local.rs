@@ -407,8 +407,23 @@ pub fn local_align(
     if query.is_empty() {
         return NONE;
     }
-    let mut r = run(query, target, sc, byte, min_sub, 0x10000);
-    if !want_start || r.score < min_sub || r.qe < 0 || r.te < 0 {
+    let r = run(query, target, sc, byte, min_sub, 0x10000);
+    if !want_start {
+        return r;
+    }
+    with_start(query, target, sc, byte, min_sub, r)
+}
+
+/// Ergänzt einen Vorwärtslauf um den Anfang des Alignments (zweiter Teil von [`local_align`]).
+pub fn with_start(
+    query: &[u8],
+    target: &[u8],
+    sc: &Scoring,
+    byte: bool,
+    min_sub: i32,
+    mut r: LocalResult,
+) -> LocalResult {
+    if r.score < min_sub || r.qe < 0 || r.te < 0 {
         return r;
     }
     // Rückwärts: Read bis qe und Referenz bis te umdrehen. Wie in bwa läuft der zweite Durchlauf
@@ -422,6 +437,158 @@ pub fn local_align(
         r.qb = r.qe - rr.qe;
     }
     r
+}
+
+/// Vorwärtslauf im Byte-Format, wie ihn eine Grafikeinheit liefert: bester Score `gmax`, seine
+/// Zeile `te` und Read-Position `qe`, und je Zeile der Referenz das Zeilenmaximum (vor der
+/// Nachkorrektur, wie im gestreiften Lauf). Daraus wird dasselbe [`LocalResult`] wie aus dem
+/// Byte-Lauf von [`local_align`] ohne Anfang.
+pub fn from_rows(
+    gmax: i32,
+    te: i32,
+    qe: i32,
+    row_max: &[u8],
+    sc: &Scoring,
+    min_sub: i32,
+) -> LocalResult {
+    let best_pair = sc.matching.max(-sc.ambiguous);
+    let mut marks: Vec<(i32, i32)> = Vec::new();
+    for (i, &m) in row_max.iter().enumerate() {
+        let (imax, i) = (i32::from(m), i as i32);
+        if imax >= min_sub {
+            match marks.last_mut() {
+                Some(last) if last.1 + 1 == i => {
+                    if last.0 < imax {
+                        *last = (imax, i);
+                    }
+                }
+                _ => marks.push((imax, i)),
+            }
+        }
+        // Wie im gestreiften Lauf: Nach dem besten Score kommen nur Zeilen bis zu ihm vor,
+        // wenn der Lauf dort abbrach; im Byte-Lauf der Partnersuche bricht er nie ab.
+    }
+    let mut r = NONE;
+    r.score = gmax;
+    r.te = te;
+    r.qe = qe;
+    if !marks.is_empty() {
+        let d = (r.score + best_pair - 1) / best_pair;
+        let (low, high) = (te - d, te + d);
+        for &(score, row) in &marks {
+            if (row < low || row > high) && score > r.score2 {
+                r.score2 = score;
+                r.te2 = row;
+            }
+        }
+    }
+    r
+}
+
+/// Ein Rechenkern für viele Vorwärtsläufe auf einmal (Byte-Lauf, wie [`kernel_reference`]).
+/// Liefert je Paar (Read, Referenzstück) `(gmax, te, qe, Zeilenmaxima)` oder `None`, wenn er
+/// gerade nicht rechnen kann; dann rechnet der Prozessor.
+/// Ergebnis eines Vorwärtslaufs: `(gmax, te, qe, Zeilenmaxima)`.
+pub type Forward = (i32, i32, i32, Vec<u8>);
+
+pub trait RescueKernel: Send + Sync + std::fmt::Debug {
+    fn forward(&self, jobs: &[(&[u8], &[u8])], sc: &Scoring) -> Option<Vec<Forward>>;
+}
+
+/// Ob ein Byte-Lauf für diesen Read sicher nicht sättigt und nie vorzeitig abbricht: Dann gibt
+/// [`from_rows`] mit den Werten einer Grafikeinheit dasselbe wie der Lauf auf dem Prozessor.
+pub fn rows_exact(query_len: usize, sc: &Scoring) -> bool {
+    let shift = sc.mismatch.max(sc.ambiguous);
+    query_len as i32 * sc.matching + shift < 250 && query_len <= 256 && query_len > 0
+}
+
+/// Der Rechenkern der Grafikeinheit, Schritt für Schritt in Rust: gestreifter Byte-Lauf mit 16
+/// Spuren, jede Spur ein eigener Wert. Nur zum Prüfen, dass die Übertragung in die Sprache der
+/// Grafikeinheit stimmt (gleiche Schleifen, gleiche Reihenfolge).
+// Die Schleifen über die Spuren laufen wie im Rechenkern über den Index.
+#[allow(clippy::needless_range_loop)]
+pub fn kernel_reference(query: &[u8], target: &[u8], sc: &Scoring) -> Forward {
+    const L: usize = 16;
+    let qlen = query.len();
+    let slen = qlen.div_ceil(L);
+    let shift = sc.mismatch.max(sc.ambiguous) as u32;
+    let sat_add = |a: u32, b: u32| (a + b).min(255);
+    let sat_sub = |a: u32, b: u32| a.saturating_sub(b);
+    let score = |a: u8, p: usize| -> u32 {
+        if p < qlen {
+            (sc.score(a, query[p]) + shift as i32) as u32
+        } else {
+            shift
+        }
+    };
+    let (e_del, e_ins) = (sc.e_del as u32, sc.e_ins as u32);
+    let oe_del = (sc.o_del + sc.e_del) as u32;
+    let oe_ins = (sc.o_ins + sc.e_ins) as u32;
+    let mut h0 = vec![0u32; slen * L];
+    let mut h1 = vec![0u32; slen * L];
+    let mut e_row = vec![0u32; slen * L];
+    let mut h_max = vec![0u32; slen * L];
+    let mut rows = Vec::with_capacity(target.len());
+    let (mut gmax, mut te) = (0u32, -1i32);
+    for (i, &base) in target.iter().enumerate() {
+        let b = base.min(4);
+        let mut h = [0u32; L];
+        for k in 1..L {
+            h[k] = h0[(slen - 1) * L + k - 1];
+        }
+        let mut f = [0u32; L];
+        let mut row_max = [0u32; L];
+        for j in 0..slen {
+            for k in 0..L {
+                let x = j * L + k;
+                let t = sat_sub(sat_add(h[k], score(b, j + k * slen)), shift).max(e_row[x]);
+                let v = t.max(f[k]);
+                row_max[k] = row_max[k].max(v);
+                h1[x] = v;
+                e_row[x] = sat_sub(e_row[x], e_del).max(sat_sub(v, oe_del));
+                f[k] = sat_sub(f[k], e_ins).max(sat_sub(t, oe_ins));
+                h[k] = h0[x];
+            }
+        }
+        'lazy: for _ in 0..16 {
+            for k in (1..L).rev() {
+                f[k] = f[k - 1];
+            }
+            f[0] = 0;
+            for j in 0..slen {
+                let mut any = false;
+                for k in 0..L {
+                    let x = j * L + k;
+                    let v = h1[x].max(f[k]);
+                    h1[x] = v;
+                    f[k] = sat_sub(f[k], e_ins);
+                    any |= f[k] > sat_sub(v, oe_ins);
+                }
+                if !any {
+                    break 'lazy;
+                }
+            }
+        }
+        let imax = row_max.iter().copied().max().unwrap_or(0);
+        rows.push(imax as u8);
+        if imax > gmax {
+            gmax = imax;
+            te = i as i32;
+            h_max.copy_from_slice(&h1);
+        }
+        std::mem::swap(&mut h0, &mut h1);
+    }
+    let (mut max, mut qe) = (-1i32, -1i32);
+    for j in 0..slen {
+        for k in 0..L {
+            let (v, p) = (h_max[j * L + k] as i32, (j + k * slen) as i32);
+            if v > max || (v == max && p < qe) {
+                max = v;
+                qe = p;
+            }
+        }
+    }
+    (gmax as i32, te, qe, rows)
 }
 
 #[cfg(test)]
@@ -458,6 +625,46 @@ mod tests {
             }
         }
         best
+    }
+
+    #[test]
+    fn the_gpu_kernel_steps_give_the_same_result() {
+        let sc = Scoring::default();
+        let mut state = 0x7777_1234_5678_9ABCu64;
+        for round in 0..300 {
+            let tlen = 200 + (xorshift(&mut state) % 1400) as usize;
+            let t = random(&mut state, tlen);
+            let qlen = 30 + (xorshift(&mut state) % 220) as usize;
+            // Ein Teil der Reads stammt aus der Referenz, mit Abweichungen, Lücken und N.
+            let mut q = if round % 3 == 0 || qlen + 10 > tlen {
+                random(&mut state, qlen)
+            } else {
+                let at = (xorshift(&mut state) % (tlen - qlen) as u64) as usize;
+                t[at..at + qlen].to_vec()
+            };
+            for _ in 0..(xorshift(&mut state) % 8) {
+                let p = (xorshift(&mut state) % q.len() as u64) as usize;
+                match xorshift(&mut state) % 4 {
+                    0 => q[p] = 4,
+                    1 => {
+                        q.remove(p);
+                    }
+                    2 => q.insert(p, (xorshift(&mut state) % 4) as u8),
+                    _ => q[p] = (q[p] + 1) & 3,
+                }
+            }
+            if !rows_exact(q.len(), &sc) {
+                continue;
+            }
+            let want = run(&q, &t, &sc, true, 19, 0x10000);
+            let (gmax, te, qe, rows) = kernel_reference(&q, &t, &sc);
+            let got = from_rows(gmax, te, qe, &rows, &sc, 19);
+            assert_eq!(got, want, "Runde {round}");
+            assert_eq!(
+                with_start(&q, &t, &sc, true, 19, got),
+                local_align(&q, &t, &sc, true, 19, true)
+            );
+        }
     }
 
     #[test]

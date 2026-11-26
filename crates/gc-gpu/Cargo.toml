@@ -1,0 +1,16 @@
+[package]
+name = "gc-gpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Rechnen auf der Grafikeinheit (wgpu: Metal, Vulkan, DX12): lokale Ausrichtungen der Partnersuche"
+
+[dependencies]
+wgpu = { version = "30", default-features = false, features = ["wgsl", "metal", "vulkan", "dx12"] }
+pollster = "1"
+bytemuck = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+naga = { version = "*", features = ["wgsl-in"] }
+gc-align = { path = "../gc-align" }

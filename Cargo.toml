@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/gc-align", "crates/gc-bam", "crates/gc-index", "crates/gc-io", "crates/gc-log", "crates/gc-panel", "crates/gc-schema", "crates/gc-sys", "crates/genome"]
+members = ["crates/gc-align", "crates/gc-bam", "crates/gc-gpu", "crates/gc-index", "crates/gc-io", "crates/gc-log", "crates/gc-panel", "crates/gc-schema", "crates/gc-sys", "crates/genome"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,6 +19,7 @@ thiserror = "2"
 anyhow = "1"
 gc-align = { path = "crates/gc-align" }
 gc-bam = { path = "crates/gc-bam" }
+gc-gpu = { path = "crates/gc-gpu" }
 gc-index = { path = "crates/gc-index" }
 gc-io = { path = "crates/gc-io" }
 gc-log = { path = "crates/gc-log" }

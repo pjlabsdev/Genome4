@@ -26,6 +26,9 @@ pub struct AlignOptions {
     pub pair: PairOptions,
     /// Schnellweg für leichte Reads ([`crate::fast`]); aus heißt Ausgabe wie bwa.
     pub fast: FastMode,
+    /// Rechenkern für die gesammelten Ausrichtungen der Partnersuche (zum Beispiel auf der
+    /// Grafikeinheit). Ohne rechnet der Prozessor; die Ausgabe ist in beiden Fällen dieselbe.
+    pub rescue_kernel: Option<std::sync::Arc<dyn crate::local::RescueKernel>>,
 }
 
 /// Einstellungen der Ausgabe.

@@ -27,6 +27,9 @@ Kennungen sind fest: sie ändern ihre Bedeutung nicht. Neue kommen hinzu.
 | `INDEX.VERFAHREN` | info | Entscheidung zwischen direktem und blockweisem Bau, mit Grund | |
 | `ALIGN.INSERTGROESSE` | info | Paare: je Block die geschätzte Insertgröße für die vier Richtungen (Zahl der Paare, Perzentile, Mittel, Streuung, Grenzen für "richtiges Paar") und welche Richtungen benutzt werden | |
 | `ALIGN.FERTIG` | info | Ausrichten beendet: Reads, geschriebene Zeilen, Blöcke, Kerne, Laufzeit, Reads je Sekunde; Sekunden für Lesen (mit Trimmen), Ausrichten und Schreiben, die gleichzeitig laufen, und Wartezeit des Ausrichtens auf das Lesen; unter `schnellweg` die Zähler des [Schnellwegs](verfahren/schnellweg.md) | |
+| `GPU.BEREIT` | info | `--grafikeinheit an`: Die Grafikeinheit rechnet die Partnersuche; Name und Schnittstelle unter `geraet`, siehe [Grafikeinheit](verfahren/grafikeinheit.md) | |
+| `GPU.FEHLT` | warn | `--grafikeinheit an`, aber keine nutzbare Grafikeinheit; der Prozessor rechnet, die Ausgabe ist dieselbe. Grund unter `ursache` | Treiber prüfen (Metal auf macOS, Vulkan unter Linux, DX12 unter Windows) oder ohne die Option laufen lassen |
+| `GPU.FEHLER` | warn | Die Grafikeinheit ist während des Laufs ausgefallen; der Prozessor rechnet diesen Block, die Ausgabe ist dieselbe | Bei Wiederholung ohne `--grafikeinheit an` laufen lassen und `ursache` melden |
 | `FQ2BAM.SPEICHERPLAN` | info | fq2bam hat das Ausdünnen der Suffix-Array-Stichproben nach dem Arbeitsspeicher gewählt (`--sa-ausduennen 0`): Arbeitsspeicher, Größe von Index und Stichproben, Sortierpuffer, gewählter Faktor und erwarteter Bedarf | |
 | `SORT.TEIL` | info | Sortieren: der Speicher war voll, ein sortierter Teil liegt auf der Platte (Zahl der Teile, Bytes auf der Platte, Datensätze bisher) | |
 | `SORT.FERTIG` | info | Sortieren beendet: Datensätze, Bytes, Teile, Laufzeit, Datensätze je Sekunde | |
