@@ -34,12 +34,18 @@ fn main() {
     } else {
         reads
     };
-    // FAST=1: nur den Schnellweg messen, Stücke einzeln gegen gemeinsam (A-B-B-A).
+    // FAST=1: nur den Schnellweg messen, Stücke einzeln gegen gemeinsam (A-B-B-A);
+    // FAST_FIELD=filter: Kopien ohne gegen mit 5-mer-Grenze.
     if std::env::var("FAST").is_ok_and(|v| v == "1") {
         let mut times = Vec::new();
+        let field = std::env::var("FAST_FIELD").unwrap_or_default();
         for together in [false, true, true, false] {
             let mut o = gc_align::sam::AlignOptions::default();
-            o.seed.fast_pieces_together = together;
+            if field == "filter" {
+                o.seed.fast_copy_filter = together;
+            } else {
+                o.seed.fast_pieces_together = together;
+            }
             let t = std::time::Instant::now();
             let taken = reads
                 .iter()

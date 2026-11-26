@@ -30,6 +30,10 @@ pub struct SeedOptions {
     /// Beim Orten jede Zeile des Index je Read nur einmal nachschlagen. Gleiche Orte; aus ortet
     /// jede Zeile so oft, wie sie in den Treffern vorkommt.
     pub locate_unique: bool,
+    /// Der Schnellweg überspringt die Ausrichtung einer weiteren Kopie, wenn eine 5-mer-Grenze
+    /// beweist, dass sie die Grenze für Kopien nicht überschreitet. Gleiche Entscheidung; aus
+    /// richtet jede Kopie aus.
+    pub fast_copy_filter: bool,
 }
 
 impl Default for SeedOptions {
@@ -44,6 +48,7 @@ impl Default for SeedOptions {
             regroup: true,
             fast_pieces_together: true,
             locate_unique: true,
+            fast_copy_filter: true,
         }
     }
 }

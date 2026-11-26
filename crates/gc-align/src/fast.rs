@@ -114,6 +114,52 @@ const COPY_MARGIN: u64 = 128;
 /// wird dann mit dem ganzen Read lokal ausgerichtet; der Read nimmt den Schnellweg nur, wenn
 /// keine davon so gut ist, dass bwa sie in `XA` meldete, die MAPQ senkte oder von ihr aus den
 /// Partner suchte (siehe [`copy_limit`]).
+/// Obergrenze für den lokalen Score des Reads (Codes 0..3, ohne N) gegen `target`, ohne
+/// Ausrichtung: die Zahl der Read-Positionen, deren 5-mer irgendwo in `target` vorkommt, plus 4.
+///
+/// Gilt für die Vorgabe-Bewertung (Treffer 1, Fehltreffer 4, Lücke mindestens 6 + 1): Ein
+/// lokales Alignment besteht aus exakten Läufen, getrennt durch Fehltreffer oder Lücken. Ein
+/// Lauf der Länge `L` bringt `L` Punkte und enthält `max(L - 4, 0)` 5-mere, die alle im Fenster
+/// vorkommen; er bringt also höchstens 4 Punkte mehr als seine 5-mer-Starts. Jede Trennung
+/// kostet mindestens 4 Punkte und hebt den Überschuss eines Laufs auf. Bleibt höchstens der
+/// Überschuss eines Laufs: Score ≤ Starts + 4. Der Read darf kein N enthalten (der Schnellweg
+/// nimmt solche Reads nicht).
+/// `None`, wenn `target` ein N enthält: Gegen N kostet eine Base nur `ambiguous` (1), die
+/// Herleitung gilt dann nicht.
+fn kmer_bound(read: &[u8], target: &[u8]) -> Option<i32> {
+    let mut mask = [0u64; 16];
+    let (mut code, mut valid) = (0usize, 0);
+    for &b in target {
+        if b > 3 {
+            return None;
+        }
+        code = ((code << 2) | usize::from(b)) & 1023;
+        valid += 1;
+        if valid >= 5 {
+            mask[code >> 6] |= 1 << (code & 63);
+        }
+    }
+    let mut starts = 0;
+    let mut code = 0usize;
+    for (i, &b) in read.iter().enumerate() {
+        code = ((code << 2) | usize::from(b)) & 1023;
+        if i >= 4 && mask[code >> 6] >> (code & 63) & 1 == 1 {
+            starts += 1;
+        }
+    }
+    Some(starts + 4)
+}
+
+/// Gilt [`kmer_bound`] für diese Bewertung?
+fn kmer_bound_holds(sc: &crate::extend::Scoring) -> bool {
+    sc.matching == 1
+        && sc.mismatch >= 4
+        && sc.o_del + sc.e_del >= 4
+        && sc.o_ins + sc.e_ins >= 4
+        && sc.e_del >= 0
+        && sc.e_ins >= 0
+}
+
 pub fn fast_region(
     index: &FmIndex,
     read: &[u8],
@@ -287,8 +333,13 @@ pub fn fast_region(
         }
         let limit = copy_limit(score, opt);
         let byte = len as i32 * sc.matching < 250;
+        let filter = opt.seed.fast_copy_filter && kmer_bound_holds(sc);
         for (beg, end) in windows {
             let target = index.text_range(beg, end);
+            // Kann die Kopie die Grenze beweisbar nicht überschreiten, entfällt die Ausrichtung.
+            if filter && kmer_bound(read, &target).is_some_and(|b| b <= limit) {
+                continue;
+            }
             let r = crate::local::local_align(read, &target, sc, byte, 0x10000, false);
             if r.score > limit {
                 bump(&COUNTS.copy_too_good);
@@ -497,5 +548,53 @@ mod tests {
         read[60] = (read[60] + 1) & 3;
         read[140] = (read[140] + 1) & 3;
         assert!(fast_region(&index, &read, &opt, true).is_none());
+    }
+    #[test]
+    fn kmer_bound_is_never_below_the_local_score() {
+        let mut rng = 0x5151_2626_u64;
+        let sc = crate::extend::Scoring::default();
+        assert!(kmer_bound_holds(&sc));
+        let mut tight = 0;
+        for round in 0..3000 {
+            let n = 30 + (xorshift(&mut rng) % 150) as usize;
+            let read: Vec<u8> = (0..n).map(|_| (xorshift(&mut rng) & 3) as u8).collect();
+            // Fenster: Teile des Reads mit Fehlern, Lücken, N und Zufall dazwischen.
+            let mut target: Vec<u8> = (0..xorshift(&mut rng) % 60)
+                .map(|_| (xorshift(&mut rng) & 3) as u8)
+                .collect();
+            let mut i = (xorshift(&mut rng) as usize) % n;
+            while i < n {
+                let b = read[i];
+                match xorshift(&mut rng) % [8, 20, 50][round % 3] {
+                    0 => target.push((b + 1) % 4),
+                    1 => {}
+                    2 => {
+                        target.push(b);
+                        target.push((xorshift(&mut rng) & 3) as u8);
+                    }
+                    3 => target.push(4),
+                    _ => target.push(b),
+                }
+                i += 1;
+            }
+            target.extend((0..xorshift(&mut rng) % 60).map(|_| (xorshift(&mut rng) & 3) as u8));
+            let Some(bound) = kmer_bound(&read, &target) else {
+                assert!(target.contains(&4));
+                continue;
+            };
+            for byte in [false, true] {
+                let byte = byte && n < 250;
+                let r = crate::local::local_align(&read, &target, &sc, byte, 0x10000, false);
+                assert!(
+                    bound >= r.score,
+                    "Runde {round}: Grenze {bound} < {}",
+                    r.score
+                );
+                if bound == r.score {
+                    tight += 1;
+                }
+            }
+        }
+        assert!(tight > 100, "{tight}");
     }
 }

@@ -65,6 +65,27 @@ Stück für Stück (Test `intervals_many_equals_interval`). Der Schalter
 | Schnellweg allein, 200.000 HG002-MGI-Reads chr20, Index GRCh38, 1 Kern, A-B-B-A (`FAST=1 seedbench`) | 5,68 s / 4,98 s | 3,08 s / 2,97 s |
 | `fq2bam` auf 200.000 dieser Paare | BAM byte-gleich | BAM byte-gleich |
 
+## Kopien ohne Ausrichtung ausschließen
+Vor der Ausrichtung einer weiteren Kopie wird eine Obergrenze ihres lokalen Scores bestimmt:
+die Zahl der Read-Positionen, deren 5-mer im Referenzfenster vorkommt, plus 4 (eine Maske aus
+1.024 Bits je Fenster). Ein lokales Alignment besteht aus exakten Läufen, getrennt durch
+Fehltreffer (−4) oder Lücken (mindestens −7). Ein Lauf der Länge `L` bringt `L` Punkte und
+enthält `max(L − 4, 0)` 5-mer-Starts, also höchstens 4 Punkte mehr; jede Trennung hebt diesen
+Überschuss wieder auf. Liegt die Grenze bei oder unter der Grenze für Kopien, kann die Kopie den
+Read nicht vom Schnellweg schicken, und ihre Ausrichtung entfällt.
+
+Die Herleitung gilt nur ohne N: Gegen ein N kostet eine Base nur 1 Punkt. Enthält das Fenster
+ein N (auch Lochstellen der Referenz), wird wie bisher ausgerichtet; ebenso bei einer anderen
+Bewertung als der Vorgabe. Schalter: `SeedOptions::fast_copy_filter = false`. Test
+`kmer_bound_is_never_below_the_local_score` vergleicht die Grenze mit dem SIMD-Score, auch mit
+N, Fehlern und Lücken; ein früherer Entwurf ohne N-Prüfung scheiterte dort.
+
+| Messung (2026-11-26) | Ergebnis |
+|---|---|
+| 36.805 Kopienfenster aus 200.000 HG002-MGI-Reads, Index GRCh38 | Grenze nie unter dem SIMD-Score; 95,4 % überspringbar |
+| Schnellweg allein, 1 Kern, A-B-B-A (`FAST=1 FAST_FIELD=filter seedbench`) | 2,91 / 3,10 s ohne, 2,62 / 2,62 s mit |
+| `fq2bam` auf 200.000 HG002-MGI-Paaren und 300.000 simulierten Paaren (ganzes GRCh38) | BAM byte-gleich |
+
 ## Was sich ändert
 - `XS` bei Reads, für die das volle Verfahren nur zufällige kurze Treffer anderswo findet
   (Score unter 0,8 des besten, meist 19 bis 50). Der Schnellweg schreibt dort `XS:i:0`.
