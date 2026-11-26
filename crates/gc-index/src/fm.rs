@@ -759,6 +759,69 @@ impl FmIndex {
         (lo, hi)
     }
 
+    /// Wie [`FmIndex::interval`], für mehrere Muster zugleich und schneller, mit demselben
+    /// Ergebnis. Die letzten bis zu zehn Basen jedes Musters kommen fertig aus der Tabelle der
+    /// kurzen Muster (dieselben Schritte, beim Anlegen gerechnet). Die übrigen Schritte laufen
+    /// für alle Muster im Gleichschritt: Nach jedem Schritt wird der Zählblock des nächsten
+    /// schon angefordert, sodass die Wartezeiten auf den Speicher sich überlappen. Leere Bereiche
+    /// werden wie in `interval` als `(lo, lo)` an der Stelle gemeldet, an der sie leer wurden.
+    pub fn intervals_many(&self, patterns: &[&[u8]], out: &mut [(u64, u64)]) {
+        assert_eq!(patterns.len(), out.len());
+        // Je Muster: noch offene Basen links (0 = fertig).
+        let mut left = [0usize; 32];
+        if patterns.len() > left.len() {
+            for (p, o) in patterns.iter().zip(out.iter_mut()) {
+                *o = self.interval(p);
+            }
+            return;
+        }
+        let short = self.short.longest();
+        for (i, p) in patterns.iter().enumerate() {
+            let t = short.min(p.len());
+            match self.short.get(&p[p.len() - t..]) {
+                Some(iv) if t > 0 && iv.size > 0 => {
+                    out[i] = (iv.k, iv.k + iv.size);
+                    left[i] = p.len() - t;
+                }
+                _ => {
+                    out[i] = self.interval(p);
+                    left[i] = 0;
+                }
+            }
+            if left[i] > 0 {
+                self.prefetch_row(out[i].0);
+                self.prefetch_row(out[i].1);
+            }
+        }
+        loop {
+            let mut busy = false;
+            for (i, p) in patterns.iter().enumerate() {
+                if left[i] == 0 {
+                    continue;
+                }
+                left[i] -= 1;
+                let c = p[left[i]];
+                let (lo, hi) = out[i];
+                let lo = self.c_before[c as usize] + self.occ(c, lo);
+                let hi = self.c_before[c as usize] + self.occ(c, hi);
+                if lo >= hi {
+                    out[i] = (lo, lo);
+                    left[i] = 0;
+                    continue;
+                }
+                out[i] = (lo, hi);
+                if left[i] > 0 {
+                    busy = true;
+                    self.prefetch_row(lo);
+                    self.prefetch_row(hi);
+                }
+            }
+            if !busy {
+                break;
+            }
+        }
+    }
+
     /// Anzahl der Fundstellen auf beiden Strängen, ohne Filter.
     pub fn count(&self, pattern: &[u8]) -> u64 {
         let (lo, hi) = self.interval(pattern);
@@ -1582,6 +1645,39 @@ mod tests {
                 let mut want = vec![7u64];
                 want.extend(rows.iter().map(|&r| index.locate(r)));
                 assert_eq!(got, want);
+            }
+        }
+    }
+
+    #[test]
+    fn intervals_many_equals_interval() {
+        for variant in [Variant::Standard, Variant::Kompakt, Variant::Schnell] {
+            let index = build(&random_genome(5), variant);
+            let mut rng = Rng(11);
+            let total = index.reference().len();
+            for round in 0..300 {
+                let n = 1 + (rng.next() % 33) as usize;
+                let pats: Vec<Vec<u8>> = (0..n)
+                    .map(|_| {
+                        let len = 1 + (rng.next() % 40) as usize;
+                        if round % 3 == 0 {
+                            (0..len).map(|_| (rng.next() & 3) as u8).collect()
+                        } else {
+                            // Stück des Textes, also meist gefunden.
+                            let at = rng.next() % (2 * total - len as u64);
+                            let mut p = index.text_range(at, at + len as u64);
+                            for c in &mut p {
+                                *c &= 3;
+                            }
+                            p
+                        }
+                    })
+                    .collect();
+                let refs: Vec<&[u8]> = pats.iter().map(|p| p.as_slice()).collect();
+                let mut got = vec![(0, 0); n];
+                index.intervals_many(&refs, &mut got);
+                let want: Vec<(u64, u64)> = refs.iter().map(|p| index.interval(p)).collect();
+                assert_eq!(got, want, "Runde {round}");
             }
         }
     }

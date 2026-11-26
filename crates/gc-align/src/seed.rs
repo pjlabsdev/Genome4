@@ -23,6 +23,10 @@ pub struct SeedOptions {
     /// für die verschränkte Suche zusammenfassen. Aus: Gruppen nach der Reihenfolge der Reads,
     /// in denen nach dem Schnellweg oft nur wenige Reads übrig sind. Gleiche Treffer.
     pub regroup: bool,
+    /// Der Schnellweg sucht seine Stücke gemeinsam ([`gc_index::FmIndex::intervals_many`]):
+    /// Tabelle der kurzen Muster und überlappende Speicherzugriffe. Gleiche Bereiche; aus sucht
+    /// jedes Stück einzeln von vorn.
+    pub fast_pieces_together: bool,
 }
 
 impl Default for SeedOptions {
@@ -35,6 +39,7 @@ impl Default for SeedOptions {
             max_mem_intv: 20,
             interleave: true,
             regroup: true,
+            fast_pieces_together: true,
         }
     }
 }

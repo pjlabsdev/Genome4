@@ -60,6 +60,12 @@ pub(crate) struct ShortTable {
 }
 
 impl ShortTable {
+    /// Längste enthaltene Musterlänge, 0 = keine Tabelle.
+    #[inline]
+    pub(crate) fn longest(&self) -> usize {
+        self.longest
+    }
+
     /// Stelle des ersten Musters der Länge `len` (ab 1) in `entries`: 4 + 16 + … davor.
     #[inline]
     fn offset(len: usize) -> usize {
@@ -97,7 +103,7 @@ impl ShortTable {
 
     /// Bereich von `pattern` (Codes 0..3), wenn es kurz genug für die Tabelle ist.
     #[inline]
-    fn get(&self, pattern: &[u8]) -> Option<BiInterval> {
+    pub(crate) fn get(&self, pattern: &[u8]) -> Option<BiInterval> {
         let len = pattern.len();
         if len == 0 || len > self.longest {
             return None;

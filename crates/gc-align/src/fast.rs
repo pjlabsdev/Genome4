@@ -135,14 +135,29 @@ pub fn fast_region(
     let n = n.min(iv.len());
     let max_hits = if copies { MAX_PIECE_HITS } else { 1 };
     let mut many = false;
-    for (k, slot) in iv.iter_mut().enumerate().take(n) {
-        let (lo, hi) = index.interval(&read[cut(k)..cut(k + 1)]);
-        if hi - lo > max_hits {
-            bump(&COUNTS.repeat);
-            return None;
+    if opt.seed.fast_pieces_together {
+        let mut pieces: [&[u8]; 16] = [&[]; 16];
+        for (k, p) in pieces.iter_mut().enumerate().take(n) {
+            *p = &read[cut(k)..cut(k + 1)];
         }
-        many |= hi - lo > 1;
-        *slot = (lo, hi);
+        index.intervals_many(&pieces[..n], &mut iv[..n]);
+        for &(lo, hi) in &iv[..n] {
+            if hi - lo > max_hits {
+                bump(&COUNTS.repeat);
+                return None;
+            }
+            many |= hi - lo > 1;
+        }
+    } else {
+        for (k, slot) in iv.iter_mut().enumerate().take(n) {
+            let (lo, hi) = index.interval(&read[cut(k)..cut(k + 1)]);
+            if hi - lo > max_hits {
+                bump(&COUNTS.repeat);
+                return None;
+            }
+            many |= hi - lo > 1;
+            *slot = (lo, hi);
+        }
     }
     let count = |k: usize| iv[k].1 - iv[k].0;
     // Anfänge je Stück. Ohne Stück mit mehreren Fundstellen genügt ein Nachschlagen.

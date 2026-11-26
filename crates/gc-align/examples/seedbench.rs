@@ -34,6 +34,22 @@ fn main() {
     } else {
         reads
     };
+    // FAST=1: nur den Schnellweg messen, Stücke einzeln gegen gemeinsam (A-B-B-A).
+    if std::env::var("FAST").is_ok_and(|v| v == "1") {
+        let mut times = Vec::new();
+        for together in [false, true, true, false] {
+            let mut o = gc_align::sam::AlignOptions::default();
+            o.seed.fast_pieces_together = together;
+            let t = std::time::Instant::now();
+            let taken = reads
+                .iter()
+                .filter(|r| gc_align::fast::fast_region(&index, r, &o, true).is_some())
+                .count();
+            times.push((together, taken, t.elapsed()));
+        }
+        println!("reads {} {times:?}", reads.len());
+        return;
+    }
     let opt = SeedOptions::default();
     let t = std::time::Instant::now();
     let mut n = 0;

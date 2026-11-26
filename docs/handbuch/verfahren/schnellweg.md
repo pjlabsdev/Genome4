@@ -51,6 +51,20 @@ im vollen Weg als Nebenbereich stehen und bestimmt dort `XS`; der Schnellweg sch
 `--schnellweg einfach` schaltet die Kopien ab: Dann schickt jedes Stück mit mehr als einer
 Fundstelle den Read den vollen Weg (Stand vor dieser Erweiterung).
 
+## Stücke gemeinsam suchen
+Die Stücke eines Reads werden gemeinsam gesucht (`FmIndex::intervals_many`). Die letzten bis zu
+zehn Basen jedes Stücks kommen fertig aus der Tabelle der kurzen Muster, die beim Laden des Index
+mit denselben Schritten gerechnet wird. Die übrigen Schritte laufen für alle Stücke im
+Gleichschritt, und nach jedem Schritt wird der Zählblock des nächsten schon angefordert, sodass
+sich die Wartezeiten auf den Speicher überlappen. Die Bereiche sind dieselben wie bei der Suche
+Stück für Stück (Test `intervals_many_equals_interval`). Der Schalter
+`SeedOptions::fast_pieces_together = false` sucht jedes Stück wieder einzeln von vorn.
+
+| Messung (2026-11-26) | einzeln | gemeinsam |
+|---|---|---|
+| Schnellweg allein, 200.000 HG002-MGI-Reads chr20, Index GRCh38, 1 Kern, A-B-B-A (`FAST=1 seedbench`) | 5,68 s / 4,98 s | 3,08 s / 2,97 s |
+| `fq2bam` auf 200.000 dieser Paare | BAM byte-gleich | BAM byte-gleich |
+
 ## Was sich ändert
 - `XS` bei Reads, für die das volle Verfahren nur zufällige kurze Treffer anderswo findet
   (Score unter 0,8 des besten, meist 19 bis 50). Der Schnellweg schreibt dort `XS:i:0`.
