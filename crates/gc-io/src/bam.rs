@@ -100,13 +100,36 @@ pub fn create_raw(
     raw_text: &[u8],
     threads: usize,
 ) -> io::Result<MtWriter> {
+    create_raw_level(path, header, raw_text, threads, DEFAULT_LEVEL)
+}
+
+/// Stufe der Deflate-Kompression, wenn nichts anderes verlangt ist (wie samtools und noodles).
+pub const DEFAULT_LEVEL: u8 = 6;
+
+/// Wie [`create_raw`], mit Kompressionsstufe 0 (keine) bis 9 (kleinste Datei). Die Stufe ändert
+/// nur die Bytes der Datei, nicht die Sätze.
+pub fn create_raw_level(
+    path: impl AsRef<Path>,
+    header: &sam::Header,
+    raw_text: &[u8],
+    threads: usize,
+    level: u8,
+) -> io::Result<MtWriter> {
     use std::io::Write;
     let too_long = |_| io::Error::new(io::ErrorKind::InvalidInput, "BAM-Kopf zu groß");
+    let level = bgzf::io::writer::CompressionLevel::new(level).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Kompressionsstufe muss 0 bis 9 sein",
+        )
+    })?;
     let file = BufWriter::with_capacity(1 << 20, File::create(path)?);
-    let mut writer = bam::io::Writer::from(bgzf::io::MultithreadedWriter::with_worker_count(
-        workers(threads),
-        file,
-    ));
+    let mut writer = bam::io::Writer::from(
+        bgzf::io::multithreaded_writer::Builder::default()
+            .set_worker_count(workers(threads))
+            .set_compression_level(level)
+            .build_from_writer(file),
+    );
     let w = writer.get_mut();
     w.write_all(b"BAM\x01")?;
     w.write_all(
@@ -147,10 +170,20 @@ pub fn create_from_text(
     header_text: &str,
     threads: usize,
 ) -> io::Result<MtWriter> {
+    create_from_text_level(path, header_text, threads, DEFAULT_LEVEL)
+}
+
+/// Wie [`create_from_text`], mit Kompressionsstufe 0 bis 9.
+pub fn create_from_text_level(
+    path: impl AsRef<Path>,
+    header_text: &str,
+    threads: usize,
+    level: u8,
+) -> io::Result<MtWriter> {
     let header: sam::Header = header_text
         .parse()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-    create_raw(path, &header, header_text.as_bytes(), threads)
+    create_raw_level(path, &header, header_text.as_bytes(), threads, level)
 }
 
 /// Schreibt fertig kodierte BAM-Sätze (jeder mit seinem Längenfeld vorn) unverändert.
@@ -263,6 +296,43 @@ mod tests {
         let (_, parsed, raw) = open_raw(&b, 1).unwrap();
         assert_eq!(raw, text);
         assert_eq!(parsed.reference_sequences().len(), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn level_changes_bytes_not_records() {
+        let dir = std::env::temp_dir().join(format!("gcio-bamstufe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = "@HD\tVN:1.6\tSO:coordinate\n@SQ\tSN:chr1\tLN:1000\n";
+        let header: sam::Header = text.parse().unwrap();
+        let write = |p: &Path, level: Option<u8>| {
+            let mut w = match level {
+                None => create_from_text(p, text, 2).unwrap(),
+                Some(l) => create_from_text_level(p, text, 2, l).unwrap(),
+            };
+            for i in 0..20_000u32 {
+                let rec = RecordBuf::builder()
+                    .set_name(format!("r{i}"))
+                    .set_sequence(b"ACGTACGTTTGACCA".to_vec().into())
+                    .set_quality_scores(vec![(i % 40) as u8; 15].into())
+                    .build();
+                w.write_alignment_record(&header, &rec).unwrap();
+            }
+            finish(w).unwrap();
+        };
+        let (d, l6, l1) = (dir.join("d.bam"), dir.join("6.bam"), dir.join("1.bam"));
+        write(&d, None);
+        write(&l6, Some(DEFAULT_LEVEL));
+        write(&l1, Some(1));
+        // Vorgabe und Stufe 6 sind dieselbe Datei
+        assert_eq!(std::fs::read(&d).unwrap(), std::fs::read(&l6).unwrap());
+        assert_ne!(std::fs::read(&d).unwrap(), std::fs::read(&l1).unwrap());
+        let read_all = |p: &Path| {
+            let (mut r, h) = open(p, 1).unwrap();
+            r.record_bufs(&h).map(|x| x.unwrap()).collect::<Vec<_>>()
+        };
+        assert_eq!(read_all(&d), read_all(&l1));
+        assert!(create_from_text_level(dir.join("x.bam"), text, 1, 10).is_err());
         std::fs::remove_dir_all(dir).ok();
     }
 }

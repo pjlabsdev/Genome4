@@ -183,6 +183,10 @@ enum Command {
         /// `aus` rechnet jede Verlängerung neu wie bwa, zum Vergleich
         #[arg(long, default_value = "an", value_parser = ["an", "aus"])]
         verlaengerung_merken: String,
+        /// Kompressionsstufe der BAM, 0 (keine) bis 9 (kleinste Datei). 3 schreibt schneller bei
+        /// rund 3 % größerer Datei; 6 wie samtools. Die Sätze sind bei jeder Stufe dieselben
+        #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(0..=9))]
+        bam_stufe: u8,
         /// Keinen Überblick (`<aus ohne .bam>.html` und `.bamqc.json`) schreiben
         #[arg(long)]
         ohne_bericht: bool,
@@ -737,6 +741,8 @@ struct Fq2bamRun<'a> {
     max_matesw: usize,
     /// Gleiche Verlängerungen eines Reads nur einmal rechnen.
     memo: bool,
+    /// Kompressionsstufe der BAM.
+    bam_level: u8,
 }
 
 /// Zahlen von `flagstat` als JSON, für eine der beiden Gruppen.
@@ -1040,8 +1046,9 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
     let part = PathBuf::from(part);
     let st = gc_log::stage("fq2bam.zusammenfuehren", json!({ "teile": sorted.runs }));
     let written = (|| -> Result<(gc_bam::SortStats, gc_bam::DupStats, gc_bam::FlagStats)> {
-        let mut writer = gc_io::bam::create_from_text(&part, &header_text, run.threads)
-            .with_context(|| format!("{} anlegen", part.display()))?;
+        let mut writer =
+            gc_io::bam::create_from_text_level(&part, &header_text, run.threads, run.bam_level)
+                .with_context(|| format!("{} anlegen", part.display()))?;
         let mut marker = gc_bam::DupMarker::new(gc_bam::DupOptions {
             max_length: run.max_length,
             optical: run.optical,
@@ -2441,6 +2448,7 @@ fn main() -> Result<()> {
             grafikeinheit,
             partnersuche_bereiche,
             verlaengerung_merken,
+            bam_stufe,
             schnellweg,
             ohne_bericht,
         } => {
@@ -2484,6 +2492,7 @@ fn main() -> Result<()> {
                 "grafikeinheit": grafikeinheit,
                 "partnersuche_bereiche": partnersuche_bereiche,
                 "verlaengerung_merken": verlaengerung_merken,
+                "bam_stufe": bam_stufe,
                 "schnellweg": schnellweg,
                 "bericht": !ohne_bericht,
             }));
@@ -2510,6 +2519,7 @@ fn main() -> Result<()> {
                 gpu: grafikeinheit == "an",
                 max_matesw: partnersuche_bereiche,
                 memo: verlaengerung_merken == "an",
+                bam_level: bam_stufe,
                 report: !ohne_bericht,
                 fast: match schnellweg.as_str() {
                     "an" => gc_align::FastMode::On,
