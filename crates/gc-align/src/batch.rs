@@ -3,7 +3,9 @@
 //! Jeder Read und jedes Paar wird für sich gerechnet; die Ergebnisse kommen in der Reihenfolge
 //! der Eingabe zurück. Die Ausgabe hängt deshalb nicht von der Zahl der Kerne ab.
 
-use crate::pair::{InsertStats, PairedRead, estimate_insert, pair_lines};
+use crate::pair::{
+    InsertStats, PairedRead, estimate_insert, pair_lines_with, planned_rescues, rescue_align,
+};
 use crate::sam::{AlignOptions, Line, align_read, find_regions, read_lines};
 use gc_index::FmIndex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -102,9 +104,10 @@ pub fn align_pairs(
     let (regions, frac_rep): (Vec<_>, Vec<_>) = found.into_iter().unzip();
     // Stufe 2: Insertgröße aus dem ganzen Block.
     let pes = estimate_insert(index, &regions, opt);
-    // Stufe 3: je Paar Partnersuche, Paarbewertung, Zeilen.
-    let lines = parallel_map(reads.len() / 2, threads, |i| {
-        let mut s = [0, 1].map(|k| {
+    // Stufe 3: je Paar Partnersuche, Paarbewertung, Zeilen. Die lokalen Ausrichtungen der
+    // Partnersuche werden vorab für den ganzen Block gesammelt und gemeinsam gerechnet.
+    let paired = |i: usize| {
+        [0, 1].map(|k| {
             let r = &reads[2 * i + k];
             PairedRead {
                 name: r.name,
@@ -113,8 +116,43 @@ pub fn align_pairs(
                 regions: regions[2 * i + k].clone(),
                 frac_rep: frac_rep[2 * i + k],
             }
-        });
-        pair_lines(index, &pes, first_pair_id + i as u64, &mut s, opt).0
+        })
+    };
+    let n_pairs = reads.len() / 2;
+    let planned = if opt.pair.batch_rescue {
+        parallel_map(n_pairs, threads, |i| {
+            planned_rescues(index, &pes, &paired(i), opt)
+        })
+    } else {
+        Vec::new()
+    };
+    // Alle Fenster des Blocks in einer Liste: (Paar, gesuchter Read, Fenster).
+    let jobs: Vec<(usize, usize, crate::pair::RescueWindow)> = planned
+        .iter()
+        .enumerate()
+        .flat_map(|(i, p)| (0..2).flat_map(move |k| p[k].iter().map(move |w| (i, k, *w))))
+        .collect();
+    let results = parallel_map(jobs.len(), threads, |j| {
+        let (i, k, w) = jobs[j];
+        (w, rescue_align(index, reads[2 * i + k].seq, &w, opt))
+    });
+    // Je Paar und Read der Abschnitt seiner Ergebnisse.
+    let mut spans = vec![[(0usize, 0usize); 2]; if planned.is_empty() { 0 } else { n_pairs }];
+    let mut at = 0;
+    for (i, p) in planned.iter().enumerate() {
+        for k in 0..2 {
+            spans[i][k] = (at, at + p[k].len());
+            at += p[k].len();
+        }
+    }
+    let lines = parallel_map(n_pairs, threads, |i| {
+        let mut s = paired(i);
+        let done = if spans.is_empty() {
+            [&[][..], &[][..]]
+        } else {
+            [0, 1].map(|k| &results[spans[i][k].0..spans[i][k].1])
+        };
+        pair_lines_with(index, &pes, first_pair_id + i as u64, &mut s, opt, done).0
     });
     (lines, pes)
 }
