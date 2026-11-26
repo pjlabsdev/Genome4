@@ -199,6 +199,29 @@ fn count_cgt(words: &[u64], within: u32) -> [u64; 3] {
     [fold(c), fold(g), fold(t)]
 }
 
+/// Je Base C, G und T in den Basen ab `within` bis zum Ende der Wörter (A ist der Rest).
+#[inline]
+fn count_cgt_tail(words: &[u64], within: u32) -> [u64; 3] {
+    let (first, rest) = ((within / 32) as usize, within % 32);
+    let (mut c, mut g, mut t) = (0u64, 0u64, 0u64);
+    let mut add = |w: u64, keep: u64| {
+        let (low, high) = (w & keep, (w >> 1) & keep);
+        let both = low & high;
+        c += pairs(low ^ both);
+        g += pairs(high ^ both);
+        t += pairs(both);
+    };
+    let mut from = first;
+    if rest != 0 {
+        add(words[first], EVEN & !((1u64 << (2 * rest)) - 1));
+        from += 1;
+    }
+    for &w in &words[from..] {
+        add(w, EVEN);
+    }
+    [fold(c), fold(g), fold(t)]
+}
+
 /// Base `c` in den ersten `within` Basen der Wörter.
 #[inline]
 fn count_one(words: &[u64], c: u8, within: u32) -> u64 {
@@ -564,6 +587,19 @@ impl FmIndex {
         let base = (i >> self.occ_shift) as usize * stride;
         let within = (i & (interval - 1)) as u32;
         let block = &self.blocks[base..base + stride];
+        // Liegt `i` in der hinteren Hälfte des Blocks, wird vom Zählstand des nächsten Blocks
+        // zurückgezählt: Dann sind es höchstens halb so viele Basen. Gleiches Ergebnis.
+        if within > (interval / 2) as u32 && base + 2 * stride <= self.blocks.len() {
+            let next = &self.blocks[base + stride..base + stride + 4];
+            let [c, g, t] = count_cgt_tail(&block[4..], within);
+            let block_end = i - u64::from(within) + interval;
+            let mut a = (block_end - i) - c - g - t;
+            // Das Endzeichen ist als Code 0 gespeichert, zählt aber nicht als A.
+            if self.primary >= i && self.primary < block_end {
+                a -= 1;
+            }
+            return [next[0] - a, next[1] - c, next[2] - g, next[3] - t];
+        }
         let [c, g, t] = count_cgt(&block[4..], within);
         let mut a = u64::from(within) - c - g - t;
         // Das Endzeichen ist als Code 0 gespeichert, zählt aber nicht als A.
@@ -616,6 +652,11 @@ impl FmIndex {
         // Ein Block hat bis zu 64 Bytes und liegt nicht ausgerichtet: Anfang und Ende holen.
         gc_sys::prefetch(&self.blocks[base]);
         gc_sys::prefetch(&self.blocks[base + stride - 1]);
+        // In der hinteren Hälfte zählt `occ4` vom Zählstand des nächsten Blocks zurück.
+        let within = i & (u64::from(self.occ_interval) - 1);
+        if within > u64::from(self.occ_interval / 2) && base + 2 * stride <= self.blocks.len() {
+            gc_sys::prefetch(&self.blocks[base + stride]);
+        }
     }
 
     #[inline]
@@ -1409,6 +1450,17 @@ mod tests {
             }
         }
         assert_eq!(counts.iter().sum::<u64>(), index.rows() - 1);
+        // occ4 in allen Varianten (es zählt je nach Lage vom Anfang oder vom Ende des Blocks)
+        for variant in [Variant::Standard, Variant::Kompakt, Variant::Schnell] {
+            let index = build(&contigs, variant);
+            let mut counts = [0u64; 4];
+            for row in 0..=index.rows() {
+                assert_eq!(index.occ4(row), counts, "{variant:?} occ4({row})");
+                if row < index.rows() && row != index.primary {
+                    counts[index.bwt(row) as usize] += 1;
+                }
+            }
+        }
         // beide Enden eines Bereichs auf einmal, in beiden Varianten, auch über das Endzeichen
         for variant in [Variant::Standard, Variant::Kompakt, Variant::Schnell] {
             let index = build(&contigs, variant);

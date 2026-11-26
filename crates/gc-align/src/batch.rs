@@ -3,10 +3,12 @@
 //! Jeder Read und jedes Paar wird für sich gerechnet; die Ergebnisse kommen in der Reihenfolge
 //! der Eingabe zurück. Die Ausgabe hängt deshalb nicht von der Zahl der Kerne ab.
 
+use crate::finalize::mark_primary;
 use crate::pair::{
     InsertStats, PairedRead, estimate_insert, pair_lines_with, planned_rescues, rescue_align,
 };
-use crate::sam::{AlignOptions, Line, align_read, find_regions, read_lines};
+use crate::sam::{AlignOptions, Line, read_lines, regions_from_intervals};
+use crate::seed::collect_intervals_many;
 use gc_index::FmIndex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -76,11 +78,62 @@ pub fn align_reads(
     opt: &AlignOptions,
     threads: usize,
 ) -> Vec<Vec<Line>> {
-    parallel_map(reads.len(), threads, |i| {
-        let r = &reads[i];
-        let (regions, frac_rep) = align_read(index, r.seq, first_id + i as u64, opt);
-        read_lines(index, r.name, r.seq, r.qual, &regions, frac_rep, opt)
-    })
+    let found = regions_of_all(index, reads, opt, threads);
+    found
+        .into_iter()
+        .enumerate()
+        .map(|(i, (mut regions, frac_rep))| {
+            let r = &reads[i];
+            mark_primary(
+                &mut regions,
+                first_id + i as u64,
+                &opt.region.scoring,
+                &opt.finalize,
+            );
+            read_lines(index, r.name, r.seq, r.qual, &regions, frac_rep, opt)
+        })
+        .collect()
+}
+
+/// Reads je Gruppe, deren Seed-Suchen verschränkt laufen ([`collect_intervals_many`]).
+const SEED_GROUP: usize = 32;
+
+/// Bereiche aller Reads ([`crate::sam::find_regions`]), auf `threads` Kernen, die Seed-Suche in
+/// Gruppen verschränkt. Das Ergebnis ist dasselbe wie Read für Read.
+fn regions_of_all(
+    index: &FmIndex,
+    reads: &[ReadInput<'_>],
+    opt: &AlignOptions,
+    threads: usize,
+) -> Vec<(Vec<crate::region::Region>, f32)> {
+    use crate::fast::{FastMode, fast_region};
+    // Prüfmodus und ausgeschaltetes Verschränken: Read für Read wie bisher.
+    if !opt.seed.interleave || opt.fast == FastMode::Check {
+        return parallel_map(reads.len(), threads, |i| {
+            crate::sam::find_regions(index, reads[i].seq, opt)
+        });
+    }
+    let groups = parallel_map(reads.len().div_ceil(SEED_GROUP), threads, |g| {
+        let group = &reads[g * SEED_GROUP..((g + 1) * SEED_GROUP).min(reads.len())];
+        // Erst der Schnellweg; nur die übrigen Reads gehen gemeinsam in die Seed-Suche.
+        let mut out: Vec<Option<(Vec<crate::region::Region>, f32)>> = group
+            .iter()
+            .map(|r| match opt.fast {
+                FastMode::On | FastMode::Simple => {
+                    fast_region(index, r.seq, opt, opt.fast == FastMode::On).map(|x| (vec![x], 0.0))
+                }
+                _ => None,
+            })
+            .collect();
+        let rest: Vec<usize> = (0..group.len()).filter(|&i| out[i].is_none()).collect();
+        let seqs: Vec<&[u8]> = rest.iter().map(|&i| group[i].seq).collect();
+        let intervals = collect_intervals_many(index, &seqs, &opt.seed);
+        for (&i, iv) in rest.iter().zip(&intervals) {
+            out[i] = Some(regions_from_intervals(index, group[i].seq, iv, opt));
+        }
+        out.into_iter().map(Option::unwrap).collect::<Vec<_>>()
+    });
+    groups.into_iter().flatten().collect()
 }
 
 /// Die gesammelten Fenster der Partnersuche mit einem Rechenkern: Vorwärtslauf dort, Anfang des
@@ -153,9 +206,7 @@ pub fn align_pairs(
         "Paare brauchen eine gerade Zahl von Reads"
     );
     // Stufe 1: Bereiche je Read.
-    let found = parallel_map(reads.len(), threads, |i| {
-        find_regions(index, reads[i].seq, opt)
-    });
+    let found = regions_of_all(index, reads, opt, threads);
     let (regions, frac_rep): (Vec<_>, Vec<_>) = found.into_iter().unzip();
     // Stufe 2: Insertgröße aus dem ganzen Block.
     let pes = estimate_insert(index, &regions, opt);

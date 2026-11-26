@@ -1,6 +1,6 @@
 //! Seeds eines Reads sammeln und im Genom orten (BWA-MEM: `mem_collect_intv`, `mem_chain`).
 
-use gc_index::{FmIndex, Smem};
+use gc_index::{FmIndex, ForwardSeed, Smem, SmemSearch};
 
 /// Einstellungen der Seed-Suche. Die Vorgaben sind die von BWA-MEM.
 #[derive(Debug, Clone, PartialEq)]
@@ -16,6 +16,9 @@ pub struct SeedOptions {
     /// Dritte Runde: Seeds, die seltener als so oft vorkommen, von links nach rechts ohne
     /// Linksverlängerung suchen (`-y`, bwa: max_mem_intv). 0 schaltet die Runde ab.
     pub max_mem_intv: u64,
+    /// Die Seed-Suchen mehrerer Reads verschränkt rechnen ([`collect_intervals_many`]). Gleiche
+    /// Treffer; aus heißt Read für Read wie bisher.
+    pub interleave: bool,
 }
 
 impl Default for SeedOptions {
@@ -26,6 +29,7 @@ impl Default for SeedOptions {
             split_width: 10,
             max_occ: 500,
             max_mem_intv: 20,
+            interleave: true,
         }
     }
 }
@@ -77,6 +81,168 @@ pub fn collect_intervals(index: &FmIndex, read: &[u8], opt: &SeedOptions) -> Vec
     // entscheidet das mit, welche Ketten entstehen.
     all.sort_unstable_by_key(|m| (m.start, m.end));
     all
+}
+
+/// [`collect_intervals`] für mehrere Reads zugleich, mit genau denselben Ergebnissen. Die
+/// Suchen der Reads laufen abwechselnd Schritt für Schritt: Erst fordert jede die Speicherzeilen
+/// ihres nächsten Schritts an, dann rechnet jede ihren Schritt. Der Prozessor wartet so auf die
+/// Zugriffe vieler Reads zugleich statt auf einen nach dem anderen (wie BWA-MEM2).
+pub fn collect_intervals_many(
+    index: &FmIndex,
+    reads: &[&[u8]],
+    opt: &SeedOptions,
+) -> Vec<Vec<Smem>> {
+    let mut drivers: Vec<Driver<'_>> = reads.iter().map(|&r| Driver::new(r)).collect();
+    let mut active: Vec<usize> = (0..drivers.len()).collect();
+    while !active.is_empty() {
+        for &d in &active {
+            drivers[d].prefetch(index);
+        }
+        active.retain(|&d| !drivers[d].advance(index, opt));
+    }
+    drivers.into_iter().map(|d| d.all).collect()
+}
+
+/// Ablauf der drei Runden von [`collect_intervals`] für einen Read, in Schritten.
+struct Driver<'r> {
+    read: &'r [u8],
+    stage: Stage,
+    job: Job,
+    all: Vec<Smem>,
+    extra: Vec<Smem>,
+}
+
+#[derive(Clone, Copy)]
+enum Stage {
+    /// Erste Runde, nächste Startposition.
+    First(usize),
+    /// Nachsuche: nächster Treffer der ersten Runde, Zahl der Treffer der ersten Runde.
+    Split(usize, usize),
+    /// Dritte Runde, nächste Startposition.
+    Rare(usize),
+    Done,
+}
+
+enum Job {
+    Idle,
+    Smem(SmemSearch),
+    Seed(ForwardSeed),
+}
+
+impl<'r> Driver<'r> {
+    fn new(read: &'r [u8]) -> Self {
+        Driver {
+            read,
+            stage: Stage::First(0),
+            job: Job::Idle,
+            all: Vec::new(),
+            extra: Vec::new(),
+        }
+    }
+
+    fn prefetch(&self, index: &FmIndex) {
+        match &self.job {
+            Job::Smem(s) => s.prefetch(index, self.read),
+            Job::Seed(s) => s.prefetch(index, self.read),
+            Job::Idle => {}
+        }
+    }
+
+    /// Ein Schritt. `true`, wenn der Read fertig ist.
+    fn advance(&mut self, index: &FmIndex, opt: &SeedOptions) -> bool {
+        let read = self.read;
+        match &mut self.job {
+            Job::Smem(search) => {
+                let out = match self.stage {
+                    Stage::First(_) => &mut self.all,
+                    _ => &mut self.extra,
+                };
+                let Some(reach) = search.step(index, read, out) else {
+                    return false;
+                };
+                self.job = Job::Idle;
+                match self.stage {
+                    Stage::First(_) => {
+                        self.stage = Stage::First(reach);
+                    }
+                    Stage::Split(i, first_round) => {
+                        let min = opt.min_seed_len;
+                        self.all
+                            .extend(self.extra.iter().filter(|e| e.len() >= min));
+                        self.stage = Stage::Split(i + 1, first_round);
+                    }
+                    _ => unreachable!("SMEM-Suche nur in den ersten beiden Runden"),
+                }
+            }
+            Job::Seed(search) => {
+                let Some((next, found)) = search.step(index, read) else {
+                    return false;
+                };
+                self.job = Job::Idle;
+                self.all.extend(found);
+                self.stage = Stage::Rare(next);
+            }
+            Job::Idle => {}
+        }
+        self.start_next(index, opt)
+    }
+
+    /// Legt die nächste Suche an, ohne sie zu rechnen. `true`, wenn keine mehr bleibt.
+    fn start_next(&mut self, index: &FmIndex, opt: &SeedOptions) -> bool {
+        let read = self.read;
+        loop {
+            match self.stage {
+                Stage::First(x) if x < read.len() => {
+                    self.job = Job::Smem(SmemSearch::new(index, read, x, 1, &self.all));
+                    return false;
+                }
+                Stage::First(_) => {
+                    self.all.retain(|m| m.len() >= opt.min_seed_len);
+                    self.stage = Stage::Split(0, self.all.len());
+                }
+                Stage::Split(i, first_round) if i < first_round => {
+                    let split_len = (opt.min_seed_len as f32 * opt.split_factor + 0.499) as u32;
+                    let m = self.all[i];
+                    if m.len() < split_len || m.interval.size > opt.split_width {
+                        self.stage = Stage::Split(i + 1, first_round);
+                        continue;
+                    }
+                    let mid = (m.start + m.end) as usize / 2;
+                    self.extra.clear();
+                    self.job = Job::Smem(SmemSearch::new(
+                        index,
+                        read,
+                        mid,
+                        m.interval.size + 1,
+                        &self.extra,
+                    ));
+                    return false;
+                }
+                Stage::Split(..) => {
+                    self.stage = if opt.max_mem_intv > 0 {
+                        Stage::Rare(0)
+                    } else {
+                        Stage::Done
+                    };
+                }
+                Stage::Rare(x) if x < read.len() => {
+                    self.job = Job::Seed(ForwardSeed::new(
+                        index,
+                        read,
+                        x,
+                        opt.min_seed_len,
+                        opt.max_mem_intv,
+                    ));
+                    return false;
+                }
+                Stage::Rare(_) => self.stage = Stage::Done,
+                Stage::Done => {
+                    self.all.sort_unstable_by_key(|m| (m.start, m.end));
+                    return true;
+                }
+            }
+        }
+    }
 }
 
 /// Anteil des Reads, der von Treffern mit mehr als `max_occ` Fundstellen überdeckt ist
@@ -156,6 +322,72 @@ mod tests {
         *state ^= *state >> 7;
         *state ^= *state << 17;
         *state
+    }
+
+    #[test]
+    fn many_reads_at_once_give_the_same_intervals() {
+        let mut rng = 0x2545_F491_4F6C_DD1Du64;
+        let mut s: Vec<u8> = (0..40_000)
+            .map(|_| b"ACGT"[(xorshift(&mut rng) & 3) as usize])
+            .collect();
+        // Wiederholungen und arme Folgen, damit alle drei Runden etwas zu tun haben.
+        for k in 0..30 {
+            let from = (xorshift(&mut rng) % 39_000) as usize;
+            let to = (xorshift(&mut rng) % 39_000) as usize;
+            let len = 20 + (xorshift(&mut rng) % 200) as usize;
+            let len = len.min(40_000 - from.max(to));
+            let piece = s[from..from + len].to_vec();
+            s[to..to + len].copy_from_slice(&piece);
+            if k % 5 == 0 {
+                for b in &mut s[to..to + len / 3] {
+                    *b = b'A';
+                }
+            }
+        }
+        let mut r = Reference::new();
+        r.push_contig("a", &s[..25_000]);
+        r.push_contig("b", &s[25_000..]);
+        let code = |b: u8| gc_index::reference::encode(b).unwrap();
+        for variant in [Variant::Standard, Variant::Kompakt] {
+            let index = FmIndex::build(r.clone(), variant, 0).unwrap().0;
+            let reads: Vec<Vec<u8>> = (0..400)
+                .map(|n| {
+                    let len = 30 + (xorshift(&mut rng) % 221) as usize;
+                    let at = (xorshift(&mut rng) % (40_000 - len as u64)) as usize;
+                    let mut read: Vec<u8> = s[at..at + len].iter().map(|&b| code(b)).collect();
+                    if n % 3 == 1 {
+                        read.reverse();
+                        for b in &mut read {
+                            *b = 3 - *b;
+                        }
+                    }
+                    for b in &mut read {
+                        match xorshift(&mut rng) % 60 {
+                            0 => *b = (*b + 1) % 4,
+                            1 => *b = 4,
+                            _ => {}
+                        }
+                    }
+                    if n % 7 == 0 {
+                        read = (0..len).map(|_| (xorshift(&mut rng) & 3) as u8).collect();
+                    }
+                    read
+                })
+                .collect();
+            let views: Vec<&[u8]> = reads.iter().map(|r| &r[..]).collect();
+            for opt in [
+                SeedOptions::default(),
+                SeedOptions {
+                    max_mem_intv: 0,
+                    ..SeedOptions::default()
+                },
+            ] {
+                let many = collect_intervals_many(&index, &views, &opt);
+                for (read, got) in reads.iter().zip(&many) {
+                    assert_eq!(got, &collect_intervals(&index, read, &opt));
+                }
+            }
+        }
     }
 
     #[test]
