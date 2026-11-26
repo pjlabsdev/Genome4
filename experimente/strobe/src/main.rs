@@ -108,15 +108,25 @@ fn main() {
     // Contig-Stücke (zwischen den N-Trennern), je Stück Strobes rechnen; zweimal: zählen, füllen.
     let mut cuts: Vec<i64> = starts.values().copied().collect();
     cuts.sort();
-    let pieces: Vec<(usize, usize)> = cuts.iter().enumerate().map(|(i, &s0)| {
+    // Große Contigs in Stücke von 4 Mb teilen (mit 10 kb Überhang), damit der Speicher beim Bau klein bleibt.
+    const CHUNK: usize = 4 << 20;
+    const OVER: usize = 10_000;
+    let mut pieces: Vec<(usize, usize, usize)> = Vec::new(); // (Anfang, Ende der Startpositionen, Ende der Folge)
+    for (i, &s0) in cuts.iter().enumerate() {
         let e = if i + 1 < cuts.len() { cuts[i + 1] as usize - 200 } else { genome.len() };
-        (s0 as usize, e)
-    }).collect();
+        let mut a = s0 as usize;
+        while a < e {
+            let b = (a + CHUNK).min(e);
+            pieces.push((a, b, (b + OVER).min(e)));
+            a = b;
+        }
+    }
     const B: u32 = 24;
-    let strobes_of = |&(s0, e): &(usize, usize)| -> Vec<(u64, u32)> {
+    let strobes_of = |&(s0, b, e): &(usize, usize, usize)| -> Vec<(u64, u32)> {
         let mut sy = Vec::new(); let mut st = Vec::new();
         syncmers(&genome[s0..e], &mut sy);
         randstrobes(&sy, &mut st);
+        st.retain(|x| (x.1 as usize) < b - s0);
         for x in st.iter_mut() { x.1 += s0 as u32; }
         st
     };
@@ -132,12 +142,15 @@ fn main() {
     let mut entries = vec![0u64; total];
     {
         let mut fill: Vec<u64> = bucket[..1 << B].to_vec();
-        for p in &pieces {
-            for (h, pos) in strobes_of(p) {
+        for batch in pieces.chunks(64) {
+          let lists: Vec<Vec<(u64, u32)>> = batch.par_iter().map(strobes_of).collect();
+          for list in lists {
+            for (h, pos) in list {
                 let bi = (h >> (64 - B)) as usize;
                 entries[fill[bi] as usize] = (((h >> 8) & 0xffff_ffff) << 32) | pos as u64;
                 fill[bi] += 1;
             }
+          }
         }
     }
     // je Fach sortieren
