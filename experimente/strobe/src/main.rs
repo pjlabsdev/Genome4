@@ -44,6 +44,27 @@ fn syncmers(seq: &[u8], out: &mut Vec<(u32, u64)>) {
 }
 
 const CANDS: usize = 16;
+const BAND: i64 = 8;
+/// Editierabstand des ganzen Reads gegen die Referenz um `p` (Anfang und Ende in der Referenz
+/// frei), nur im Band ±BAND um die Diagonale.
+fn banded_edit(q: &[u8], g: &[u8], p: i64) -> u32 {
+    let w = (2 * BAND + 1) as usize;
+    let big = u32::MAX / 2;
+    // Zeile i, Spalte k: Referenzstelle p - BAND + i + k
+    let mut prev = vec![0u32; w];
+    let mut cur = vec![big; w];
+    for i in 1..=q.len() {
+        for k in 0..w {
+            let rpos = p - BAND + i as i64 - 1 + k as i64;
+            let diag = prev[k] + if rpos < 0 || rpos as usize >= g.len() || g[rpos as usize] != q[i - 1] { 1 } else { 0 };
+            let up = if k + 1 < w { prev[k + 1] + 1 } else { big }; // Lücke in der Referenz (Einfügung im Read)
+            let left = if k > 0 { cur[k - 1] + 1 } else { big }; // Löschung im Read
+            cur[k] = diag.min(up).min(left);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    *prev.iter().min().unwrap()
+}
 const WMIN: usize = 2;
 const WMAX: usize = 9;
 /// Randstrobes: (Position des ersten, Hash).
@@ -66,6 +87,7 @@ fn randstrobes(sy: &[(u32, u64)], out: &mut Vec<(u64, u32)>) {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let fa = &args[1];
+    let edit = std::env::var("EDIT").map_or(true, |v| v != "0");
     let maxocc: usize = std::env::var("MAXOCC").ok().map_or(1000, |v| v.parse().unwrap());
     let t = Instant::now();
     let mut genome = Vec::with_capacity(3_300_000_000usize.min(std::env::var("GENOM_BP").ok().map_or(3_300_000_000, |v| v.parse().unwrap())));
@@ -190,6 +212,9 @@ fn main() {
                         let r = &genome[st as usize..st as usize + q.len()];
                         let mm = q.iter().zip(r).filter(|(a, b)| a != b).count() as u32;
                         bestmm = bestmm.min(mm);
+                    }
+                    if bestmm > 5 && edit {
+                        bestmm = bestmm.min(banded_edit(q, &genome, p));
                     }
                     (bestmm, g.1)
                 }).collect();
