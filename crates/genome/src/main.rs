@@ -174,10 +174,10 @@ enum Command {
         /// Ohne nutzbare Grafikeinheit rechnet der Prozessor (Warnung im Protokoll)
         #[arg(long, default_value = "aus", value_parser = ["aus", "an"])]
         grafikeinheit: String,
-        /// Für höchstens so viele Bereiche eines Reads wird der Partner gesucht (bwa `-m`).
-        /// Weniger spart Rechenzeit in Wiederholungen, ändert aber einzelne Zeilen (meist den
-        /// MAPQ von Reads in Wiederholungen)
-        #[arg(long, default_value_t = 50)]
+        /// Für höchstens so viele Bereiche eines Reads wird der Partner gesucht. bwa nimmt 50
+        /// (`-m`); 50 gibt die bwa-gleiche Ausgabe. 20 spart Rechenzeit in Wiederholungen und
+        /// ruft gegen GIAB gleich gute Varianten, ändert aber einzelne Zeilen
+        #[arg(long, default_value_t = 20)]
         partnersuche_bereiche: usize,
         /// Keinen Überblick (`<aus ohne .bam>.html` und `.bamqc.json`) schreiben
         #[arg(long)]

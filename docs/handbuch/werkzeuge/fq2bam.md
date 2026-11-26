@@ -15,7 +15,7 @@ sort, markdup, index, flagstat).
 genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.bam \
   [--lesegruppe '@RG\tID:lauf1\tSM:probe\tPL:ILLUMINA'] [--kerne 0] [--speicher-mb 2048] \
   [--temp ORDNER] [--block-basen 10000000] [--max-laenge 300] [--log DATEI] \
-  [--trimmen] [--sa-ausduennen 0] [--schnellweg aus] [--ortsspeicher-mb 64] [--grafikeinheit aus] [--partnersuche-bereiche 50] [--ohne-bericht] [--ohne-optisch] \
+  [--trimmen] [--sa-ausduennen 0] [--schnellweg aus] [--ortsspeicher-mb 64] [--grafikeinheit aus] [--partnersuche-bereiche 20] [--ohne-bericht] [--ohne-optisch] \
   [--optisch-pixel 100] [--optisch-mgi-abstand 1000]
 ```
 
@@ -37,7 +37,7 @@ genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.
 | `--schnellweg` | `an`: leichte Reads ohne Seed-Suche ausrichten, auch neben schwachen weiteren Kopien, MAPQ gleich, `XS` kann sich ändern; `einfach`: wie `an`, aber nur Reads, deren Stücke je höchstens eine Fundstelle haben; `pruefen`: beide Wege rechnen und zählen, siehe [Schnellweg](../verfahren/schnellweg.md) | aus |
 | `--ortsspeicher-mb` | Zwischenspeicher für das Orten der Seeds im Index, in MB; 0 schaltet ihn aus. Reads aus Wiederholungen treffen immer wieder dieselben Zeilen des Index, deren Position dann nicht neu durch die BWT gesucht wird. Die Ausgabe bleibt byte-gleich, siehe [FM-Index](../verfahren/fm-index.md#ortsspeicher) | 64 |
 | `--grafikeinheit` | `an`: Die Grafikeinheit desselben Geräts rechnet die lokalen Ausrichtungen der Partnersuche, gesammelt je Block; die Ausgabe bleibt byte-gleich. Ohne nutzbare Grafikeinheit rechnet der Prozessor (`GPU.FEHLT`). Siehe [Grafikeinheit](../verfahren/grafikeinheit.md) | aus |
-| `--partnersuche-bereiche` | Für höchstens so viele Bereiche eines Reads wird der Partner gesucht (bwa `-m`). Weniger spart Rechenzeit bei Reads aus Wiederholungen, ändert aber einzelne Zeilen, meist den MAPQ solcher Reads. Auf 421.564 HG002-Paaren: mit 10 statt 50 rund 62 % weniger Fenster und 1.070 von 844.609 Zeilen anders, mit 3 rund 85 % weniger Fenster und 1.415 Zeilen anders. Siehe [Read-Paare](../verfahren/read-paare.md#partnersuche-gesammelt-rechnen) | 50 |
+| `--partnersuche-bereiche` | Für höchstens so viele Bereiche eines Reads wird der Partner gesucht. bwa nimmt 50 (`-m`), damit ist die Ausgabe bwa-gleich. Der Standard 20 spart Rechenzeit bei Reads aus Wiederholungen (Mac, 1 Mio. PJ-Paare: 33,3 statt 38,5 s) und ruft am ganzen chr20 von HG002 gegen GIAB gleich gute Varianten, ändert aber einzelne Zeilen (dort 0,75 %, bei PJ 1,7 %), meist MAPQ und Ort von Reads in Wiederholungen. Siehe [Read-Paare](../verfahren/read-paare.md#partnersuche-gesammelt-rechnen) | 20 |
 
 ## Ablauf
 1. Index laden ([FM-Index](../verfahren/fm-index.md)). Mit `--trimmen` läuft gleichzeitig die

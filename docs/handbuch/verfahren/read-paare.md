@@ -121,6 +121,23 @@ Bei 10 sind die Unterschiede zu 72 % nur ein anderer MAPQ (meist etwas höher, w
 gerettete Nebenstellen den zweitbesten Score drücken), 21 % andere Zusatzfelder, 5 % ein anderer
 Ort, davon fast alle bei Reads mit MAPQ 0.
 
+Auf echten MGI-Daten ändert sich mehr: Bei 1 Mio. PJ-Paaren (Mac M5) sind mit 20 Bereichen
+1,7 % der Sätze anders (mit 10: 2,3 %, mit 3: 3,2 %), die Wandzeit sinkt von 38,5 auf 33,3 s
+(10: 30,9 s, 3: 28,7 bis 30,4 s). Ob das schadet, zeigt der Vergleich mit GIAB v4.2.1 (HG002,
+Benchmark-Regionen, einfacher Rufer aus gestapelten Reads mit MAPQ und Basenqualität ab 20):
+
+| Daten | Bereiche | richtig | falsch | fehlend |
+|---|---|---|---|---|
+| chr20 10–12 Mb, Illumina | 50 / 20 / 10 | 2.728 | 27 | 38 |
+| chr20 10–12 Mb, MGI (BGIseq) | 50 / 20 / 10 | 2.724 | 22 | 42 |
+| ganzes chr20, MGI, 6,37 Mio. Paare | 50 | 81.532 | 1.497 | 1.793 |
+| ganzes chr20, MGI, 6,37 Mio. Paare | 20 | 81.526 | 1.491 | 1.799 |
+
+Dazu an 100.000 simulierten Paaren mit bekanntem Ursprung: sicher (MAPQ ab 20) falsch platziert
+mit 50 und 20 Bereichen je 10 Reads, mit 10 Bereichen 20, mit 3 Bereichen 39. Seit dem
+2026-11-26 nimmt `fq2bam` deshalb 20 (pj); `--partnersuche-bereiche 50` gibt die bwa-gleiche
+Ausgabe. `PairOptions::max_matesw` bleibt in der Bibliothek 50.
+
 ## Was in den SAM-Zeilen dazukommt
 
 | Feld | Bedeutung |
