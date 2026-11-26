@@ -33,7 +33,12 @@ Ort und allen Orten 4,8 GB), rund 90 s auf 4 Kernen.
    (`GC_STROBE_GESPERRT` setzt den Anteil): Sonst könnte ein gleich guter Ort in der Wiederholung
    verborgen sein. Bei höchstens 25 % findet der übrige Read jede nahe Kopie mit.
 2. Treffer nach Diagonale gruppieren (±10), die 16 größten Gruppen nehmen.
-3. Je Gruppe das Fenster mit 12 Basen Rand lokal ausrichten (Smith-Waterman mit Lücken). Eine
+3. Je Gruppe zuerst ohne Lücke entlang der Diagonale vergleichen (bester Abschnitt, Kadane).
+   Liegt er höchstens 30 unter dem vollen Score, lassen sich beide Enden außerhalb ohne Lücke für
+   höchstens den Abschneide-Abzug anhängen und erreicht die 5-mer-Schranke nicht mehr als dieser
+   Score (oder er ist ohnehin der neue Beste), entfällt die lokale Ausrichtung. Schalter zurück:
+   `GC_STROBE_HAMMING=0`. Sonst das Fenster mit 12 Basen Rand lokal ausrichten (Smith-Waterman
+   mit Lücken). Eine
    Gruppe, deren beweisbare 5-mer-Schranke ([Schnellweg](schnellweg.md#kopien-ohne-ausrichtung-ausschließen))
    höchstens den besten Score minus 15 erreicht, wird nicht ausgerichtet; ihre Schranke zählt als
    Zweitbester (vorsichtig: die MAPQ wird dadurch höchstens kleiner).
@@ -57,8 +62,15 @@ Der Weg nimmt 249.000 der 292.000 Reads, die der Schnellweg nicht nimmt (85 %). 
 zuzulassen (Abstand 5 statt 15) spart weitere 2 s, erhöht aber die falschen Reads bei MAPQ ≥ 20
 auf 37; verworfen. Gesperrte Randstrobes bis 50 % zuzulassen ergab 16 falsche; verworfen.
 
+Vergleich ohne Lücke zuerst (gleiche Simulation, 4 Kerne in der Cloud): Ausrichten 22,4 s statt
+25,3 s, lokale Ausrichtungen 247.991 statt 570.132. Zähler und Treffergenauigkeit gleich (falsch
+bei MAPQ ≥ 20: 10, MAPQ 60: 567.233 ohne Fehler), 32 von 600.000 Sätzen anders (gleich gute
+Stellen, Anfang aus der Diagonale). Auf echten HG002-Reads kostete die lokale Ausrichtung samt
+Rückwärtslauf drei Viertel der Zeit des Strobemer-Wegs (Profil am Mac).
+
 Zähler im Protokoll (`ALIGN.FERTIG`, Feld `strobeweg`): `versucht`, `genommen`, `gesperrt`,
-`ohne_treffer`, `abgeschnitten`, `zu_schwach`, `zweiter_zu_nah`.
+`ohne_treffer`, `abgeschnitten`, `zu_schwach`, `zweiter_zu_nah`, `ohne_luecke` (Kandidaten ohne
+lokale Ausrichtung), `lokal` (Kandidaten mit lokaler Ausrichtung).
 
 ## Offen
 - Vergleich gegen GIAB HG002 (Varianten), getrennt nach schwierigen Regionen.

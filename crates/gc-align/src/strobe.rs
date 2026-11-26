@@ -34,6 +34,9 @@ pub struct StrobeOptions {
     pub margin: u64,
     /// Höchstens so viel Prozent der Randstrobes beider Orientierungen dürfen gesperrt sein.
     pub max_blocked_percent: usize,
+    /// Erst ohne Lücke entlang der Diagonale vergleichen, lokale Ausrichtung nur bei
+    /// Lückenverdacht (Schalter zurück: `GC_STROBE_HAMMING=0`).
+    pub ungapped_first: bool,
 }
 
 impl Default for StrobeOptions {
@@ -51,6 +54,7 @@ impl Default for StrobeOptions {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(25),
+            ungapped_first: std::env::var("GC_STROBE_HAMMING").map_or(true, |v| v != "0"),
         }
     }
 }
@@ -63,6 +67,8 @@ pub struct StrobeCounts {
     pub clipped: AtomicU64,
     pub too_weak: AtomicU64,
     pub second_close: AtomicU64,
+    pub ungapped: AtomicU64,
+    pub local: AtomicU64,
 }
 
 pub static COUNTS: StrobeCounts = StrobeCounts {
@@ -73,6 +79,8 @@ pub static COUNTS: StrobeCounts = StrobeCounts {
     clipped: AtomicU64::new(0),
     too_weak: AtomicU64::new(0),
     second_close: AtomicU64::new(0),
+    ungapped: AtomicU64::new(0),
+    local: AtomicU64::new(0),
 };
 
 fn bump(c: &AtomicU64) {
@@ -90,6 +98,8 @@ pub fn counts() -> Vec<(&'static str, u64)> {
         ("abgeschnitten", c.clipped.load(Ordering::Relaxed)),
         ("zu_schwach", c.too_weak.load(Ordering::Relaxed)),
         ("zweiter_zu_nah", c.second_close.load(Ordering::Relaxed)),
+        ("ohne_luecke", c.ungapped.load(Ordering::Relaxed)),
+        ("lokal", c.local.load(Ordering::Relaxed)),
     ]
 }
 
@@ -205,14 +215,67 @@ pub fn strobe_region(
                 second = second.max(bound);
                 continue;
             }
-            let r = crate::local::local_align(read, &target, sc, byte, 0, true);
-            let cand = (
-                r.score,
-                tb + r.tb as u64,
-                tb + r.te as u64 + 1,
-                r.qb,
-                r.qe + 1,
-            );
+            // Ohne Lücke entlang der Diagonale: bester lokaler Abschnitt (Kadane). Reicht er für
+            // die Annahme und liegt die Schranke nicht darüber, entfällt die lokale Ausrichtung.
+            let off = if strand == 0 {
+                diag - fb as i64
+            } else {
+                fe as i64 - diag - len as i64
+            };
+            let ungapped = if so.ungapped_first && off >= 0 && off as usize + len <= target.len() {
+                let t = &target[off as usize..off as usize + len];
+                let (mut run, mut run_b) = (0i32, 0usize);
+                let mut top = (0i32, 0usize, 0usize);
+                for (i, (a, b)) in read.iter().zip(t).enumerate() {
+                    run += if a == b { sc.matching } else { -sc.mismatch };
+                    if run <= 0 {
+                        run = 0;
+                        run_b = i + 1;
+                    } else if run > top.0 {
+                        top = (run, run_b, i + 1);
+                    }
+                }
+                // Die Enden außerhalb des Abschnitts müssen sich ohne Lücke anhängen lassen
+                // (wie unten beim Verlängern), sonst droht dort eine Lücke.
+                let tail = |q: &[u8], t: &[u8]| -> i32 {
+                    q.iter()
+                        .zip(t)
+                        .map(|(a, b)| if a == b { sc.matching } else { -sc.mismatch })
+                        .sum()
+                };
+                let ends_ok = tail(&read[..top.1], &t[..top.1]) >= -opt.region.pen_clip5
+                    && tail(&read[top.2..], &t[top.2..]) >= -opt.region.pen_clip3;
+                let tight = ends_ok
+                    && (!bound_ok
+                        || crate::fast::kmer_bound(read, &target).is_none_or(|b| b <= top.0)
+                        || best.is_none_or(|(b, ..)| top.0 > b));
+                (top.0 >= len as i32 * sc.matching - so.max_loss && tight).then(|| {
+                    let o = tb + off as u64;
+                    (
+                        top.0,
+                        o + top.1 as u64,
+                        o + top.2 as u64,
+                        top.1 as i32,
+                        top.2 as i32,
+                    )
+                })
+            } else {
+                None
+            };
+            let cand = if let Some(c) = ungapped {
+                bump(&COUNTS.ungapped);
+                c
+            } else {
+                bump(&COUNTS.local);
+                let r = crate::local::local_align(read, &target, sc, byte, 0, true);
+                (
+                    r.score,
+                    tb + r.tb as u64,
+                    tb + r.te as u64 + 1,
+                    r.qb,
+                    r.qe + 1,
+                )
+            };
             match best {
                 Some(b) if cand.0 <= b.0 => {
                     // dieselbe Stelle (überlappend) zählt nicht als zweiter Ort
