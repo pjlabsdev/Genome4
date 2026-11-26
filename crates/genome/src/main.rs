@@ -174,6 +174,11 @@ enum Command {
         /// Ohne nutzbare Grafikeinheit rechnet der Prozessor (Warnung im Protokoll)
         #[arg(long, default_value = "aus", value_parser = ["aus", "an"])]
         grafikeinheit: String,
+        /// Für höchstens so viele Bereiche eines Reads wird der Partner gesucht (bwa `-m`).
+        /// Weniger spart Rechenzeit in Wiederholungen, ändert aber einzelne Zeilen (meist den
+        /// MAPQ von Reads in Wiederholungen)
+        #[arg(long, default_value_t = 50)]
+        partnersuche_bereiche: usize,
         /// Keinen Überblick (`<aus ohne .bam>.html` und `.bamqc.json`) schreiben
         #[arg(long)]
         ohne_bericht: bool,
@@ -446,6 +451,8 @@ struct SamRun<'a> {
     fast: gc_align::FastMode,
     /// Rechenkern für die Partnersuche (Grafikeinheit); ohne rechnet der Prozessor.
     rescue_kernel: Option<&'a std::sync::Arc<dyn gc_align::local::RescueKernel>>,
+    /// Für so viele Bereiche eines Reads wird der Partner gesucht (bwa `-m`, 50).
+    max_matesw: usize,
 }
 
 /// Richtet Reads aus, einzeln oder als Paare, Block für Block auf `threads` Kernen.
@@ -484,6 +491,7 @@ fn align_into(
         trimmer,
         fast,
         rescue_kernel,
+        max_matesw,
         ..
     } = *run;
     let mut opt = gc_align::AlignOptions::default();
@@ -491,6 +499,7 @@ fn align_into(
     opt.sam.mate_tags = mate_tags;
     opt.fast = fast;
     opt.rescue_kernel = rescue_kernel.cloned();
+    opt.pair.max_matesw = max_matesw;
     let reader1 = fastq::open(first)?;
     let reader2 = match second {
         Some(p) => Some(fastq::open(p)?),
@@ -716,6 +725,8 @@ struct Fq2bamRun<'a> {
     /// Beim Index-Durchlauf die Zahlen für den Überblick sammeln.
     report: bool,
     fast: gc_align::FastMode,
+    /// Für so viele Bereiche eines Reads wird der Partner gesucht.
+    max_matesw: usize,
 }
 
 /// Zahlen von `flagstat` als JSON, für eine der beiden Gruppen.
@@ -986,6 +997,7 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
         trimmer: trimmer.as_ref(),
         fast: run.fast,
         rescue_kernel: kernel.as_ref(),
+        max_matesw: run.max_matesw,
     };
     let (reads, lines, trim_counts) = align_into(&fm, run.fastq, run.fastq2, &sam_run, &mut out)?;
     let trim_json = trimmer.as_ref().map(|_| trim_counts_json(&trim_counts));
@@ -2416,6 +2428,7 @@ fn main() -> Result<()> {
             sa_ausduennen,
             ortsspeicher_mb,
             grafikeinheit,
+            partnersuche_bereiche,
             schnellweg,
             ohne_bericht,
         } => {
@@ -2457,6 +2470,7 @@ fn main() -> Result<()> {
                 "sa_ausduennen": sa_ausduennen,
                 "ortsspeicher_mb": ortsspeicher_mb,
                 "grafikeinheit": grafikeinheit,
+                "partnersuche_bereiche": partnersuche_bereiche,
                 "schnellweg": schnellweg,
                 "bericht": !ohne_bericht,
             }));
@@ -2481,6 +2495,7 @@ fn main() -> Result<()> {
                 sa_thin: sa_ausduennen,
                 locate_cache_mb: ortsspeicher_mb,
                 gpu: grafikeinheit == "an",
+                max_matesw: partnersuche_bereiche,
                 report: !ohne_bericht,
                 fast: match schnellweg.as_str() {
                     "an" => gc_align::FastMode::On,
@@ -2708,6 +2723,7 @@ fn main() -> Result<()> {
                         trimmer: None,
                         fast: gc_align::FastMode::Off,
                         rescue_kernel: None,
+                        max_matesw: gc_align::pair::PairOptions::default().max_matesw,
                     },
                 )?;
             }

@@ -99,8 +99,27 @@ wartet; zwei unabhängige Ketten nebeneinander lassen die Rechenwerke weniger le
 Lauf rechnet genau seine Schritte wie allein, ein Test vergleicht beide Wege auf zufälligen
 Reads und Fenstern (gleich und verschieden lang, beide Breiten, mit und ohne Anfangssuche).
 Auf 421.564 HG002-Paaren war die BAM byte-gleich. Schalter zurück:
-`PairOptions::rescue_two = false`; Messprogramm `examples/swbench` mit `PAIR=1`. Gemessen auf
-dem Mac: siehe unten, sobald die Messung vorliegt.
+`PairOptions::rescue_two = false`; Messprogramm `examples/swbench` mit `PAIR=1`. Auf dem Mac
+(M5) ist der Rechenkern allein so 32 % schneller, im ganzen Lauf auf 1 Mio. PJ-Paaren aber nur
+rund 1 %: Rechnen alle Kerne gleichzeitig, schrumpft der Gewinn auf etwa 17 %, und unter
+Dauerlast begrenzt die Wärme des lüfterlosen Geräts den Takt.
+
+**Weniger Bereiche.** Die Partnersuche läuft für bis zu `PairOptions::max_matesw` Bereiche
+eines Reads (bwa `-m`, 50), die fast so gut sind wie der beste. Bei Reads aus Wiederholungen
+sind das viele Fenster, von denen rund 70 % nichts finden. `fq2bam --partnersuche-bereiche`
+setzt die Zahl; weniger spart Rechenzeit, ändert aber einzelne Zeilen. Auf 421.564
+HG002-Paaren (GRCh38, Schnellweg an):
+
+| Bereiche | Fenster | Zeilen anders (von 844.609) |
+|---|---|---|
+| 50 (bwa) | 218.556 | 0 |
+| 10 | 83.343 | 1.070 |
+| 3 | 32.974 | 1.415 |
+| 1 | 12.232 | 1.882 |
+
+Bei 10 sind die Unterschiede zu 72 % nur ein anderer MAPQ (meist etwas höher, weil weniger
+gerettete Nebenstellen den zweitbesten Score drücken), 21 % andere Zusatzfelder, 5 % ein anderer
+Ort, davon fast alle bei Reads mit MAPQ 0.
 
 ## Was in den SAM-Zeilen dazukommt
 
