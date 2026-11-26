@@ -56,6 +56,7 @@ Auf keiner Seite steht eine Genauigkeits- oder Tempoaussage ohne Messung.
 - [Ausgabe als SAM (einzelne Reads)](verfahren/sam-ausgabe.md)
 - [Read-Paare: Insertgröße, Partnersuche, Paarbewertung](verfahren/read-paare.md)
 - [Schnellweg für leichte Reads](verfahren/schnellweg.md)
+- [Strobemer-Weg](verfahren/strobeweg.md)
 - [Grafikeinheit für die Partnersuche](verfahren/grafikeinheit.md)
 - [Sortieren nach Ort mit festem Speicher](verfahren/sortieren.md)
 - [Duplikate markieren](verfahren/duplikate-markieren.md)

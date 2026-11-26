@@ -8,7 +8,9 @@ pub mod fm;
 pub mod reference;
 pub mod sais;
 pub mod smem;
+pub mod strobe;
 
 pub use fm::{BuildError, CheckReport, FmIndex, Hit, Variant};
 pub use reference::{Contig, Hole, Reference};
 pub use smem::{BiInterval, ForwardSeed, Smem, SmemSearch};
+pub use strobe::StrobeIndex;

@@ -19,6 +19,7 @@ pub mod pair;
 pub mod region;
 pub mod sam;
 pub mod seed;
+pub mod strobe;
 
 pub use align::{Alignment, region_to_alignment};
 pub use batch::{ReadInput, align_pairs, align_reads, parallel_map};

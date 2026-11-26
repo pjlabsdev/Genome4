@@ -99,6 +99,20 @@ pub fn align_reads(
 /// Reads je Gruppe, deren Seed-Suchen verschränkt laufen ([`collect_intervals_many`]).
 const SEED_GROUP: usize = 32;
 
+/// Schnellweg, dann Strobemer-Weg (wenn ein Strobe-Index da ist); `None` heißt voller Weg.
+fn quick_region(index: &FmIndex, read: &[u8], opt: &AlignOptions) -> Option<crate::region::Region> {
+    use crate::fast::{FastMode, fast_region};
+    let fast = match opt.fast {
+        FastMode::On | FastMode::Simple => fast_region(index, read, opt, opt.fast == FastMode::On),
+        _ => None,
+    };
+    fast.or_else(|| {
+        opt.strobe_index
+            .as_ref()
+            .and_then(|s| crate::strobe::strobe_region(index, s, read, opt))
+    })
+}
+
 /// Bereiche aller Reads ([`crate::sam::find_regions`]), auf `threads` Kernen, die Seed-Suche in
 /// Gruppen verschränkt. Das Ergebnis ist dasselbe wie Read für Read.
 fn regions_of_all(
@@ -107,7 +121,7 @@ fn regions_of_all(
     opt: &AlignOptions,
     threads: usize,
 ) -> Vec<(Vec<crate::region::Region>, f32)> {
-    use crate::fast::{FastMode, fast_region};
+    use crate::fast::FastMode;
     // Prüfmodus und ausgeschaltetes Verschränken: Read für Read wie bisher.
     if !opt.seed.interleave || opt.fast == FastMode::Check {
         return parallel_map(reads.len(), threads, |i| {
@@ -117,12 +131,8 @@ fn regions_of_all(
     if opt.seed.regroup {
         // Erst der Schnellweg für alle Reads, dann die übrigen in vollen Gruppen.
         let mut out: Vec<Option<(Vec<crate::region::Region>, f32)>> =
-            parallel_map(reads.len(), threads, |i| match opt.fast {
-                FastMode::On | FastMode::Simple => {
-                    fast_region(index, reads[i].seq, opt, opt.fast == FastMode::On)
-                        .map(|x| (vec![x], 0.0))
-                }
-                _ => None,
+            parallel_map(reads.len(), threads, |i| {
+                quick_region(index, reads[i].seq, opt).map(|x| (vec![x], 0.0))
             });
         let rest: Vec<usize> = (0..reads.len()).filter(|&i| out[i].is_none()).collect();
         let found = parallel_map(rest.len().div_ceil(SEED_GROUP), threads, |g| {
@@ -144,12 +154,7 @@ fn regions_of_all(
         // Erst der Schnellweg; nur die übrigen Reads gehen gemeinsam in die Seed-Suche.
         let mut out: Vec<Option<(Vec<crate::region::Region>, f32)>> = group
             .iter()
-            .map(|r| match opt.fast {
-                FastMode::On | FastMode::Simple => {
-                    fast_region(index, r.seq, opt, opt.fast == FastMode::On).map(|x| (vec![x], 0.0))
-                }
-                _ => None,
-            })
+            .map(|r| quick_region(index, r.seq, opt).map(|x| (vec![x], 0.0)))
             .collect();
         let rest: Vec<usize> = (0..group.len()).filter(|&i| out[i].is_none()).collect();
         let seqs: Vec<&[u8]> = rest.iter().map(|&i| group[i].seq).collect();

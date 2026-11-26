@@ -126,7 +126,7 @@ const COPY_MARGIN: u64 = 128;
 /// nimmt solche Reads nicht).
 /// `None`, wenn `target` ein N enthält: Gegen N kostet eine Base nur `ambiguous` (1), die
 /// Herleitung gilt dann nicht.
-fn kmer_bound(read: &[u8], target: &[u8]) -> Option<i32> {
+pub(crate) fn kmer_bound(read: &[u8], target: &[u8]) -> Option<i32> {
     let mut mask = [0u64; 16];
     let (mut code, mut valid) = (0usize, 0);
     for &b in target {
@@ -151,7 +151,7 @@ fn kmer_bound(read: &[u8], target: &[u8]) -> Option<i32> {
 }
 
 /// Gilt [`kmer_bound`] für diese Bewertung?
-fn kmer_bound_holds(sc: &crate::extend::Scoring) -> bool {
+pub(crate) fn kmer_bound_holds(sc: &crate::extend::Scoring) -> bool {
     sc.matching == 1
         && sc.mismatch >= 4
         && sc.o_del + sc.e_del >= 4

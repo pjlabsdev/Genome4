@@ -187,6 +187,11 @@ enum Command {
         /// rund 3 % größerer Datei; 6 wie samtools. Die Sätze sind bei jeder Stufe dieselben
         #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(0..=9))]
         bam_stufe: u8,
+        /// Strobemer-Weg: Reads, die der Schnellweg nicht nimmt, über Randstrobes verorten, wenn
+        /// sie dort eindeutig und vollständig passen (`an`). Schneller, aber nicht bwa-gleich;
+        /// geprüft gegen Simulation und GIAB. Baut beim Start einen Index (rund 4,8 GB für GRCh38)
+        #[arg(long, default_value = "aus", value_parser = ["aus", "an"])]
+        strobeweg: String,
         /// Keinen Überblick (`<aus ohne .bam>.html` und `.bamqc.json`) schreiben
         #[arg(long)]
         ohne_bericht: bool,
@@ -463,6 +468,8 @@ struct SamRun<'a> {
     max_matesw: usize,
     /// Gleiche Verlängerungen eines Reads nur einmal rechnen.
     memo: bool,
+    /// Strobemer-Weg mit diesem Index ([`gc_align::strobe`]); ohne aus.
+    strobe: Option<&'a std::sync::Arc<gc_index::StrobeIndex>>,
 }
 
 /// Richtet Reads aus, einzeln oder als Paare, Block für Block auf `threads` Kernen.
@@ -503,9 +510,13 @@ fn align_into(
         rescue_kernel,
         max_matesw,
         memo,
+        strobe,
         ..
     } = *run;
-    let mut opt = gc_align::AlignOptions::default();
+    let mut opt = gc_align::AlignOptions {
+        strobe_index: strobe.cloned(),
+        ..Default::default()
+    };
     opt.sam.read_group = read_group.map(|rg| rg.id.clone());
     opt.sam.mate_tags = mate_tags;
     opt.fast = fast;
@@ -600,6 +611,10 @@ fn align_into(
                 "sekunden_warten_auf_lesen": t_wait,
                 "reads_je_sekunde": if seconds > 0.0 { n_reads as f64 / seconds } else { 0.0 },
                 "schnellweg": gc_align::fast::counts()
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), json!(v)))
+                    .collect::<serde_json::Map<_, _>>(),
+                "strobeweg": gc_align::strobe::counts()
                     .into_iter()
                     .map(|(k, v)| (k.to_string(), json!(v)))
                     .collect::<serde_json::Map<_, _>>(),
@@ -743,6 +758,8 @@ struct Fq2bamRun<'a> {
     memo: bool,
     /// Kompressionsstufe der BAM.
     bam_level: u8,
+    /// Strobemer-Weg für Reads, die der Schnellweg nicht nimmt.
+    strobe: bool,
 }
 
 /// Zahlen von `flagstat` als JSON, für eine der beiden Gruppen.
@@ -994,6 +1011,14 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
         };
         Ok((trimmer, fm?))
     })?;
+    let strobe = if run.strobe {
+        let st = gc_log::stage("fq2bam.strobe_index", json!({ "kerne": run.threads }));
+        let s = gc_index::StrobeIndex::build(fm.reference(), run.threads);
+        st.finish(json!({ "eintraege": s.len(), "bytes": s.bytes() }));
+        Some(std::sync::Arc::new(s))
+    } else {
+        None
+    };
     let seconds_load = started.elapsed().as_secs_f64();
 
     // 1. Ausrichten, die Sätze gehen sofort in den Sortierer.
@@ -1015,6 +1040,7 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
         rescue_kernel: kernel.as_ref(),
         max_matesw: run.max_matesw,
         memo: run.memo,
+        strobe: strobe.as_ref(),
     };
     let (reads, lines, trim_counts) = align_into(&fm, run.fastq, run.fastq2, &sam_run, &mut out)?;
     let trim_json = trimmer.as_ref().map(|_| trim_counts_json(&trim_counts));
@@ -2449,6 +2475,7 @@ fn main() -> Result<()> {
             partnersuche_bereiche,
             verlaengerung_merken,
             bam_stufe,
+            strobeweg,
             schnellweg,
             ohne_bericht,
         } => {
@@ -2493,6 +2520,7 @@ fn main() -> Result<()> {
                 "partnersuche_bereiche": partnersuche_bereiche,
                 "verlaengerung_merken": verlaengerung_merken,
                 "bam_stufe": bam_stufe,
+                "strobeweg": strobeweg,
                 "schnellweg": schnellweg,
                 "bericht": !ohne_bericht,
             }));
@@ -2520,6 +2548,7 @@ fn main() -> Result<()> {
                 max_matesw: partnersuche_bereiche,
                 memo: verlaengerung_merken == "an",
                 bam_level: bam_stufe,
+                strobe: strobeweg == "an",
                 report: !ohne_bericht,
                 fast: match schnellweg.as_str() {
                     "an" => gc_align::FastMode::On,
@@ -2749,6 +2778,7 @@ fn main() -> Result<()> {
                         rescue_kernel: None,
                         max_matesw: gc_align::pair::PairOptions::default().max_matesw,
                         memo: gc_align::RegionOptions::default().memo,
+                        strobe: None,
                     },
                 )?;
             }

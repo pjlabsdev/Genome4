@@ -29,6 +29,9 @@ pub struct AlignOptions {
     /// Rechenkern für die gesammelten Ausrichtungen der Partnersuche (zum Beispiel auf der
     /// Grafikeinheit). Ohne rechnet der Prozessor; die Ausgabe ist in beiden Fällen dieselbe.
     pub rescue_kernel: Option<std::sync::Arc<dyn crate::local::RescueKernel>>,
+    /// Strobemer-Weg ([`crate::strobe`]) für Reads, die der Schnellweg nicht nimmt; ohne Index aus.
+    pub strobe_index: Option<std::sync::Arc<gc_index::StrobeIndex>>,
+    pub strobe: crate::strobe::StrobeOptions,
 }
 
 /// Einstellungen der Ausgabe.

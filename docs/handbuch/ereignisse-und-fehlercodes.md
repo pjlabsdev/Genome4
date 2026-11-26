@@ -26,7 +26,7 @@ Kennungen sind fest: sie ändern ihre Bedeutung nicht. Neue kommen hinzu.
 | `INDEX.BAU.PARAMETER` | info | Variante, Verfahren, Größe der Referenz, Contigs, N-Strecken | |
 | `INDEX.VERFAHREN` | info | Entscheidung zwischen direktem und blockweisem Bau, mit Grund | |
 | `ALIGN.INSERTGROESSE` | info | Paare: je Block die geschätzte Insertgröße für die vier Richtungen (Zahl der Paare, Perzentile, Mittel, Streuung, Grenzen für "richtiges Paar") und welche Richtungen benutzt werden | |
-| `ALIGN.FERTIG` | info | Ausrichten beendet: Reads, geschriebene Zeilen, Blöcke, Kerne, Laufzeit, Reads je Sekunde; Sekunden für Lesen (mit Trimmen), Ausrichten und Schreiben, die gleichzeitig laufen, und Wartezeit des Ausrichtens auf das Lesen; unter `schnellweg` die Zähler des [Schnellwegs](verfahren/schnellweg.md) | |
+| `ALIGN.FERTIG` | info | Ausrichten beendet: Reads, geschriebene Zeilen, Blöcke, Kerne, Laufzeit, Reads je Sekunde; Sekunden für Lesen (mit Trimmen), Ausrichten und Schreiben, die gleichzeitig laufen, und Wartezeit des Ausrichtens auf das Lesen; unter `schnellweg` die Zähler des [Schnellwegs](verfahren/schnellweg.md), unter `strobeweg` die des [Strobemer-Wegs](verfahren/strobeweg.md) | |
 | `GPU.BEREIT` | info | `--grafikeinheit an`: Die Grafikeinheit rechnet die Partnersuche; Name und Schnittstelle unter `geraet`, siehe [Grafikeinheit](verfahren/grafikeinheit.md) | |
 | `GPU.FEHLT` | warn | `--grafikeinheit an`, aber keine nutzbare Grafikeinheit; der Prozessor rechnet, die Ausgabe ist dieselbe. Grund unter `ursache` | Treiber prüfen (Metal auf macOS, Vulkan unter Linux, DX12 unter Windows) oder ohne die Option laufen lassen |
 | `GPU.FEHLER` | warn | Die Grafikeinheit ist während des Laufs ausgefallen; der Prozessor rechnet diesen Block, die Ausgabe ist dieselbe | Bei Wiederholung ohne `--grafikeinheit an` laufen lassen und `ursache` melden |
@@ -58,7 +58,7 @@ Bau); `index.stichprobe`, `index.faecher`, `index.bloecke`, `index.stichprobenpr
 (blockweiser Bau); `index.vollpruefung`, `index.schreiben`.
 
 Stufen des Sortierens: `sort.lesen` (lesen, im Speicher sortieren, Teile schreiben),
-`sort.schreiben` (zusammenführen und BAM schreiben). Stufe des Markierens: `markdup.durchlauf`. Stufe des BAM-Index: `bamindex.lesen`. Stufen von `fq2bam`: `fq2bam.trimmen_vorbereiten` (nur mit `--trimmen`), `fq2bam.index_laden`,
+`sort.schreiben` (zusammenführen und BAM schreiben). Stufe des Markierens: `markdup.durchlauf`. Stufe des BAM-Index: `bamindex.lesen`. Stufen von `fq2bam`: `fq2bam.trimmen_vorbereiten` (nur mit `--trimmen`), `fq2bam.index_laden`, `fq2bam.strobe_index` (nur mit `--strobeweg an`),
 `fq2bam.ausrichten`, `fq2bam.zusammenfuehren`, danach `bamindex.lesen` (mit dem Überblick). Stufe von `bam-bericht`: `bericht.lesen`. Stufen von `trim`:
 `fq2bam.trimmen_vorbereiten`, `trim.schreiben`.
 
