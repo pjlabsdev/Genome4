@@ -519,6 +519,107 @@ pub fn local_align_pair(
     )
 }
 
+/// Wie [`striped_pair`], mit `N` Läufen nebeneinander. Läufe mit anderer Read-Länge als der
+/// erste und Läufe, die übrig bleiben, wenn andere fertig sind, rechnen einzeln weiter.
+fn striped_many<T: Cell, V: Lanes<Elem = T>, const L: usize, const N: usize>(
+    jobs: [(&[u8], &[u8]); N],
+    sc: &Scoring,
+    min_sub: i32,
+    stop_at: i32,
+) -> [LocalResult; N] {
+    let mut z: [Lane2<'_, T, V>; N] = jobs.map(|(q, t)| Lane2::<T, V>::new::<L>(q, t, sc));
+    let shift_v = V::splat(T::from_i32(z[0].shift));
+    let (e_del, e_ins) = (
+        V::splat(T::from_i32(sc.e_del)),
+        V::splat(T::from_i32(sc.e_ins)),
+    );
+    let oe_del = V::splat(T::from_i32(sc.o_del + sc.e_del));
+    let oe_ins = V::splat(T::from_i32(sc.o_ins + sc.e_ins));
+    let add = |h: V, s: V| {
+        if T::BYTE {
+            h.adds(s).subs(shift_v)
+        } else {
+            h.adds(s)
+        }
+    };
+    let vz = V::zero();
+    let one = |z: &mut Lane2<'_, T, V>| {
+        let slen = z.slen;
+        let base = z.target[z.row];
+        let s = &z.profile[usize::from(base.min(4)) * slen..][..slen];
+        let mut h = z.h0[slen - 1].shift_in_zero();
+        let (mut f, mut row_max) = (vz, vz);
+        for j in 0..slen {
+            let t = add(h, s[j]).max(z.e_row[j]);
+            let v = t.max(f);
+            row_max = row_max.max(v);
+            z.h1[j] = v;
+            z.e_row[j] = z.e_row[j].subs(e_del).max(v.subs(oe_del));
+            f = f.subs(e_ins).max(t.subs(oe_ins));
+            h = z.h0[j];
+        }
+        z.close_row(f, row_max, e_ins, oe_ins, min_sub, stop_at);
+    };
+    let slen = z[0].slen;
+    let same = z.iter().all(|x| x.slen == slen);
+    while same && z.iter().all(|x| !x.done) {
+        let mut base = [0usize; N];
+        let mut h = [vz; N];
+        for n in 0..N {
+            base[n] = usize::from(z[n].target[z[n].row].min(4)) * slen;
+            h[n] = z[n].h0[slen - 1].shift_in_zero();
+        }
+        let (mut f, mut m) = ([vz; N], [vz; N]);
+        for j in 0..slen {
+            for n in 0..N {
+                let x = &mut z[n];
+                let t = add(h[n], x.profile[base[n] + j]).max(x.e_row[j]);
+                let v = t.max(f[n]);
+                m[n] = m[n].max(v);
+                x.h1[j] = v;
+                x.e_row[j] = x.e_row[j].subs(e_del).max(v.subs(oe_del));
+                f[n] = f[n].subs(e_ins).max(t.subs(oe_ins));
+                h[n] = x.h0[j];
+            }
+        }
+        for n in 0..N {
+            z[n].close_row(f[n], m[n], e_ins, oe_ins, min_sub, stop_at);
+        }
+    }
+    for x in z.iter_mut() {
+        while !x.done {
+            one(x);
+        }
+    }
+    std::array::from_fn(|n| z[n].result::<L>(sc))
+}
+
+/// `N` Aufrufe von [`local_align`] auf einmal (siehe [`striped_many`]), mit gleichem `byte`,
+/// `min_sub` und `want_start`. Gleiche Ergebnisse wie `N` einzelne Aufrufe.
+pub fn local_align_many<const N: usize>(
+    jobs: [(&[u8], &[u8]); N],
+    sc: &Scoring,
+    byte: bool,
+    min_sub: i32,
+    want_start: bool,
+) -> [LocalResult; N] {
+    use gc_sys::simd::plain;
+    if jobs.iter().any(|j| j.0.is_empty()) {
+        return jobs.map(|(q, t)| local_align(q, t, sc, byte, min_sub, want_start));
+    }
+    let stop = 0x10000;
+    let r = match (byte, vectors_on()) {
+        (true, true) => striped_many::<u8, U8x16, 16, N>(jobs, sc, min_sub, stop),
+        (false, true) => striped_many::<i16, I16x8, 8, N>(jobs, sc, min_sub, stop),
+        (true, false) => striped_many::<u8, plain::U8x16, 16, N>(jobs, sc, min_sub, stop),
+        (false, false) => striped_many::<i16, plain::I16x8, 8, N>(jobs, sc, min_sub, stop),
+    };
+    if !want_start {
+        return r;
+    }
+    std::array::from_fn(|n| with_start(jobs[n].0, jobs[n].1, sc, byte, min_sub, r[n]))
+}
+
 /// Schalter `GENOME_SIMD=0`: Vektoren als gewöhnliche Felder rechnen (Stand vor den
 /// Vektorbefehlen). Das Ergebnis ist in beiden Fällen dasselbe.
 pub(crate) fn vectors_on() -> bool {
@@ -986,6 +1087,20 @@ mod tests {
                         local_align(&qb, &tb, &sc, byte, 19, want_start),
                     );
                     assert_eq!(pair, single, "Runde {round}, byte {byte}");
+                    let many = local_align_many(
+                        [(&qa, &ta), (&qb, &tb), (&qb, &ta), (&qa, &tb)],
+                        &sc,
+                        byte,
+                        19,
+                        want_start,
+                    );
+                    let want = [
+                        single.0,
+                        single.1,
+                        local_align(&qb, &ta, &sc, byte, 19, want_start),
+                        local_align(&qa, &tb, &sc, byte, 19, want_start),
+                    ];
+                    assert_eq!(many, want, "Runde {round}, byte {byte}, vier");
                 }
             }
         }
