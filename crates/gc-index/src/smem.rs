@@ -109,6 +109,13 @@ impl ShortTable {
     }
 }
 
+type SmemLists = (Vec<(usize, BiInterval)>, Vec<(usize, BiInterval)>);
+
+thread_local! {
+    static SMEM_LISTS: std::cell::RefCell<SmemLists> =
+        const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
+}
+
 impl FmIndex {
     /// `extend_right` für das Muster `read[start..end]`, dessen Bereich `iv` ist, um die Base
     /// `read[end]`: nachgeschlagen, wenn das neue Muster in der Tabelle steht.
@@ -204,8 +211,11 @@ impl FmIndex {
         if x >= read.len() || read[x] > 3 {
             return x + 1;
         }
-        // Nach rechts.
-        let mut forward: Vec<(usize, BiInterval)> = Vec::new();
+        // Nach rechts. Die beiden Arbeitslisten bleiben je Kern von Aufruf zu Aufruf bestehen
+        // (Anlegen und Wachsen kosteten spürbar Zeit); sie beginnen jedes Mal leer.
+        let (mut forward, mut next_alive) =
+            SMEM_LISTS.with(|c| std::mem::take(&mut *c.borrow_mut()));
+        forward.clear();
         let mut iv = self.bi_start(read[x]);
         let mut end = x + 1;
         while end < read.len() && read[end] <= 3 {
@@ -223,6 +233,7 @@ impl FmIndex {
             forward.push((end, iv));
         }
         if forward.is_empty() {
+            SMEM_LISTS.with(|c| *c.borrow_mut() = (forward, next_alive));
             return x + 1;
         }
         let reach = forward.last().map_or(x + 1, |&(e, _)| e);
@@ -231,7 +242,6 @@ impl FmIndex {
         // Nach links, alle gemeinsam; `forward` ist nach fallendem Ende geordnet.
         let first_new = out.len();
         let mut alive = forward;
-        let mut next_alive: Vec<(usize, BiInterval)> = Vec::with_capacity(alive.len());
         let mut i = x as isize - 1;
         loop {
             let c = if i >= 0 { read[i as usize] } else { 4 };
@@ -284,6 +294,7 @@ impl FmIndex {
             i -= 1;
         }
         out[first_new..].reverse();
+        SMEM_LISTS.with(|c| *c.borrow_mut() = (alive, next_alive));
         reach
     }
 

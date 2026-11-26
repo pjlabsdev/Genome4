@@ -95,23 +95,28 @@ fn striped<T: Cell, V: Lanes<Elem = T>, const L: usize>(
         0
     };
     let best_pair = sc.matching.max(-sc.ambiguous);
-    let zero = [T::default(); L];
+    let vz = V::zero();
+    // Ein einziger Speicherblock für Punkte und Arbeitszeilen (vorher fünf je Aufruf).
+    let mut block = vec![vz; 9 * slen];
+    let (profile, rest) = block.split_at_mut(5 * slen);
+    let (h0, rest) = rest.split_at_mut(slen);
+    let (h1, rest) = rest.split_at_mut(slen);
+    let (e_row, h_max) = rest.split_at_mut(slen);
+    let (mut h0, mut h1) = (h0, h1);
     // Punkte je Referenzbase, in gestreifter Anordnung: Vektor j, Spur k gehört zu Read-Position
     // j + k * slen. Hinter dem Read-Ende stehen 0 Punkte.
-    let mut profile = vec![zero; 5 * slen];
     for a in 0..5u8 {
         for j in 0..slen {
-            for k in 0..L {
+            let mut lanes = [T::default(); L];
+            for (k, lane) in lanes.iter_mut().enumerate() {
                 let p = j + k * slen;
                 let s = if p < qlen { sc.score(a, query[p]) } else { 0 };
-                profile[usize::from(a) * slen + j][k] = T::from_i32(s + shift);
+                *lane = T::from_i32(s + shift);
             }
+            profile[usize::from(a) * slen + j] = V::load(&lanes);
         }
     }
-    let profile: Vec<V> = profile.iter().map(|p| V::load(p)).collect();
-    let vz = V::zero();
-    let (mut h0, mut h1) = (vec![vz; slen], vec![vz; slen]);
-    let (mut e_row, mut h_max) = (vec![vz; slen], vec![vz; slen]);
+    let profile = &*profile;
     let shift_v = V::splat(T::from_i32(shift));
     let (e_del, e_ins) = (
         V::splat(T::from_i32(sc.e_del)),
@@ -150,7 +155,7 @@ fn striped<T: Cell, V: Lanes<Elem = T>, const L: usize>(
         // Nachkorrektur: die offene Insertion von Spur zu Spur weiterreichen.
         'lazy: for _ in 0..16 {
             f = f.shift_in_zero();
-            for h1j in &mut h1 {
+            for h1j in h1.iter_mut() {
                 let v = h1j.max(f);
                 *h1j = v;
                 f = f.subs(e_ins);
@@ -174,7 +179,7 @@ fn striped<T: Cell, V: Lanes<Elem = T>, const L: usize>(
         if imax > gmax {
             gmax = imax;
             te = i;
-            h_max.copy_from_slice(&h1);
+            h_max.copy_from_slice(h1);
             if (T::BYTE && gmax + shift >= 255) || gmax >= stop_at {
                 break;
             }
