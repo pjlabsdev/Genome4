@@ -1294,8 +1294,8 @@ pub fn html(f: &Value) -> String {
             v.1 += reads;
             v.2 += dups;
             v.3 += bases;
-            for i in 0..4 {
-                v.4[i] += covered[i];
+            for (sum, c) in v.4.iter_mut().zip(covered) {
+                *sum += c;
             }
             v.5 += 1;
         }
