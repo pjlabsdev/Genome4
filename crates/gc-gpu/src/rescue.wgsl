@@ -1,5 +1,9 @@
-// Gestreifter Byte-Lauf der lokalen Ausrichtung (wie gc_align::local::kernel_reference),
-// eine Ausrichtung je Aufruf. 16 Spuren je Vektor, jede Spur ein Wert 0..255 in einem u32.
+// Gestreifter Byte-Lauf der lokalen Ausrichtung (wie gc_align::local::kernel_reference).
+// Eine Ausrichtung je Arbeitsgruppe (= eine Untergruppe von 32 Fäden): Faden k rechnet Spur
+// k mod 16 des 16er-Vektors; die Fäden 16..31 rechnen dieselben Spuren noch einmal, so laufen
+// alle Fäden einer Untergruppe denselben Weg. Weitergeben zwischen Spuren mit
+// subgroupShuffleUp, "irgendeine Spur" mit subgroupAny, Zeilenmaximum mit subgroupMax.
+diagnostic(off, subgroup_uniformity);
 
 struct Params {
     n_jobs: u32,
@@ -30,13 +34,6 @@ struct Job {
 @group(0) @binding(4) var<storage, read_write> rows: array<atomic<u32>>;
 
 const L: u32 = 16u;
-const MAXV: u32 = 256u;
-
-var<private> h0: array<u32, 256>;
-var<private> h1: array<u32, 256>;
-var<private> e_row: array<u32, 256>;
-var<private> h_max: array<u32, 256>;
-var<private> q: array<u32, 256>;
 
 fn base_at(i: u32) -> u32 {
     return (bases[i >> 2u] >> ((i & 3u) * 8u)) & 0xffu;
@@ -50,128 +47,108 @@ fn sat_sub(a: u32, b: u32) -> u32 {
     return select(0u, a - b, a > b);
 }
 
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let id = gid.x;
+@compute @workgroup_size(32)
+fn main(
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+    @builtin(subgroup_invocation_id) sl: u32,
+) {
+    let id = wid.x + wid.y * nwg.x;
     if (id >= P.n_jobs) {
         return;
     }
+    let k = sl % L;
     let job = jobs[id];
     let qlen = job.q_len;
     let slen = (qlen + L - 1u) / L;
     let shift = max(P.mismatch, P.ambiguous);
-    for (var p = 0u; p < slen * L; p++) {
-        if (p < qlen) {
-            q[p] = base_at(job.q_off + p);
-        } else {
-            q[p] = 9u;
-        }
-        h0[p] = 0u;
-        h1[p] = 0u;
-        e_row[p] = 0u;
-        h_max[p] = 0u;
+    var q: array<u32, 16>;
+    var h0: array<u32, 16>;
+    var h1: array<u32, 16>;
+    var e_row: array<u32, 16>;
+    var h_max: array<u32, 16>;
+    for (var j = 0u; j < slen; j++) {
+        let p = j + k * slen;
+        q[j] = select(9u, base_at(job.q_off + p), p < qlen);
+        h0[j] = 0u;
+        h1[j] = 0u;
+        e_row[j] = 0u;
+        h_max[j] = 0u;
     }
     var gmax = 0u;
     var te = -1;
-    var cur = 0u; // 0: h0 ist die vorige Zeile, 1: h1
     for (var i = 0u; i < job.t_len; i++) {
         let b = min(base_at(job.t_off + i), 4u);
-        var h: array<u32, 16>;
-        var f: array<u32, 16>;
-        var row_max: array<u32, 16>;
-        h[0] = 0u;
-        for (var k = 1u; k < L; k++) {
-            let x = (slen - 1u) * L + k - 1u;
-            h[k] = select(h1[x], h0[x], cur == 0u);
-        }
-        for (var k = 0u; k < L; k++) {
-            f[k] = 0u;
-            row_max[k] = 0u;
-        }
+        // Vorige Zeile, letzte Read-Position der Spur davor.
+        let up = subgroupShuffleUp(h0[slen - 1u], 1u);
+        var h = select(up, 0u, k == 0u);
+        var f = 0u;
+        var row_max = 0u;
         for (var j = 0u; j < slen; j++) {
-            for (var k = 0u; k < L; k++) {
-                let x = j * L + k;
-                let qb = q[j + k * slen];
-                var s: u32;
-                if (qb == 9u) {
-                    s = shift;
-                } else if (b > 3u || qb > 3u) {
-                    s = shift - P.ambiguous;
-                } else if (b == qb) {
-                    s = shift + P.matching;
-                } else {
-                    s = shift - P.mismatch;
-                }
-                let t = max(sat_sub(sat_add(h[k], s), shift), e_row[x]);
-                let v = max(t, f[k]);
-                row_max[k] = max(row_max[k], v);
-                if (cur == 0u) {
-                    h[k] = h0[x];
-                    h1[x] = v;
-                } else {
-                    h[k] = h1[x];
-                    h0[x] = v;
-                }
-                e_row[x] = max(sat_sub(e_row[x], P.e_del), sat_sub(v, P.oe_del));
-                f[k] = max(sat_sub(f[k], P.e_ins), sat_sub(t, P.oe_ins));
+            let qb = q[j];
+            var s: u32;
+            if (qb == 9u) {
+                s = shift;
+            } else if (b > 3u || qb > 3u) {
+                s = shift - P.ambiguous;
+            } else if (b == qb) {
+                s = shift + P.matching;
+            } else {
+                s = shift - P.mismatch;
             }
+            let t = max(sat_sub(sat_add(h, s), shift), e_row[j]);
+            let v = max(t, f);
+            row_max = max(row_max, v);
+            h = h0[j];
+            h1[j] = v;
+            e_row[j] = max(sat_sub(e_row[j], P.e_del), sat_sub(v, P.oe_del));
+            f = max(sat_sub(f, P.e_ins), sat_sub(t, P.oe_ins));
         }
         // Nachkorrektur: die offene Insertion von Spur zu Spur weiterreichen.
         var done = false;
-        for (var round = 0u; round < 16u && !done; round++) {
-            for (var k = L - 1u; k > 0u; k--) {
-                f[k] = f[k - 1u];
-            }
-            f[0] = 0u;
+        for (var round = 0u; round < 16u; round++) {
+            let fu = subgroupShuffleUp(f, 1u);
+            f = select(fu, 0u, k == 0u);
             for (var j = 0u; j < slen; j++) {
-                var any = false;
-                for (var k = 0u; k < L; k++) {
-                    let x = j * L + k;
-                    var v: u32;
-                    if (cur == 0u) {
-                        v = max(h1[x], f[k]);
-                        h1[x] = v;
-                    } else {
-                        v = max(h0[x], f[k]);
-                        h0[x] = v;
-                    }
-                    f[k] = sat_sub(f[k], P.e_ins);
-                    any = any || (f[k] > sat_sub(v, P.oe_ins));
-                }
-                if (!any) {
+                let v = max(h1[j], f);
+                h1[j] = v;
+                f = sat_sub(f, P.e_ins);
+                if (!subgroupAny(f > sat_sub(v, P.oe_ins))) {
                     done = true;
                     break;
                 }
             }
+            if (done) {
+                break;
+            }
         }
-        var imax = 0u;
-        for (var k = 0u; k < L; k++) {
-            imax = max(imax, row_max[k]);
+        let imax = subgroupMax(row_max);
+        if (sl == 0u) {
+            let ri = job.rows_off + i;
+            atomicOr(&rows[ri >> 2u], imax << ((ri & 3u) * 8u));
         }
-        let ri = job.rows_off + i;
-        atomicOr(&rows[ri >> 2u], imax << ((ri & 3u) * 8u));
         if (imax > gmax) {
             gmax = imax;
             te = i32(i);
-            for (var x = 0u; x < slen * L; x++) {
-                h_max[x] = select(h0[x], h1[x], cur == 0u);
+            for (var j = 0u; j < slen; j++) {
+                h_max[j] = h1[j];
             }
         }
-        cur = 1u - cur;
+        for (var j = 0u; j < slen; j++) {
+            h0[j] = h1[j];
+        }
     }
-    var mx = -1;
-    var qe = -1;
+    // Read-Position des besten Werts in der besten Zeile: größter Wert, bei Gleichstand die
+    // kleinste Position. Schlüssel Wert * 65536 + (65535 - Position), dann Maximum.
+    var key = 0u;
     for (var j = 0u; j < slen; j++) {
-        for (var k = 0u; k < L; k++) {
-            let v = i32(h_max[j * L + k]);
-            let p = i32(j + k * slen);
-            if (v > mx || (v == mx && p < qe)) {
-                mx = v;
-                qe = p;
-            }
-        }
+        let p = j + k * slen;
+        key = max(key, (h_max[j] << 16u) | (65535u - p));
     }
-    result[id * 4u] = gmax;
-    result[id * 4u + 1u] = bitcast<u32>(te);
-    result[id * 4u + 2u] = bitcast<u32>(qe);
+    key = subgroupMax(key);
+    if (sl == 0u) {
+        result[id * 4u] = gmax;
+        result[id * 4u + 1u] = bitcast<u32>(te);
+        result[id * 4u + 2u] = bitcast<u32>(i32(65535u - (key & 0xffffu)));
+    }
 }

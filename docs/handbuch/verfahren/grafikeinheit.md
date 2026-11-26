@@ -14,10 +14,14 @@ Windows) und der Rechenkern `crates/gc-gpu/src/rescue.wgsl`.
 2. Für jedes Fenster werden der Partner (in der Richtung des Fensters) und das Stück Referenz
    bereitgelegt. Fenster, deren Read länger ist, als der Byte-Lauf sicher fasst (Score über
    250), rechnet der Prozessor.
-3. Die Grafikeinheit rechnet alle übrigen in einem Aufruf, eine Ausrichtung je Faden. Jeder
-   Faden geht denselben gestreiften Byte-Lauf wie der Prozessor (siehe
-   [Read-Paare](read-paare.md)), mit 16 Spuren als einzelnen Werten, in derselben
-   Reihenfolge einschließlich der Nachkorrektur. Er liefert den besten Score, seine Zeile, die
+3. Die Grafikeinheit rechnet alle übrigen in einem Aufruf, eine Ausrichtung je Untergruppe von
+   Fäden. Faden k rechnet Spur k des 16er-Vektors, denselben gestreiften Byte-Lauf wie der
+   Prozessor (siehe [Read-Paare](read-paare.md)), in derselben Reihenfolge einschließlich der
+   Nachkorrektur. Was der Prozessor zwischen Spuren verschiebt, reichen die Fäden mit
+   `subgroupShuffleUp` weiter; "irgendeine Spur" ist `subgroupAny`, das Zeilenmaximum
+   `subgroupMax`. Bei Untergruppen von 32 Fäden rechnen die Fäden 16 bis 31 dieselben Spuren noch
+   einmal, damit alle Fäden denselben Weg gehen. Nötig sind Untergruppen ab 16 Fäden (Apple: 32);
+   sonst rechnet der Prozessor (`GPU.FEHLT`). Ergebnis: bester Score, seine Zeile, die
    Read-Position und das Maximum jeder Zeile.
 4. Aus den Zeilenmaxima bildet der Prozessor den zweitbesten Score (`local::from_rows`) und rechnet
    wie bisher rückwärts den Anfang des Alignments (`local::with_start`).
@@ -33,8 +37,16 @@ jedem Test als WGSL geprüft (Syntax und Typen). Ob die Grafikeinheit genau dass
 zufällige Fenster auf beiden und bricht bei der ersten Abweichung mit Fehler ab.
 
 ## Messung
-Steht aus: Die Cloud-Rechner der Entwicklung haben keine Grafikeinheit. Gemessen wird auf dem
-MacBook Air (M5) mit `gpubench` und einem Lauf auf 1 Mio. PJ-Paaren gegen `--grafikeinheit aus`.
+MacBook Air (M5, Metal), `gpubench` mit Fenstern zu 1.320 Basen und Reads zu 148 Basen:
+
+| Fassung des Rechenkerns | Grafikeinheit je Fenster | Prozessor, 10 Kerne, je Fenster | abweichend |
+|---|---|---|---|
+| ein Faden je Ausrichtung (9ef0395) | 72–74 µs | 3,3–3,4 µs | 0 von 90.000 |
+| ein Faden je Spur (Untergruppen) | steht aus | | |
+
+Die erste Fassung war richtig, aber 22-mal langsamer als der Prozessor: Ein Faden ging allein
+über 1.320 × 160 Zellen, und seine Felder (5 KB) passten nicht in die Register. Die Cloud-Rechner
+der Entwicklung haben keine Grafikeinheit; gemessen wird auf dem Mac.
 
 ## Grenzen
 - Bisher nur die Partnersuche. Das Verlängern (17 % auf dem Mac) folgt, wenn sich die

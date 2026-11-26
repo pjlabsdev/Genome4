@@ -1,7 +1,7 @@
 //! Rechnen auf der Grafikeinheit über wgpu (Metal auf dem Mac, Vulkan oder DX12 sonst).
 //!
 //! Bisher ein Rechenkern: die lokalen Ausrichtungen der Partnersuche (gestreifter Byte-Lauf wie
-//! `gc_align::local`, eine Ausrichtung je Aufruf auf der Grafikeinheit). Er liefert je Fenster
+//! `gc_align::local`, eine Ausrichtung je Untergruppe, ein Faden je Spur). Er liefert je Fenster
 //! den besten Score, seine Zeile, die Read-Position und das Maximum jeder Zeile; daraus rechnet
 //! `gc_align::local::from_rows` dasselbe Ergebnis wie der Prozessor. Alles bleibt auf dem Gerät:
 //! Die Grafikeinheit sitzt im selben Rechner und teilt sich beim Mac den Arbeitsspeicher.
@@ -82,9 +82,20 @@ impl Gpu {
         .map_err(|e| format!("keine Grafikeinheit: {e}"))?;
         let info = adapter.get_info();
         let name = format!("{} ({:?})", info.name, info.backend);
+        // Der Rechenkern verteilt die 16 Spuren eines Vektors auf Fäden einer Untergruppe.
+        if !adapter.features().contains(wgpu::Features::SUBGROUP) {
+            return Err(format!("Grafikeinheit {name} kann keine Untergruppen"));
+        }
+        if info.subgroup_min_size < 16 {
+            return Err(format!(
+                "Grafikeinheit {name}: Untergruppen ab {} Fäden, nötig sind 16",
+                info.subgroup_min_size
+            ));
+        }
         let limits = adapter.limits();
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("genome"),
+            required_features: wgpu::Features::SUBGROUP,
             required_limits: limits,
             ..Default::default()
         }))
@@ -225,11 +236,10 @@ impl Gpu {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind, &[]);
-            let groups = (jobs.len() as u32).div_ceil(64);
-            // Höchstens 65.535 Gruppen je Richtung: darüber in die zweite Richtung ausweichen
-            // ist nicht nötig, solange ein Block unter 4 Mio. Fenstern bleibt.
-            assert!(groups <= 65_535, "zu viele Fenster für einen Aufruf");
-            pass.dispatch_workgroups(groups, 1, 1);
+            // Eine Arbeitsgruppe je Fenster, höchstens 65.535 je Richtung.
+            let n = jobs.len() as u32;
+            let x = n.min(65_535);
+            pass.dispatch_workgroups(x, n.div_ceil(x), 1);
         }
         enc.copy_buffer_to_buffer(&r_buf, 0, &read_buf, 0, res_size);
         enc.copy_buffer_to_buffer(&rows_buf, 0, &read_buf, res_size, rows_bytes as u64);
@@ -279,6 +289,8 @@ mod tests {
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
         )
+        .subgroup_stages(naga::valid::ShaderStages::COMPUTE)
+        .subgroup_operations(naga::valid::SubgroupOperationSet::all())
         .validate(&module)
         .expect("WGSL gültig");
     }
