@@ -17,6 +17,9 @@ pub struct RegionOptions {
     /// ausgerichtet, wenn das höchstens so viele Punkte kostet.
     pub pen_clip5: i32,
     pub pen_clip3: i32,
+    /// Gleiche Verlängerungen eines Reads nur einmal rechnen (siehe `extend_gemerkt`). Das
+    /// Ergebnis ist dasselbe; `false` rechnet jede Verlängerung neu wie bwa.
+    pub memo: bool,
 }
 
 impl Default for RegionOptions {
@@ -25,6 +28,7 @@ impl Default for RegionOptions {
             scoring: Scoring::default(),
             pen_clip5: 5,
             pen_clip3: 5,
+            memo: true,
         }
     }
 }
@@ -60,6 +64,80 @@ pub struct Region {
     pub rescued: bool,
 }
 
+thread_local! {
+    /// Verlängerungen des aktuellen Reads, nach ihrem vollständigen Inhalt.
+    static GEMERKT: std::cell::RefCell<std::collections::HashMap<Vec<u8>, crate::extend::Extension>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Höchstens so viele gemerkte Verlängerungen je Kern; darüber wird vergessen. Ein Read aus einer
+/// Wiederholung hat einige hundert, der Speicher bleibt damit klein, auch wenn `neuer_read`
+/// einmal nicht gerufen wird.
+const GEMERKT_MAX: usize = 8192;
+
+#[cfg(test)]
+thread_local! {
+    /// Treffer im Gedächtnis, nur für Tests.
+    static TREFFER: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Vergisst die Verlängerungen des vorigen Reads. Vor jedem Read aufrufen.
+pub fn neuer_read() {
+    GEMERKT.with(|g| g.borrow_mut().clear());
+}
+
+/// Wie [`extend`], aber eine Verlängerung mit genau demselben Inhalt wird nur einmal gerechnet.
+///
+/// Die Verlängerung hängt nur von Read-Stück, Referenzstück, Bewertung, `end_bonus` und `h0` ab.
+/// Vom Referenzstück zählen nur die ersten `query.len() + band_width + 1` Basen: In Zeile `i` liegt
+/// das Band ab Spalte `i - w`, ab `i = query.len() + w` ist es leer, der Zeilenhöchstwert 0, und
+/// die Rechnung endet dort. In Wiederholungen verlängern viele Ketten eines Reads exakt dasselbe
+/// Stück (PJ, 1 Mio. Paare: 36,7 % der Aufrufe). Der Schlüssel enthält Bewertung und Folgen selbst,
+/// nicht nur einen Hash: Ein Treffer liefert garantiert dasselbe Ergebnis wie die Rechnung.
+pub fn extend_gemerkt(
+    query: &[u8],
+    target: &[u8],
+    sc: &Scoring,
+    end_bonus: i32,
+    h0: i32,
+) -> crate::extend::Extension {
+    let reach = (query.len() + sc.band_width.max(0) as usize + 1).min(target.len());
+    let target = &target[..reach];
+    let mut key = Vec::with_capacity(52 + query.len() + reach);
+    for v in [
+        sc.matching,
+        sc.mismatch,
+        sc.ambiguous,
+        sc.o_del,
+        sc.e_del,
+        sc.o_ins,
+        sc.e_ins,
+        sc.band_width,
+        sc.zdrop,
+        end_bonus,
+        h0,
+        query.len() as i32,
+    ] {
+        key.extend_from_slice(&v.to_le_bytes());
+    }
+    key.extend_from_slice(query);
+    key.extend_from_slice(target);
+    GEMERKT.with(|g| {
+        if let Some(x) = g.borrow().get(&key) {
+            #[cfg(test)]
+            TREFFER.with(|t| t.set(t.get() + 1));
+            return *x;
+        }
+        let x = extend(query, target, sc, end_bonus, h0);
+        let mut g = g.borrow_mut();
+        if g.len() >= GEMERKT_MAX {
+            g.clear();
+        }
+        g.insert(key, x);
+        x
+    })
+}
+
 /// Längste Lücke, die sich bei `qlen` Read-Basen noch lohnen kann, begrenzt auf das doppelte Band.
 fn cal_max_gap(sc: &Scoring, qlen: i32) -> i32 {
     let l_del = (f64::from(qlen * sc.matching - sc.o_del) / f64::from(sc.e_del) + 1.0) as i32;
@@ -76,6 +154,7 @@ fn extend_retry(
     end_bonus: i32,
     h0: i32,
     score: &mut i32,
+    memo: bool,
 ) -> (crate::extend::Extension, i32) {
     let mut i = 0;
     loop {
@@ -85,7 +164,11 @@ fn extend_retry(
             band_width: w,
             ..sc.clone()
         };
-        let x = extend(query, target, &band, end_bonus, h0);
+        let x = if memo {
+            extend_gemerkt(query, target, &band, end_bonus, h0)
+        } else {
+            extend(query, target, &band, end_bonus, h0)
+        };
         *score = x.score;
         if i == 1 || *score == prev || x.max_off < (w >> 1) + (w >> 2) {
             return (x, w);
@@ -216,6 +299,7 @@ pub fn chain_to_regions(
                 opt.pen_clip5,
                 s_len * sc.matching,
                 &mut a.score,
+                opt.memo,
             );
             aw[0] = w;
             if x.global_score <= 0 || x.global_score <= a.score - opt.pen_clip5 {
@@ -245,6 +329,7 @@ pub fn chain_to_regions(
                 opt.pen_clip3,
                 sc0,
                 &mut a.score,
+                opt.memo,
             );
             aw[1] = w;
             if x.global_score <= 0 || x.global_score <= a.score - opt.pen_clip3 {
@@ -384,6 +469,115 @@ mod tests {
         assert!(!regions.is_empty());
         for r in &regions {
             assert!(r.re <= 2500 || r.rb >= 2500, "{r:?}");
+        }
+    }
+
+    /// Referenz mit 12 Kopien eines 300er-Elements (je 0 bis 3 Abweichungen) zwischen Zufallsfolge:
+    /// Reads daraus haben viele Ketten mit gleichen Verlängerungen.
+    fn repeat_setup() -> (FmIndex, Vec<u8>) {
+        let mut rng = 0x5EED_0000_0042_u64;
+        let rnd = |n: usize, rng: &mut u64| -> Vec<u8> {
+            (0..n).map(|_| (xorshift(rng) & 3) as u8).collect()
+        };
+        let element = rnd(300, &mut rng);
+        let mut g = rnd(500, &mut rng);
+        for k in 0..12 {
+            let mut e = element.clone();
+            for _ in 0..(k % 4) {
+                let at = (xorshift(&mut rng) % 300) as usize;
+                e[at] = (e[at] + 1) & 3;
+            }
+            g.extend_from_slice(&e);
+            g.extend(rnd(200, &mut rng));
+        }
+        let text: Vec<u8> = g.iter().map(|&c| b"ACGT"[c as usize]).collect();
+        let mut r = Reference::new();
+        r.push_contig("a", &text);
+        (FmIndex::build(r, Variant::Kompakt, 0).unwrap().0, g)
+    }
+
+    fn all_regions(index: &FmIndex, read: &[u8], opt: &RegionOptions) -> Vec<Region> {
+        neuer_read();
+        let seeds = collect_seeds(index, read, &SeedOptions::default());
+        let chains = chain_seeds(&seeds, index.reference().len(), &ChainOptions::default());
+        let chains = filter_chains(chains, &FilterOptions::default());
+        let mut regions = Vec::new();
+        for c in &chains {
+            chain_to_regions(index, read, c, opt, &mut regions);
+        }
+        regions
+    }
+
+    #[test]
+    fn remembered_extensions_give_the_same_regions() {
+        let (index, g) = repeat_setup();
+        let on = RegionOptions::default();
+        let off = RegionOptions {
+            memo: false,
+            ..RegionOptions::default()
+        };
+        assert!(on.memo);
+        let mut rng = 0xABCD_u64;
+        let mut many = 0;
+        for start in (400..g.len() - 160).step_by(37) {
+            let mut read = g[start..start + 150].to_vec();
+            // Fehltreffer, Deletion und Insertion, damit nicht nur exakte Verlängerungen vorkommen.
+            let at = 20 + (xorshift(&mut rng) % 110) as usize;
+            match start % 3 {
+                0 => read[at] = (read[at] + 1) & 3,
+                1 => {
+                    read.remove(at);
+                }
+                _ => read.insert(at, (read[at] + 2) & 3),
+            }
+            let a = all_regions(&index, &read, &on);
+            let b = all_regions(&index, &read, &off);
+            assert_eq!(a, b, "Read ab {start}");
+            if a.len() > 3 {
+                many += 1;
+            }
+        }
+        assert!(many > 10, "zu wenige Reads mit vielen Bereichen: {many}");
+        assert!(
+            TREFFER.with(|t| t.get()) > 0,
+            "das Gedächtnis wurde nie benutzt"
+        );
+    }
+
+    #[test]
+    fn remembered_extension_ignores_unreachable_reference() {
+        // Hinter `query.len() + band_width` kommt die Rechnung nie an: Das Ergebnis mit dem
+        // gekürzten Stück und das gemerkte sind gleich dem mit dem vollen Stück.
+        let mut rng = 0x1357_u64;
+        for round in 0..300 {
+            let q: Vec<u8> = (0..(5 + round % 140))
+                .map(|_| (xorshift(&mut rng) % 5) as u8)
+                .collect();
+            let mut t: Vec<u8> = q.clone();
+            for _ in 0..(round % 7) {
+                let at = (xorshift(&mut rng) as usize) % t.len();
+                match xorshift(&mut rng) % 3 {
+                    0 => t[at] = (t[at] + 1) % 4,
+                    1 => {
+                        t.remove(at);
+                    }
+                    _ => t.insert(at, (xorshift(&mut rng) % 4) as u8),
+                }
+            }
+            t.extend((0..(round % 400)).map(|_| (xorshift(&mut rng) % 4) as u8));
+            let sc = Scoring {
+                band_width: [5, 20, 100, 200][round % 4],
+                ..Scoring::default()
+            };
+            let h0 = 19 + (round % 50) as i32;
+            let full = extend(&q, &t, &sc, 5, h0);
+            neuer_read();
+            assert_eq!(extend_gemerkt(&q, &t, &sc, 5, h0), full, "Runde {round}");
+            assert_eq!(
+                extend_gemerkt(&q, &t, &sc, 5, h0),
+                full,
+                "Runde {round}, gemerkt"
+            );
         }
     }
 }

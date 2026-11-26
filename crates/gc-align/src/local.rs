@@ -418,8 +418,8 @@ fn striped_pair<T: Cell, V: Lanes<Elem = T>, const L: usize>(
         let s = &z.profile[usize::from(base.min(4)) * slen..][..slen];
         let mut h = z.h0[slen - 1].shift_in_zero();
         let (mut f, mut row_max) = (vz, vz);
-        for j in 0..slen {
-            let t = add(h, s[j]).max(z.e_row[j]);
+        for (j, &sj) in s.iter().enumerate() {
+            let t = add(h, sj).max(z.e_row[j]);
             let v = t.max(f);
             row_max = row_max.max(v);
             z.h1[j] = v;
@@ -549,8 +549,8 @@ fn striped_many<T: Cell, V: Lanes<Elem = T>, const L: usize, const N: usize>(
         let s = &z.profile[usize::from(base.min(4)) * slen..][..slen];
         let mut h = z.h0[slen - 1].shift_in_zero();
         let (mut f, mut row_max) = (vz, vz);
-        for j in 0..slen {
-            let t = add(h, s[j]).max(z.e_row[j]);
+        for (j, &sj) in s.iter().enumerate() {
+            let t = add(h, sj).max(z.e_row[j]);
             let v = t.max(f);
             row_max = row_max.max(v);
             z.h1[j] = v;

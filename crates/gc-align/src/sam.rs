@@ -115,6 +115,7 @@ pub fn regions_from_intervals(
     intervals: &[gc_index::Smem],
     opt: &AlignOptions,
 ) -> (Vec<Region>, f32) {
+    crate::region::neuer_read();
     let l = index.reference().len();
     let frac_rep = repeat_fraction(intervals, opt.seed.max_occ, read.len());
     let seeds = locate_seeds(index, intervals, &opt.seed);

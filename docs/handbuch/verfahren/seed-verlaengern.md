@@ -63,6 +63,34 @@ aus dem Block davor. Zusammen mit dem lokalen Alignment der Partnersuche sinkt d
 Ausrichten auf dem ganzen GRCh38 von 31,1 auf 25,8 s (echte Reads, 4 Kerne), bei gleicher BAM
 ([M18](../../bench/M18-schnellweg.md)). `GENOME_SIMD=0` rechnet wieder mit Feldern.
 
+## Gleiche Verlängerungen nur einmal rechnen
+Ein Read aus einer Wiederholung (Alu, L1, Satelliten) passt an viele fast gleiche Kopien und hat
+dann viele Ketten. Oft verlängern mehrere davon exakt dasselbe: gleiches Read-Stück, gleiche
+Referenzfolge, gleicher Startwert `h0`. Bei PJ (1 Mio. Paare, MGI 2x150, Schnellweg an,
+Partnersuche für 20 Bereiche) sind 36,7 % der Verlängerungen innerhalb eines Reads doppelt, mit
+26,6 % der Zellen. Bei 7,8 % der Paare mit vielen Bereichen kommen auf einen Read rund 98 Ketten,
+sonst rund 5.
+
+`extend_gemerkt` (`region.rs`) merkt sich je Kern die Verlängerungen des aktuellen Reads und
+rechnet eine Verlängerung mit genau demselben Inhalt nicht noch einmal. Der Schlüssel ist der
+vollständige Inhalt, kein Hash allein: Bewertung (alle Punkte, Bandbreite, Z-Drop), `end_bonus`,
+`h0`, Read-Stück und Referenzstück. Vom Referenzstück zählen nur die ersten
+`Read-Länge + Bandbreite + 1` Basen. In Zeile `i` beginnt das Band bei Spalte `i - w`; ab
+`i = Read-Länge + w` ist es leer, der Zeilenhöchstwert ist 0 und die Rechnung endet dort. Der Rest
+der Referenz kann das Ergebnis nicht beeinflussen. Ein Treffer liefert deshalb dasselbe Ergebnis
+wie die Rechnung. Das Gedächtnis wird vor jedem Read geleert (`neuer_read`) und hält höchstens
+8.192 Einträge je Kern.
+
+`fq2bam --verlaengerung-merken aus` rechnet jede Verlängerung neu, wie bwa.
+
+| Messung (Mac M5, 1 Mio. PJ-Paare, A-B-B-A mit 3 min Pause) | ohne | mit |
+|---|---|---|
+| Wandzeit, Mittel | 34,82 s | 32,93 s (-5,4 %) |
+| Rechenzeit aller Kerne, Mittel | 288,7 s | 273,4 s (-5,3 %) |
+| BAM (`samtools view`, md5) | 1a02646f… | gleich |
+
+Inhaltsgleiche Fenster der Partnersuche gibt es dagegen kaum (1,5 %); dort lohnt das Merken nicht.
+
 ## Validierung
 
 | Prüfung | Ergebnis |
@@ -72,6 +100,9 @@ Ausrichten auf dem ganzen GRCh38 von 31,1 auf 25,8 s (echte Reads, 4 Kerne), bei
 | Gesetzte Fälle: gleiche Folgen, Fehltreffer am Ende, leere Referenz | bestanden |
 | Frühes Ende und Rechnung in Zeilen gegen die Rechnung Zelle für Zelle ohne frühes Ende: 20.000 Zufallspaare mit vier Bandbreiten, vier Abbruchgrenzen, zwei Punktzahlen je Treffer, gleichen Folgen, wenigen Fehlern, Lücken und N | alle sechs gemeldeten Größen gleich |
 | Echte Reads (2.000 Paare, chr20): ganze SAM-Ausgabe vorher und nachher | gleich |
+| Merken an und aus: alle Bereiche von Reads aus einer Referenz mit 12 Kopien eines Elements (Fehltreffer, Insertion, Deletion), Gedächtnis nachweislich benutzt | gleich |
+| Gemerkte Verlängerung mit gekürztem Referenzstück gegen volle Rechnung: 300 Zufallspaare, vier Bandbreiten, Referenz bis 400 Basen länger als erreichbar | gleich |
+| 1 Mio. PJ-Paare, ganze BAM mit und ohne Merken | md5 gleich |
 
 ## Grenzen
 - Kein direkter Vergleich mit `ksw_extend2` aus bwa; die Funktion ist dort nicht von außen
