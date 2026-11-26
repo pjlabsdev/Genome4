@@ -79,6 +79,13 @@ pub struct CheckReport {
     pub occurrences_compared: u64,
 }
 
+/// Referenzstücke Wort für Wort entpacken (Vorgabe); `GC_TEXT_WORTWEISE=0` liest Base für Base
+/// wie bisher.
+fn text_wordwise() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| !std::env::var_os("GC_TEXT_WORTWEISE").is_some_and(|v| v == "0"))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FmIndex {
     /// Zeilen der BWT: 2 × Referenzlänge + 1.
@@ -956,8 +963,29 @@ impl FmIndex {
     /// an denen die Referenz N hat, kommen als Code 4 (unbekannt), nicht als die Füllbase, die
     /// der Index dort für die Suche führt.
     pub fn text_range(&self, from: u64, to: u64) -> Vec<u8> {
-        let mut bases: Vec<u8> = (from..to).map(|p| self.text_base(p)).collect();
         let l = self.reference.len();
+        let mut bases: Vec<u8> = if text_wordwise() {
+            // Vorwärtsstück direkt, Rückwärtsstück als Vorwärtsstück gelesen, dann umgedreht
+            // und komplementiert. Gleich wie `text_base` für jede Stelle.
+            let mut out = Vec::with_capacity(to.saturating_sub(from) as usize);
+            self.reference
+                .forward
+                .extend_range(from, to.min(l), &mut out);
+            let (a, b) = (from.max(l), to);
+            if a < b {
+                let start = out.len();
+                self.reference
+                    .forward
+                    .extend_range(2 * l - b, 2 * l - a, &mut out);
+                out[start..].reverse();
+                for c in &mut out[start..] {
+                    *c = 3 - *c;
+                }
+            }
+            out
+        } else {
+            (from..to).map(|p| self.text_base(p)).collect()
+        };
         // Der Bereich kann auf beiden Strängen liegen; je Strang das Stück des Vorwärtsstrangs.
         let forward = (from.min(l), to.min(l));
         let reverse = (2 * l - to.max(l), 2 * l - from.max(l));
@@ -1542,6 +1570,37 @@ mod tests {
                 with_hits += usize::from(!want.is_empty());
             }
             assert!(with_hits > 1000);
+        }
+    }
+
+    #[test]
+    fn text_range_wordwise_equals_base_by_base() {
+        let mut seq = Vec::new();
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        for i in 0..150 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            seq.push(if (60..67).contains(&i) {
+                b'N'
+            } else {
+                b"ACGT"[(state & 3) as usize]
+            });
+        }
+        let contigs = vec![("a", seq[..97].to_vec()), ("b", seq[97..].to_vec())];
+        let index = build(&contigs, Variant::Kompakt);
+        let l = index.reference().len();
+        for from in 0..=2 * l {
+            for to in from..=2 * l {
+                let mut want: Vec<u8> = (from..to).map(|p| index.text_base(p)).collect();
+                let got = index.text_range(from, to);
+                for (w, g) in want.iter_mut().zip(&got) {
+                    if *g == 4 {
+                        *w = 4;
+                    }
+                }
+                assert_eq!(got, want, "[{from}, {to})");
+            }
         }
     }
 

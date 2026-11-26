@@ -137,6 +137,16 @@ auf dem Gegenstrang, wenn p ≥ L (linkes Ende auf dem Vorwärtsstrang: 2L − p
 sie, wenn sie über die Grenze zwischen den Strängen oder zwischen zwei Contigs reicht oder eine
 N-Strecke berührt. Übrig bleiben die gefilterten Treffer.
 
+## Referenzstücke lesen
+Für das Verlängern und die Partnersuche holt `text_range` Stücke der Referenz, auf dem
+Rückwärtsstrang als reverses Komplement, N als Code 4. Die Referenz liegt 2-Bit-gepackt, 32 Basen
+je Wort. `Packed::extend_range` entpackt Wort für Wort statt jede Base einzeln zu suchen; ein
+Stück des Rückwärtsstrangs wird als Vorwärtsstück gelesen, umgedreht und komplementiert. Am Mac
+kostete das Lesen Base für Base 3,3 % der Rechenzeit von `fq2bam`. Die Stücke sind dieselben
+(Tests `extend_range_equals_get` und `text_range_wordwise_equals_base_by_base` über alle
+Bereiche, auch über Wort- und Stranggrenzen), die BAM der Simulation (300.000 Paare) hat
+dieselben Sätze. `GC_TEXT_WORTWEISE=0` liest wie bisher Base für Base.
+
 ## Prüfung
 Siehe [Werkzeug index](../werkzeuge/index.md), Abschnitt Validierung. Tests: Treffer gegen naive
 Suche in beiden Varianten, `occ` und `occ4` (auf beiden Wegen) gegen direktes Zählen an jeder Zeile, `occ4_pair` gegen
