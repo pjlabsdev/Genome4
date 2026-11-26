@@ -240,6 +240,285 @@ fn run(
     }
 }
 
+/// Zustand eines gestreiften Laufs für [`striped_pair`]: dieselben Schritte wie [`striped`],
+/// nur in Teile zerlegt, damit zwei Läufe Spalte für Spalte ineinander verzahnt rechnen können.
+struct Lane2<'a, T: Cell, V: Lanes<Elem = T>> {
+    target: &'a [u8],
+    slen: usize,
+    shift: i32,
+    profile: Vec<V>,
+    h0: Vec<V>,
+    h1: Vec<V>,
+    e_row: Vec<V>,
+    h_max: Vec<V>,
+    marks: Vec<(i32, i32)>,
+    gmax: i32,
+    te: i32,
+    /// Nächste Zeile der Referenz; `done`, wenn der Lauf fertig ist (Ende oder Abbruch).
+    row: usize,
+    done: bool,
+    qlen: usize,
+}
+
+impl<'a, T: Cell, V: Lanes<Elem = T>> Lane2<'a, T, V> {
+    #[allow(clippy::needless_range_loop)]
+    fn new<const L: usize>(query: &[u8], target: &'a [u8], sc: &Scoring) -> Self {
+        let qlen = query.len();
+        let slen = qlen.div_ceil(L);
+        let shift = if T::BYTE {
+            sc.mismatch.max(sc.ambiguous)
+        } else {
+            0
+        };
+        let vz = V::zero();
+        let mut profile = vec![vz; 5 * slen];
+        for a in 0..5u8 {
+            for j in 0..slen {
+                let mut lanes = [T::default(); L];
+                for (k, lane) in lanes.iter_mut().enumerate() {
+                    let p = j + k * slen;
+                    let s = if p < qlen { sc.score(a, query[p]) } else { 0 };
+                    *lane = T::from_i32(s + shift);
+                }
+                profile[usize::from(a) * slen + j] = V::load(&lanes);
+            }
+        }
+        Lane2 {
+            target,
+            slen,
+            shift,
+            profile,
+            h0: vec![vz; slen],
+            h1: vec![vz; slen],
+            e_row: vec![vz; slen],
+            h_max: vec![vz; slen],
+            marks: Vec::new(),
+            gmax: 0,
+            te: -1,
+            row: 0,
+            done: target.is_empty(),
+            qlen,
+        }
+    }
+
+    /// Abschluss einer Zeile nach der Hauptschleife: Nachkorrektur, Merkzeilen, Bestwert.
+    #[inline(always)]
+    fn close_row(&mut self, mut f: V, row_max: V, e_ins: V, oe_ins: V, min_sub: i32, stop_at: i32) {
+        'lazy: for _ in 0..16 {
+            f = f.shift_in_zero();
+            for h1j in self.h1.iter_mut() {
+                let v = h1j.max(f);
+                *h1j = v;
+                f = f.subs(e_ins);
+                if !f.any_gt(v.subs(oe_ins)) {
+                    break 'lazy;
+                }
+            }
+        }
+        let imax = row_max.hmax().to_i32();
+        let i = self.row as i32;
+        if imax >= min_sub {
+            match self.marks.last_mut() {
+                Some(last) if last.1 + 1 == i => {
+                    if last.0 < imax {
+                        *last = (imax, i);
+                    }
+                }
+                _ => self.marks.push((imax, i)),
+            }
+        }
+        self.row += 1;
+        if imax > self.gmax {
+            self.gmax = imax;
+            self.te = i;
+            self.h_max.copy_from_slice(&self.h1);
+            if (T::BYTE && self.gmax + self.shift >= 255) || self.gmax >= stop_at {
+                self.done = true;
+                return;
+            }
+        }
+        std::mem::swap(&mut self.h0, &mut self.h1);
+        if self.row >= self.target.len() {
+            self.done = true;
+        }
+    }
+
+    fn result<const L: usize>(&self, sc: &Scoring) -> LocalResult {
+        let best_pair = sc.matching.max(-sc.ambiguous);
+        let mut r = NONE;
+        r.score = if T::BYTE && self.gmax + self.shift >= 255 {
+            255
+        } else {
+            self.gmax
+        };
+        r.te = self.te;
+        if !(T::BYTE && r.score == 255) {
+            let mut max = -1;
+            let mut lanes = [T::default(); 16];
+            for (j, hv) in self.h_max.iter().enumerate() {
+                hv.store(&mut lanes);
+                for (k, &v) in lanes[..L].iter().enumerate() {
+                    let (v, p) = (v.to_i32(), (j + k * self.slen) as i32);
+                    if v > max {
+                        max = v;
+                        r.qe = p;
+                    } else if v == max && p < r.qe {
+                        r.qe = p;
+                    }
+                }
+            }
+            if !self.marks.is_empty() {
+                let d = (r.score + best_pair - 1) / best_pair;
+                let (low, high) = (self.te - d, self.te + d);
+                for &(score, row) in &self.marks {
+                    if (row < low || row > high) && score > r.score2 {
+                        r.score2 = score;
+                        r.te2 = row;
+                    }
+                }
+            }
+        }
+        let _ = self.qlen;
+        r
+    }
+}
+
+/// Zwei Läufe von [`striped`] gleichzeitig, Zeile für Zeile verzahnt. Die Hauptschleife eines
+/// Laufs ist eine Kette (jeder Schritt wartet auf den vorigen); zwei unabhängige Ketten
+/// nebeneinander halten die Rechenwerke des Prozessors besser beschäftigt. Jeder Lauf rechnet
+/// genau dieselben Schritte wie allein, die Ergebnisse sind dieselben wie zweimal [`striped`].
+fn striped_pair<T: Cell, V: Lanes<Elem = T>, const L: usize>(
+    a: (&[u8], &[u8]),
+    b: (&[u8], &[u8]),
+    sc: &Scoring,
+    min_sub: i32,
+    stop_at: i32,
+) -> (LocalResult, LocalResult) {
+    let mut x = Lane2::<T, V>::new::<L>(a.0, a.1, sc);
+    let mut y = Lane2::<T, V>::new::<L>(b.0, b.1, sc);
+    let shift_v = V::splat(T::from_i32(x.shift));
+    let (e_del, e_ins) = (
+        V::splat(T::from_i32(sc.e_del)),
+        V::splat(T::from_i32(sc.e_ins)),
+    );
+    let oe_del = V::splat(T::from_i32(sc.o_del + sc.e_del));
+    let oe_ins = V::splat(T::from_i32(sc.o_ins + sc.e_ins));
+    let add = |h: V, s: V| {
+        if T::BYTE {
+            h.adds(s).subs(shift_v)
+        } else {
+            h.adds(s)
+        }
+    };
+    let vz = V::zero();
+    // Eine Zeile eines Laufs allein.
+    let one = |z: &mut Lane2<'_, T, V>| {
+        let slen = z.slen;
+        let base = z.target[z.row];
+        let s = &z.profile[usize::from(base.min(4)) * slen..][..slen];
+        let mut h = z.h0[slen - 1].shift_in_zero();
+        let (mut f, mut row_max) = (vz, vz);
+        for j in 0..slen {
+            let t = add(h, s[j]).max(z.e_row[j]);
+            let v = t.max(f);
+            row_max = row_max.max(v);
+            z.h1[j] = v;
+            z.e_row[j] = z.e_row[j].subs(e_del).max(v.subs(oe_del));
+            f = f.subs(e_ins).max(t.subs(oe_ins));
+            h = z.h0[j];
+        }
+        z.close_row(f, row_max, e_ins, oe_ins, min_sub, stop_at);
+    };
+    while !x.done && !y.done {
+        if x.slen != y.slen {
+            one(&mut x);
+            one(&mut y);
+            continue;
+        }
+        let slen = x.slen;
+        let sx = &x.profile[usize::from(x.target[x.row].min(4)) * slen..][..slen];
+        let sy = &y.profile[usize::from(y.target[y.row].min(4)) * slen..][..slen];
+        let mut hx = x.h0[slen - 1].shift_in_zero();
+        let mut hy = y.h0[slen - 1].shift_in_zero();
+        let (mut fx, mut mx, mut fy, mut my) = (vz, vz, vz, vz);
+        {
+            let (xh0, xh1, xe) = (&x.h0[..slen], &mut x.h1[..slen], &mut x.e_row[..slen]);
+            let (yh0, yh1, ye) = (&y.h0[..slen], &mut y.h1[..slen], &mut y.e_row[..slen]);
+            let (sx, sy) = (&sx[..slen], &sy[..slen]);
+            for j in 0..slen {
+                let tx = add(hx, sx[j]).max(xe[j]);
+                let ty = add(hy, sy[j]).max(ye[j]);
+                let vx = tx.max(fx);
+                let vy = ty.max(fy);
+                mx = mx.max(vx);
+                my = my.max(vy);
+                xh1[j] = vx;
+                yh1[j] = vy;
+                xe[j] = xe[j].subs(e_del).max(vx.subs(oe_del));
+                ye[j] = ye[j].subs(e_del).max(vy.subs(oe_del));
+                fx = fx.subs(e_ins).max(tx.subs(oe_ins));
+                fy = fy.subs(e_ins).max(ty.subs(oe_ins));
+                hx = xh0[j];
+                hy = yh0[j];
+            }
+        }
+        x.close_row(fx, mx, e_ins, oe_ins, min_sub, stop_at);
+        y.close_row(fy, my, e_ins, oe_ins, min_sub, stop_at);
+    }
+    while !x.done {
+        one(&mut x);
+    }
+    while !y.done {
+        one(&mut y);
+    }
+    (x.result::<L>(sc), y.result::<L>(sc))
+}
+
+/// Zwei Vorwärtsläufe von [`run`] auf einmal (siehe [`striped_pair`]). Gleiche Ergebnisse wie
+/// zweimal [`run`] mit `stop_at` = 0x10000.
+fn run_pair(
+    a: (&[u8], &[u8]),
+    b: (&[u8], &[u8]),
+    sc: &Scoring,
+    byte: bool,
+    min_sub: i32,
+) -> (LocalResult, LocalResult) {
+    use gc_sys::simd::plain;
+    let stop = 0x10000;
+    match (byte, vectors_on()) {
+        (true, true) => striped_pair::<u8, U8x16, 16>(a, b, sc, min_sub, stop),
+        (false, true) => striped_pair::<i16, I16x8, 8>(a, b, sc, min_sub, stop),
+        (true, false) => striped_pair::<u8, plain::U8x16, 16>(a, b, sc, min_sub, stop),
+        (false, false) => striped_pair::<i16, plain::I16x8, 8>(a, b, sc, min_sub, stop),
+    }
+}
+
+/// Zwei Aufrufe von [`local_align`] auf einmal, mit gleichem `byte`, `min_sub` und
+/// `want_start`; die Vorwärtsläufe rechnen verzahnt. Gleiche Ergebnisse wie zwei Aufrufe.
+pub fn local_align_pair(
+    a: (&[u8], &[u8]),
+    b: (&[u8], &[u8]),
+    sc: &Scoring,
+    byte: bool,
+    min_sub: i32,
+    want_start: bool,
+) -> (LocalResult, LocalResult) {
+    if a.0.is_empty() || b.0.is_empty() {
+        return (
+            local_align(a.0, a.1, sc, byte, min_sub, want_start),
+            local_align(b.0, b.1, sc, byte, min_sub, want_start),
+        );
+    }
+    let (ra, rb) = run_pair(a, b, sc, byte, min_sub);
+    if !want_start {
+        return (ra, rb);
+    }
+    (
+        with_start(a.0, a.1, sc, byte, min_sub, ra),
+        with_start(b.0, b.1, sc, byte, min_sub, rb),
+    )
+}
+
 /// Schalter `GENOME_SIMD=0`: Vektoren als gewöhnliche Felder rechnen (Stand vor den
 /// Vektorbefehlen). Das Ergebnis ist in beiden Fällen dasselbe.
 pub(crate) fn vectors_on() -> bool {
@@ -664,6 +943,51 @@ mod tests {
                 with_start(&q, &t, &sc, true, 19, got),
                 local_align(&q, &t, &sc, true, 19, true)
             );
+        }
+    }
+
+    #[test]
+    fn two_runs_side_by_side_equal_two_single_runs() {
+        let sc = Scoring::default();
+        let mut state = 0x2468_ACE0_1357_9BDFu64;
+        for round in 0..400 {
+            let n = |s: &mut u64, lo: u64, hi: u64| (lo + xorshift(s) % (hi - lo)) as usize;
+            let qa = {
+                let len = n(&mut state, 1, 200);
+                random(&mut state, len)
+            };
+            // Gleich lange und verschieden lange Reads, gleich und verschieden lange Fenster,
+            // auch leere Fenster und Reads, die ganz im Fenster stehen.
+            let qb = if round % 3 == 0 {
+                random(&mut state, qa.len())
+            } else {
+                {
+                    let len = n(&mut state, 1, 200);
+                    random(&mut state, len)
+                }
+            };
+            let mut ta = {
+                let len = n(&mut state, 0, 900);
+                random(&mut state, len)
+            };
+            let tb = {
+                let len = n(&mut state, 0, 900);
+                random(&mut state, len)
+            };
+            if round % 5 == 0 && ta.len() > qa.len() {
+                let at = ta.len() - qa.len();
+                ta[at..].copy_from_slice(&qa);
+            }
+            for byte in [true, false] {
+                for want_start in [true, false] {
+                    let pair = local_align_pair((&qa, &ta), (&qb, &tb), &sc, byte, 19, want_start);
+                    let single = (
+                        local_align(&qa, &ta, &sc, byte, 19, want_start),
+                        local_align(&qb, &tb, &sc, byte, 19, want_start),
+                    );
+                    assert_eq!(pair, single, "Runde {round}, byte {byte}");
+                }
+            }
         }
     }
 

@@ -92,6 +92,16 @@ Fall dieselbe. Auf 421.564 HG002-Paaren (GRCh38) waren 218.556 Fenster geplant u
 gebraucht, die BAM war byte-gleich, das Tempo gleich. `PairOptions::batch_rescue = false` schaltet
 das Sammeln ab.
 
+**Je zwei Fenster verzahnt.** Die gesammelten Fenster werden paarweise ausgerichtet
+(`local_align_pair`): Die Vorwärtsläufe zweier Fenster rechnen Zeile für Zeile in derselben
+Schleife. Die Hauptschleife eines Laufs ist eine Kette, in der jeder Schritt auf den vorigen
+wartet; zwei unabhängige Ketten nebeneinander lassen die Rechenwerke weniger leer laufen. Jeder
+Lauf rechnet genau seine Schritte wie allein, ein Test vergleicht beide Wege auf zufälligen
+Reads und Fenstern (gleich und verschieden lang, beide Breiten, mit und ohne Anfangssuche).
+Auf 421.564 HG002-Paaren war die BAM byte-gleich. Schalter zurück:
+`PairOptions::rescue_two = false`; Messprogramm `examples/swbench` mit `PAIR=1`. Gemessen auf
+dem Mac: siehe unten, sobald die Messung vorliegt.
+
 ## Was in den SAM-Zeilen dazukommt
 
 | Feld | Bedeutung |

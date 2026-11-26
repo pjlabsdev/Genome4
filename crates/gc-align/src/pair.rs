@@ -24,6 +24,9 @@ pub struct PairOptions {
     /// Die Ausrichtungen der Partnersuche je Block vorab sammeln und gemeinsam rechnen. Die
     /// Ausgabe bleibt gleich; aus schaltet das ab (jedes Fenster einzeln, wie bisher).
     pub batch_rescue: bool,
+    /// Gesammelte Fenster je zwei auf einmal ausrichten ([`crate::local::local_align_pair`]).
+    /// Gleiche Ausgabe; aus rechnet jedes Fenster für sich.
+    pub rescue_two: bool,
 }
 
 impl Default for PairOptions {
@@ -33,6 +36,7 @@ impl Default for PairOptions {
             pen_unpaired: 17,
             max_matesw: 50,
             batch_rescue: true,
+            rescue_two: true,
         }
     }
 }
@@ -285,6 +289,35 @@ pub fn rescue_align(
         &target,
         sc,
         byte,
+        opt.finalize.min_seed_len * sc.matching,
+        true,
+    )
+}
+
+/// Zwei Fenster wie [`rescue_align`], deren Vorwärtsläufe verzahnt rechnen. Gleiche
+/// Ergebnisse wie zwei Aufrufe von [`rescue_align`].
+pub fn rescue_align_two(
+    index: &FmIndex,
+    a: (&[u8], &RescueWindow),
+    b: (&[u8], &RescueWindow),
+    opt: &AlignOptions,
+) -> (LocalResult, LocalResult) {
+    let sc = &opt.region.scoring;
+    let byte = |m: &[u8]| m.len() as i64 * i64::from(sc.matching) < 250;
+    if byte(a.0) != byte(b.0) {
+        return (
+            rescue_align(index, a.0, a.1, opt),
+            rescue_align(index, b.0, b.1, opt),
+        );
+    }
+    let (qa, qb) = (rescue_query(a.0, a.1.is_rev), rescue_query(b.0, b.1.is_rev));
+    let ta = index.text_range(a.1.rb as u64, a.1.re as u64);
+    let tb = index.text_range(b.1.rb as u64, b.1.re as u64);
+    crate::local::local_align_pair(
+        (&qa, &ta),
+        (&qb, &tb),
+        sc,
+        byte(a.0),
         opt.finalize.min_seed_len * sc.matching,
         true,
     )

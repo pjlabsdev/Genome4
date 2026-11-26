@@ -6,6 +6,7 @@
 use crate::finalize::mark_primary;
 use crate::pair::{
     InsertStats, PairedRead, estimate_insert, pair_lines_with, planned_rescues, rescue_align,
+    rescue_align_two,
 };
 use crate::sam::{AlignOptions, Line, read_lines, regions_from_intervals};
 use crate::seed::collect_intervals_many;
@@ -265,6 +266,21 @@ pub fn align_pairs(
         .collect();
     let results = match &opt.rescue_kernel {
         Some(kernel) => rescue_with_kernel(index, reads, &jobs, opt, threads, kernel.as_ref()),
+        None if opt.pair.rescue_two => {
+            let two = parallel_map(jobs.len().div_ceil(2), threads, |g| {
+                let (i, k, w) = jobs[2 * g];
+                let a = reads[2 * i + k].seq;
+                match jobs.get(2 * g + 1) {
+                    Some(&(i2, k2, w2)) => {
+                        let b = reads[2 * i2 + k2].seq;
+                        let (ra, rb) = rescue_align_two(index, (a, &w), (b, &w2), opt);
+                        vec![(w, ra), (w2, rb)]
+                    }
+                    None => vec![(w, rescue_align(index, a, &w, opt))],
+                }
+            });
+            two.into_iter().flatten().collect()
+        }
         None => parallel_map(jobs.len(), threads, |j| {
             let (i, k, w) = jobs[j];
             (w, rescue_align(index, reads[2 * i + k].seq, &w, opt))

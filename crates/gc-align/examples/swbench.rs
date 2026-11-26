@@ -1,5 +1,5 @@
 use gc_align::extend::Scoring;
-use gc_align::local::local_align;
+use gc_align::local::{local_align, local_align_pair};
 fn main() {
     let mut s = 88172645463325252u64;
     let mut r = |n: usize| -> Vec<u8> {
@@ -17,8 +17,16 @@ fn main() {
     let jobs: Vec<(Vec<u8>, Vec<u8>)> = (0..2000).map(|_| (r(148), r(tlen))).collect();
     let t = std::time::Instant::now();
     let mut acc = 0i64;
-    for (q, tt) in &jobs {
-        acc += local_align(q, tt, &sc, true, 19, true).score as i64;
+    if std::env::var("PAIR").is_ok_and(|v| v == "1") {
+        for p in jobs.chunks(2) {
+            let (a, b) =
+                local_align_pair((&p[0].0, &p[0].1), (&p[1].0, &p[1].1), &sc, true, 19, true);
+            acc += a.score as i64 + b.score as i64;
+        }
+    } else {
+        for (q, tt) in &jobs {
+            acc += local_align(q, tt, &sc, true, 19, true).score as i64;
+        }
     }
     let e = t.elapsed().as_secs_f64();
     println!(
