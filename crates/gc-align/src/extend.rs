@@ -5,6 +5,8 @@
 //! sein Score auf 0 fällt. Lücken öffnen nur aus einem Treffer oder Fehltreffer heraus, nie
 //! direkt aus einer anderen Lücke; ein Alignment wie `100M3I3D20M` entsteht so nicht.
 
+use gc_sys::simd::Signed16;
+
 /// Bewertung. Die Vorgaben sind die von BWA-MEM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scoring {
@@ -94,14 +96,6 @@ pub fn extend(query: &[u8], target: &[u8], sc: &Scoring, end_bonus: i32, h0: i32
 /// das jeder unterstützte Prozessor hat.
 const LANES: usize = 8;
 
-/// Die ersten `LANES` Werte als Feld fester Länge.
-#[inline(always)]
-fn lanes(s: &[i16]) -> [i16; LANES] {
-    let mut a = [0i16; LANES];
-    a.copy_from_slice(&s[..LANES]);
-    a
-}
-
 /// Bleiben alle Zwischenwerte von `extend_rows` sicher in 16 Bit? Der größte ist der höchste
 /// mögliche Score plus der Ausgleich für die Insertionsfolge, der kleinste liegt um dieselbe
 /// Größe unter dem Startwert der Folge (-16384).
@@ -139,6 +133,25 @@ fn extend_rows(
     h0: i32,
     stop_early: bool,
 ) -> Extension {
+    if crate::local::vectors_on() {
+        extend_rows_v::<gc_sys::simd::I16x8>(query, target, sc, end_bonus, h0, stop_early)
+    } else {
+        extend_rows_v::<gc_sys::simd::plain::I16x8>(query, target, sc, end_bonus, h0, stop_early)
+    }
+}
+
+thread_local! {
+    static SCRATCH: std::cell::RefCell<Vec<i16>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn extend_rows_v<V: Signed16>(
+    query: &[u8],
+    target: &[u8],
+    sc: &Scoring,
+    end_bonus: i32,
+    h0: i32,
+    stop_early: bool,
+) -> Extension {
     let n_q = query.len();
     let qlen = n_q as i32;
     let tlen = target.len() as i32;
@@ -146,8 +159,20 @@ fn extend_rows(
     let oe_del = (sc.o_del + sc.e_del) as i16;
     let oe_ins = (sc.o_ins + sc.e_ins) as i16;
     // Je Spalte j: h = H(i-1, j-1), e = E(i, j).
-    let mut h = vec![0i16; n_q + 2 + LANES];
-    let mut e = vec![0i16; n_q + 2 + LANES];
+    // Alle Arbeitsfelder liegen in einem Puffer je Kern, der von Aufruf zu Aufruf bleibt: Das
+    // Anlegen und Freigeben kostete rund ein Zehntel der Rechenzeit. Jedes Feld beginnt mit 0
+    // wie zuvor, das Ergebnis ist dasselbe.
+    let stride = n_q + LANES;
+    let cols = n_q + 2 + LANES;
+    let mut pool = SCRATCH.with(|c| std::mem::take(&mut *c.borrow_mut()));
+    pool.clear();
+    pool.resize(2 * cols + 5 * stride + 4 * stride, 0);
+    let (h, rest) = pool.split_at_mut(cols);
+    let (e, rest) = rest.split_at_mut(cols);
+    let (profile, rest) = rest.split_at_mut(5 * stride);
+    let (top, rest) = rest.split_at_mut(stride);
+    let (del, rest) = rest.split_at_mut(stride);
+    let (run, out) = rest.split_at_mut(stride);
     h[0] = h0 as i16;
     if qlen >= 1 {
         h[1] = (h0 - i32::from(oe_ins)).max(0) as i16;
@@ -166,20 +191,14 @@ fn extend_rows(
         .min(limit(sc.o_del, sc.e_del));
 
     // Alle Felder haben `LANES` Plätze Luft, damit ganze Blöcke gelesen werden können.
-    let stride = n_q + LANES;
-    let mut profile = vec![0i16; 5 * stride];
     for (a, row) in profile.chunks_exact_mut(stride).enumerate() {
         for (p, &q) in row.iter_mut().zip(query) {
             *p = sc.score(a as u8, q) as i16;
         }
     }
     let ramp: Vec<i16> = (0..=stride).map(|k| (k as i32 * sc.e_ins) as i16).collect();
-    // Arbeitsfelder einer Zeile: bester Wert ohne Insertion, neue Deletion, laufendes Maximum,
-    // fertige Zelle.
-    let mut top = vec![0i16; stride];
-    let mut del = vec![0i16; stride];
-    let mut run = vec![0i16; stride];
-    let mut out = vec![0i16; stride];
+    // Arbeitsfelder einer Zeile (oben im Puffer): bester Wert ohne Insertion, neue Deletion,
+    // laufendes Maximum, fertige Zelle.
 
     let (mut max, mut max_i, mut max_j) = (h0, -1i32, -1i32);
     let (mut max_ie, mut gscore, mut max_off) = (-1i32, -1i32, 0i32);
@@ -204,38 +223,40 @@ fn extend_rows(
             let points = &profile[t * stride + b..][..width];
             // 1. Paar-Score aus der Diagonale (tot bleibt tot), bester Wert ohne Insertion,
             //    Deletion für die nächste Zeile und der ausgeglichene Wert für die Insertion.
+            let (v_e_del, v_oe_del) = (V::splat(e_del), V::splat(oe_del));
+            let (v_oe_ins, v_e_ins, vz) = (V::splat(oe_ins), V::splat(e_ins), V::zero());
             for c in (0..width).step_by(LANES) {
-                let d = lanes(&h[b + c..]);
-                let p = lanes(&points[c..]);
-                let ej = lanes(&e[b + c..]);
-                let up = lanes(&ramp[c..]);
-                let (mut x, mut dn, mut g) = ([0i16; LANES], [0i16; LANES], [0i16; LANES]);
-                for l in 0..LANES {
-                    // Maske statt Verzweigung: alle Bits gesetzt, wo die Diagonale lebt.
-                    let v = (d[l] + p[l]) & -i16::from(d[l] != 0);
-                    x[l] = v.max(ej[l]);
-                    dn[l] = (ej[l] - e_del).max(v - oe_del).max(0);
-                    g[l] = v - oe_ins + up[l];
-                }
-                top[c..c + LANES].copy_from_slice(&x);
-                del[c..c + LANES].copy_from_slice(&dn);
-                run[c..c + LANES].copy_from_slice(&g);
+                let d = V::load(&h[b + c..]);
+                let p = V::load(&points[c..]);
+                let ej = V::load(&e[b + c..]);
+                let up = V::load(&ramp[c..]);
+                // Tot bleibt tot: 0, wo die Diagonale 0 ist.
+                let v = d.add_w(p).keep_if_nonzero(d);
+                v.max(ej).store(&mut top[c..]);
+                ej.sub_w(v_e_del)
+                    .max(v.sub_w(v_oe_del))
+                    .max(vz)
+                    .store(&mut del[c..]);
+                v.sub_w(v_oe_ins).add_w(up).store(&mut run[c..]);
             }
-            // 2. Insertion: laufendes Maximum der ausgeglichenen Werte links von der Zelle.
-            let mut best = i16::MIN / 2;
-            for r in &mut run[..len] {
-                let own = *r;
-                *r = best;
-                best = best.max(own);
+            // 2. Insertion: laufendes Maximum der ausgeglichenen Werte links von der Zelle, je
+            //    Block in drei Schritten (um 1, 2 und 4 Spuren verschoben) und mit dem Übertrag
+            //    aus dem Block davor. Werte hinter `len` gehen nicht in die Zeile ein.
+            let mut carry = V::splat(i16::MIN / 2);
+            for c in (0..width).step_by(LANES) {
+                let x = V::load(&run[c..]);
+                let mut incl = x.max(x.shift_fill(1, carry));
+                incl = incl.max(incl.shift_fill(2, carry));
+                incl = incl.max(incl.shift_fill(4, carry));
+                incl.shift_fill(1, carry).store(&mut run[c..]);
+                carry = V::splat(incl.hmax());
             }
             // 3. Zelle fertig: H(i, j).
             for c in (0..width).step_by(LANES) {
-                let (x, r, up) = (lanes(&top[c..]), lanes(&run[c..]), lanes(&ramp[c..]));
-                let mut o = [0i16; LANES];
-                for l in 0..LANES {
-                    o[l] = x[l].max(r[l] - up[l] + e_ins).max(0);
-                }
-                out[c..c + LANES].copy_from_slice(&o);
+                let (x, r, up) = (V::load(&top[c..]), V::load(&run[c..]), V::load(&ramp[c..]));
+                x.max(r.sub_w(up).add_w(v_e_ins))
+                    .max(vz)
+                    .store(&mut out[c..]);
             }
             // 4. Zurückschreiben: H um eins versetzt als Diagonale der nächsten Zeile.
             h[b + 1..=n].copy_from_slice(&out[..len]);
@@ -281,8 +302,8 @@ fn extend_rows(
             let bound = max.min(gscore - 1);
             if (rest == 0 || m + rest <= bound)
                 && nothing_left_to_gain(
-                    &h,
-                    &e,
+                    h,
+                    e,
                     (beg as usize, end as usize),
                     n_q,
                     sc.matching,
@@ -304,6 +325,7 @@ fn extend_rows(
         }
         end = (j + 2).min(qlen);
     }
+    SCRATCH.with(|c| *c.borrow_mut() = pool);
     Extension {
         score: max,
         query_len: max_j + 1,

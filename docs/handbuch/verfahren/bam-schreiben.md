@@ -44,8 +44,23 @@ macht dasselbe ein Test mit noodles als Leser (`crates/genome/tests/ausrichten.r
 ## Abschluss
 `finish` schreibt die letzten Blöcke und die BGZF-Endmarke. Ohne sie gilt eine BAM als abgeschnitten.
 
+## Kompressionsstufe
+Jeder BGZF-Block wird mit Deflate komprimiert, auf allen Kernen zugleich. Die Stufe ist
+`DEFAULT_LEVEL` = 6 wie bei samtools; `create_raw_level` und `create_from_text_level` nehmen eine
+andere (0 bis 9). `fq2bam` schreibt mit Stufe 3 (`--bam-stufe`, 6 gibt die bisherige Datei). Die Stufe ändert nur die Bytes der Datei, gelesen
+ergeben sich dieselben Sätze in derselben Reihenfolge; der Test `level_changes_bytes_not_records`
+prüft das und dass Stufe 6 dieselbe Datei ergibt wie die Vorgabe. Im Zusammenführen von `fq2bam`
+ist das Komprimieren der größte Teil der Zeit. Gemessen (Simulation über GRCh38, 300.000 Paare,
+4 Kerne, 6 Sortierteile):
+
+| Stufe | Zusammenführen | Größe |
+|---|---|---|
+| 6 | 1,17 s | 47,3 MB |
+| 3 | 0,94 s | 48,9 MB (+3,3 %) |
+| 1 | 0,63 s | 66,3 MB (+40 %) |
+
 ## Grenzen
-Noch kein Index (BAI/CSI), kein CRAM, kein Sortieren. Das kommt mit `fq2bam` (M5).
+Kein CRAM.
 
 ## Literatur
 Li et al. 2009; SAM-Spezifikation. Siehe [Literatur](../literatur.md).

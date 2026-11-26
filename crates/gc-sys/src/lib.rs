@@ -1,6 +1,8 @@
 //! Systemnahes je Prozessor und Betriebssystem. Fachcode ruft nur diese Funktionen auf und
 //! enthält selbst keine Befehle für einen bestimmten Prozessor.
 
+pub mod simd;
+
 /// Bittet den Prozessor, die Speicherzeile mit `value` schon in den Cache zu holen, weil sie
 /// gleich gelesen wird. Ändert nichts am Ergebnis eines Programms: Auf x86_64 und aarch64 ist es
 /// ein Hinweis-Befehl, der nie einen Fehler auslöst, auf anderen Prozessoren geschieht nichts.

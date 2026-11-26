@@ -7,7 +7,7 @@
 //! allein an mehrere Stellen passt, bekommt durch seinen Partner einen eindeutigen Ort.
 
 use crate::finalize::{hash_64, mapq, mark_primary, sort_dedup};
-use crate::local::local_align;
+use crate::local::{LocalResult, local_align};
 use crate::region::Region;
 use crate::sam::{AlignOptions, Line, Rec, gen_xa, make_line, regions_to_recs};
 use gc_index::FmIndex;
@@ -21,6 +21,12 @@ pub struct PairOptions {
     pub pen_unpaired: i32,
     /// Für so viele Bereiche eines Reads wird der Partner gesucht (`-m`).
     pub max_matesw: usize,
+    /// Die Ausrichtungen der Partnersuche je Block vorab sammeln und gemeinsam rechnen. Die
+    /// Ausgabe bleibt gleich; aus schaltet das ab (jedes Fenster einzeln, wie bisher).
+    pub batch_rescue: bool,
+    /// Gesammelte Fenster je zwei auf einmal ausrichten ([`crate::local::local_align_pair`]).
+    /// Gleiche Ausgabe; aus rechnet jedes Fenster für sich.
+    pub rescue_two: bool,
 }
 
 impl Default for PairOptions {
@@ -29,6 +35,8 @@ impl Default for PairOptions {
             max_ins: 10_000,
             pen_unpaired: 17,
             max_matesw: 50,
+            batch_rescue: true,
+            rescue_two: true,
         }
     }
 }
@@ -178,9 +186,29 @@ pub fn mate_rescue(
     ma: &mut Vec<Region>,
     opt: &AlignOptions,
 ) -> usize {
-    let sc = &opt.region.scoring;
+    mate_rescue_with(index, pes, a, mate, ma, opt, &[])
+}
+
+/// Ein Fenster der Partnersuche: Der Partner (`is_rev`: als reverses Komplement) wird im
+/// Textbereich `[rb, re)` lokal ausgerichtet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RescueWindow {
+    pub is_rev: bool,
+    pub rb: i64,
+    pub re: i64,
+}
+
+/// Die Fenster, die [`mate_rescue`] für den Bereich `a` ausrichten würde, wenn der Partner
+/// die Bereiche `ma` hat. Je Richtung höchstens eines.
+pub fn rescue_windows(
+    index: &FmIndex,
+    pes: &[InsertStats; 4],
+    a: &Region,
+    l_ms: i64,
+    ma: &[Region],
+    opt: &AlignOptions,
+) -> Vec<RescueWindow> {
     let l = index.reference().len() as i64;
-    let l_ms = mate.len() as i64;
     let a_rb = a.rb as i64;
     let mut skip = [false; 4];
     for r in 0..4 {
@@ -192,11 +220,11 @@ pub fn mate_rescue(
             skip[r] = true;
         }
     }
+    let mut out = Vec::new();
     if skip.iter().all(|&s| s) {
-        return 0;
+        return out;
     }
     let min_seed = opt.finalize.min_seed_len;
-    let mut n = 0;
     for r in 0..4 {
         if skip[r] {
             continue;
@@ -227,61 +255,139 @@ pub fn mate_rescue(
             }
         }
         if found_contig == Some(a.contig) && re - rb >= i64::from(min_seed) {
-            let seq: Vec<u8> = if is_rev {
-                mate.iter()
-                    .rev()
-                    .map(|&b| if b < 4 { 3 - b } else { 4 })
-                    .collect()
-            } else {
-                mate.to_vec()
+            out.push(RescueWindow { is_rev, rb, re });
+        }
+    }
+    out
+}
+
+/// Der Partner in der Ausrichtung des Fensters.
+pub fn rescue_query(mate: &[u8], is_rev: bool) -> Vec<u8> {
+    if is_rev {
+        mate.iter()
+            .rev()
+            .map(|&b| if b < 4 { 3 - b } else { 4 })
+            .collect()
+    } else {
+        mate.to_vec()
+    }
+}
+
+/// Die lokale Ausrichtung eines Fensters, wie [`mate_rescue`] sie rechnet.
+pub fn rescue_align(
+    index: &FmIndex,
+    mate: &[u8],
+    w: &RescueWindow,
+    opt: &AlignOptions,
+) -> LocalResult {
+    let sc = &opt.region.scoring;
+    let seq = rescue_query(mate, w.is_rev);
+    let target = index.text_range(w.rb as u64, w.re as u64);
+    let byte = mate.len() as i64 * i64::from(sc.matching) < 250;
+    local_align(
+        &seq,
+        &target,
+        sc,
+        byte,
+        opt.finalize.min_seed_len * sc.matching,
+        true,
+    )
+}
+
+/// Zwei Fenster wie [`rescue_align`], deren Vorwärtsläufe verzahnt rechnen. Gleiche
+/// Ergebnisse wie zwei Aufrufe von [`rescue_align`].
+pub fn rescue_align_two(
+    index: &FmIndex,
+    a: (&[u8], &RescueWindow),
+    b: (&[u8], &RescueWindow),
+    opt: &AlignOptions,
+) -> (LocalResult, LocalResult) {
+    let sc = &opt.region.scoring;
+    let byte = |m: &[u8]| m.len() as i64 * i64::from(sc.matching) < 250;
+    if byte(a.0) != byte(b.0) {
+        return (
+            rescue_align(index, a.0, a.1, opt),
+            rescue_align(index, b.0, b.1, opt),
+        );
+    }
+    let (qa, qb) = (rescue_query(a.0, a.1.is_rev), rescue_query(b.0, b.1.is_rev));
+    let ta = index.text_range(a.1.rb as u64, a.1.re as u64);
+    let tb = index.text_range(b.1.rb as u64, b.1.re as u64);
+    crate::local::local_align_pair(
+        (&qa, &ta),
+        (&qb, &tb),
+        sc,
+        byte(a.0),
+        opt.finalize.min_seed_len * sc.matching,
+        true,
+    )
+}
+
+/// Wie [`mate_rescue`], aber Fenster, die in `done` stehen, werden nicht neu ausgerichtet.
+/// So können die Ausrichtungen vieler Paare vorab gesammelt gerechnet werden (zum Beispiel
+/// auf einer Grafikeinheit); die Ausgabe bleibt gleich.
+pub fn mate_rescue_with(
+    index: &FmIndex,
+    pes: &[InsertStats; 4],
+    a: &Region,
+    mate: &[u8],
+    ma: &mut Vec<Region>,
+    opt: &AlignOptions,
+    done: &[(RescueWindow, LocalResult)],
+) -> usize {
+    let sc = &opt.region.scoring;
+    let l = index.reference().len() as i64;
+    let l_ms = mate.len() as i64;
+    let min_seed = opt.finalize.min_seed_len;
+    let windows = rescue_windows(index, pes, a, l_ms, ma, opt);
+    let mut n = 0;
+    for w in &windows {
+        let (is_rev, rb) = (w.is_rev, w.rb);
+        let aln = match done.iter().find(|d| d.0 == *w) {
+            Some(d) => d.1,
+            None => rescue_align(index, mate, w, opt),
+        };
+        if aln.score >= min_seed && aln.qb >= 0 {
+            let (qb, qe, tb, te) = (
+                i64::from(aln.qb),
+                i64::from(aln.qe),
+                i64::from(aln.tb),
+                i64::from(aln.te),
+            );
+            let mut b = Region {
+                rb: 0,
+                re: 0,
+                qb: if is_rev { l_ms - (qe + 1) } else { qb } as i32,
+                qe: if is_rev { l_ms - qb } else { qe + 1 } as i32,
+                contig: a.contig,
+                score: aln.score,
+                truesc: 0,
+                w: 0,
+                seedcov: 0,
+                seedlen0: 0,
+                sub: 0,
+                sub_n: 0,
+                secondary: -1,
+                csub: aln.score2,
+                rescued: true,
             };
-            let target = index.text_range(rb as u64, re as u64);
-            let byte = l_ms * i64::from(sc.matching) < 250;
-            let aln = local_align(&seq, &target, sc, byte, min_seed * sc.matching, true);
-            if aln.score >= min_seed && aln.qb >= 0 {
-                let (qb, qe, tb, te) = (
-                    i64::from(aln.qb),
-                    i64::from(aln.qe),
-                    i64::from(aln.tb),
-                    i64::from(aln.te),
-                );
-                let mut b = Region {
-                    rb: 0,
-                    re: 0,
-                    qb: if is_rev { l_ms - (qe + 1) } else { qb } as i32,
-                    qe: if is_rev { l_ms - qb } else { qe + 1 } as i32,
-                    contig: a.contig,
-                    score: aln.score,
-                    truesc: 0,
-                    w: 0,
-                    seedcov: 0,
-                    seedlen0: 0,
-                    sub: 0,
-                    sub_n: 0,
-                    secondary: -1,
-                    csub: aln.score2,
-                    rescued: true,
-                };
-                if is_rev {
-                    b.rb = ((l << 1) - (rb + te + 1)) as u64;
-                    b.re = ((l << 1) - (rb + tb)) as u64;
-                } else {
-                    b.rb = (rb + tb) as u64;
-                    b.re = (rb + te + 1) as u64;
-                }
-                b.seedcov = ((b.re - b.rb) as i32).min(b.qe - b.qb) >> 1;
-                // Nach Score einordnen: vor den ersten Bereich mit kleinerem Score.
-                let at = ma
-                    .iter()
-                    .position(|m| m.score < b.score)
-                    .unwrap_or(ma.len());
-                ma.insert(at, b);
+            if is_rev {
+                b.rb = ((l << 1) - (rb + te + 1)) as u64;
+                b.re = ((l << 1) - (rb + tb)) as u64;
+            } else {
+                b.rb = (rb + tb) as u64;
+                b.re = (rb + te + 1) as u64;
             }
-            n += 1;
+            b.seedcov = ((b.re - b.rb) as i32).min(b.qe - b.qb) >> 1;
+            // Nach Score einordnen: vor den ersten Bereich mit kleinerem Score.
+            let at = ma
+                .iter()
+                .position(|m| m.score < b.score)
+                .unwrap_or(ma.len());
+            ma.insert(at, b);
         }
-        if n > 0 {
-            sort_dedup(ma, index, None, sc, &opt.finalize);
-        }
+        n += 1;
+        sort_dedup(ma, index, None, sc, &opt.finalize);
     }
     n
 }
@@ -438,7 +544,51 @@ pub fn pair_lines(
     s: &mut [PairedRead<'_>; 2],
     opt: &AlignOptions,
 ) -> (Vec<Line>, usize) {
-    let (mut lines, n) = pair_lines_plain(index, pes, id, s, opt);
+    pair_lines_with(index, pes, id, s, opt, [&[], &[]])
+}
+
+/// Vorab gerechnete Ausrichtungen der Partnersuche je Read des Paares (der Read, der gesucht
+/// wird).
+pub type RescueDone<'a> = [&'a [(RescueWindow, LocalResult)]; 2];
+
+/// Die Fenster, die die Partnersuche eines Paares voraussichtlich ausrichtet, je gesuchtem
+/// Read. Gerechnet mit den Bereichen vor der Suche; was die Suche selbst noch ändert, kann
+/// einzelne Fenster überflüssig machen oder neue nötig, die dann einzeln gerechnet werden.
+pub fn planned_rescues(
+    index: &FmIndex,
+    pes: &[InsertStats; 4],
+    s: &[PairedRead<'_>; 2],
+    opt: &AlignOptions,
+) -> [Vec<RescueWindow>; 2] {
+    let mut out = [Vec::new(), Vec::new()];
+    for i in 0..2 {
+        let regs = &s[i].regions;
+        let mate = &s[1 - i];
+        for b in regs
+            .iter()
+            .filter(|r| r.score >= regs[0].score - opt.pair.pen_unpaired)
+            .take(opt.pair.max_matesw)
+        {
+            for w in rescue_windows(index, pes, b, mate.read.len() as i64, &mate.regions, opt) {
+                if !out[1 - i].contains(&w) {
+                    out[1 - i].push(w);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Wie [`pair_lines`], mit vorab gerechneten Ausrichtungen der Partnersuche.
+pub fn pair_lines_with(
+    index: &FmIndex,
+    pes: &[InsertStats; 4],
+    id: u64,
+    s: &mut [PairedRead<'_>; 2],
+    opt: &AlignOptions,
+    done: RescueDone<'_>,
+) -> (Vec<Line>, usize) {
+    let (mut lines, n) = pair_lines_plain(index, pes, id, s, opt, done);
     if let Some(rg) = &opt.sam.read_group {
         for line in &mut lines {
             line.set_read_group(rg);
@@ -456,6 +606,7 @@ fn pair_lines_plain(
     id: u64,
     s: &mut [PairedRead<'_>; 2],
     opt: &AlignOptions,
+    done: RescueDone<'_>,
 ) -> (Vec<Line>, usize) {
     let mut out: Vec<Line> = Vec::with_capacity(2);
     let sc = &opt.region.scoring;
@@ -472,7 +623,7 @@ fn pair_lines_plain(
     for i in 0..2 {
         for b in good[i].iter().take(opt.pair.max_matesw) {
             let mate = s[1 - i].read;
-            n += mate_rescue(index, pes, b, mate, &mut s[1 - i].regions, opt);
+            n += mate_rescue_with(index, pes, b, mate, &mut s[1 - i].regions, opt, done[1 - i]);
         }
     }
     for (i, p) in s.iter_mut().enumerate() {
@@ -763,6 +914,70 @@ mod tests {
         );
         assert_eq!(tag(a, "MC:Z:").unwrap(), "100M");
         assert_eq!(tag(b, "MQ:i:").unwrap(), "60");
+    }
+
+    #[test]
+    fn rescues_computed_ahead_give_the_same_lines() {
+        let (index, codes) = setup();
+        let mut pairs = ordinary(&codes);
+        // Einige Partner ohne eigene Seeds, damit die Partnersuche Fenster ausrichtet.
+        for p in [3, 5, 17, 30] {
+            for i in (5..100).step_by(12) {
+                pairs[p][1][i] = (pairs[p][1][i] + 1) & 3;
+            }
+        }
+        let reads: Vec<crate::batch::ReadInput<'_>> = pairs
+            .iter()
+            .flat_map(|p| p.iter())
+            .map(|r| crate::batch::ReadInput {
+                name: "p",
+                seq: r,
+                qual: &[],
+            })
+            .collect();
+        let mut opt = AlignOptions::default();
+        let (ahead, _) = crate::batch::align_pairs(&index, &reads, 0, &opt, 3);
+        // Mit einem Rechenkern, der die Schritte der Grafikeinheit auf dem Prozessor geht.
+        #[derive(Debug)]
+        struct Steps;
+        impl crate::local::RescueKernel for Steps {
+            fn forward(
+                &self,
+                jobs: &[(&[u8], &[u8])],
+                sc: &crate::extend::Scoring,
+            ) -> Option<Vec<crate::local::Forward>> {
+                Some(
+                    jobs.iter()
+                        .map(|(q, t)| crate::local::kernel_reference(q, t, sc))
+                        .collect(),
+                )
+            }
+        }
+        opt.rescue_kernel = Some(std::sync::Arc::new(Steps));
+        let (kernel, _) = crate::batch::align_pairs(&index, &reads, 0, &opt, 3);
+        assert_eq!(ahead, kernel);
+        opt.rescue_kernel = None;
+        opt.pair.batch_rescue = false;
+        let (single, _) = crate::batch::align_pairs(&index, &reads, 0, &opt, 3);
+        assert_eq!(ahead, single);
+        let mut s = [0, 1].map(|k| PairedRead {
+            name: "p",
+            read: &pairs[5][k],
+            qual: &[],
+            regions: find_regions(&index, &pairs[5][k], &opt).0,
+            frac_rep: 0.0,
+        });
+        let pes = estimate_insert(
+            &index,
+            &reads
+                .iter()
+                .map(|r| find_regions(&index, r.seq, &opt).0)
+                .collect::<Vec<_>>(),
+            &opt,
+        );
+        let planned = planned_rescues(&index, &pes, &s, &opt);
+        assert!(!planned[1].is_empty(), "Partnersuche ohne Fenster");
+        let _ = pair_lines(&index, &pes, 5, &mut s, &opt);
     }
 
     #[test]

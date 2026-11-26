@@ -3,8 +3,13 @@
 //! Jeder Read und jedes Paar wird für sich gerechnet; die Ergebnisse kommen in der Reihenfolge
 //! der Eingabe zurück. Die Ausgabe hängt deshalb nicht von der Zahl der Kerne ab.
 
-use crate::pair::{InsertStats, PairedRead, estimate_insert, pair_lines};
-use crate::sam::{AlignOptions, Line, align_read, find_regions, read_lines};
+use crate::finalize::mark_primary;
+use crate::pair::{
+    InsertStats, PairedRead, estimate_insert, pair_lines_with, planned_rescues, rescue_align,
+    rescue_align_two,
+};
+use crate::sam::{AlignOptions, Line, read_lines, regions_from_intervals};
+use crate::seed::collect_intervals_many;
 use gc_index::FmIndex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -74,10 +79,141 @@ pub fn align_reads(
     opt: &AlignOptions,
     threads: usize,
 ) -> Vec<Vec<Line>> {
-    parallel_map(reads.len(), threads, |i| {
-        let r = &reads[i];
-        let (regions, frac_rep) = align_read(index, r.seq, first_id + i as u64, opt);
-        read_lines(index, r.name, r.seq, r.qual, &regions, frac_rep, opt)
+    let found = regions_of_all(index, reads, opt, threads);
+    found
+        .into_iter()
+        .enumerate()
+        .map(|(i, (mut regions, frac_rep))| {
+            let r = &reads[i];
+            mark_primary(
+                &mut regions,
+                first_id + i as u64,
+                &opt.region.scoring,
+                &opt.finalize,
+            );
+            read_lines(index, r.name, r.seq, r.qual, &regions, frac_rep, opt)
+        })
+        .collect()
+}
+
+/// Reads je Gruppe, deren Seed-Suchen verschränkt laufen ([`collect_intervals_many`]).
+const SEED_GROUP: usize = 32;
+
+/// Bereiche aller Reads ([`crate::sam::find_regions`]), auf `threads` Kernen, die Seed-Suche in
+/// Gruppen verschränkt. Das Ergebnis ist dasselbe wie Read für Read.
+fn regions_of_all(
+    index: &FmIndex,
+    reads: &[ReadInput<'_>],
+    opt: &AlignOptions,
+    threads: usize,
+) -> Vec<(Vec<crate::region::Region>, f32)> {
+    use crate::fast::{FastMode, fast_region};
+    // Prüfmodus und ausgeschaltetes Verschränken: Read für Read wie bisher.
+    if !opt.seed.interleave || opt.fast == FastMode::Check {
+        return parallel_map(reads.len(), threads, |i| {
+            crate::sam::find_regions(index, reads[i].seq, opt)
+        });
+    }
+    if opt.seed.regroup {
+        // Erst der Schnellweg für alle Reads, dann die übrigen in vollen Gruppen.
+        let mut out: Vec<Option<(Vec<crate::region::Region>, f32)>> =
+            parallel_map(reads.len(), threads, |i| match opt.fast {
+                FastMode::On | FastMode::Simple => {
+                    fast_region(index, reads[i].seq, opt, opt.fast == FastMode::On)
+                        .map(|x| (vec![x], 0.0))
+                }
+                _ => None,
+            });
+        let rest: Vec<usize> = (0..reads.len()).filter(|&i| out[i].is_none()).collect();
+        let found = parallel_map(rest.len().div_ceil(SEED_GROUP), threads, |g| {
+            let ids = &rest[g * SEED_GROUP..((g + 1) * SEED_GROUP).min(rest.len())];
+            let seqs: Vec<&[u8]> = ids.iter().map(|&i| reads[i].seq).collect();
+            let intervals = collect_intervals_many(index, &seqs, &opt.seed);
+            ids.iter()
+                .zip(&intervals)
+                .map(|(&i, iv)| regions_from_intervals(index, reads[i].seq, iv, opt))
+                .collect::<Vec<_>>()
+        });
+        for (&i, r) in rest.iter().zip(found.into_iter().flatten()) {
+            out[i] = Some(r);
+        }
+        return out.into_iter().map(Option::unwrap).collect();
+    }
+    let groups = parallel_map(reads.len().div_ceil(SEED_GROUP), threads, |g| {
+        let group = &reads[g * SEED_GROUP..((g + 1) * SEED_GROUP).min(reads.len())];
+        // Erst der Schnellweg; nur die übrigen Reads gehen gemeinsam in die Seed-Suche.
+        let mut out: Vec<Option<(Vec<crate::region::Region>, f32)>> = group
+            .iter()
+            .map(|r| match opt.fast {
+                FastMode::On | FastMode::Simple => {
+                    fast_region(index, r.seq, opt, opt.fast == FastMode::On).map(|x| (vec![x], 0.0))
+                }
+                _ => None,
+            })
+            .collect();
+        let rest: Vec<usize> = (0..group.len()).filter(|&i| out[i].is_none()).collect();
+        let seqs: Vec<&[u8]> = rest.iter().map(|&i| group[i].seq).collect();
+        let intervals = collect_intervals_many(index, &seqs, &opt.seed);
+        for (&i, iv) in rest.iter().zip(&intervals) {
+            out[i] = Some(regions_from_intervals(index, group[i].seq, iv, opt));
+        }
+        out.into_iter().map(Option::unwrap).collect::<Vec<_>>()
+    });
+    groups.into_iter().flatten().collect()
+}
+
+/// Die gesammelten Fenster der Partnersuche mit einem Rechenkern: Vorwärtslauf dort, Anfang des
+/// Alignments auf dem Prozessor. Fenster, die der Kern nicht genau so rechnen kann (zu lange
+/// Reads), und alle, wenn der Kern ausfällt, rechnet der Prozessor wie bisher.
+fn rescue_with_kernel(
+    index: &FmIndex,
+    reads: &[ReadInput<'_>],
+    jobs: &[(usize, usize, crate::pair::RescueWindow)],
+    opt: &AlignOptions,
+    threads: usize,
+    kernel: &dyn crate::local::RescueKernel,
+) -> Vec<(crate::pair::RescueWindow, crate::local::LocalResult)> {
+    use crate::local::{from_rows, rows_exact, with_start};
+    let sc = &opt.region.scoring;
+    let min_sub = opt.finalize.min_seed_len * sc.matching;
+    let prepared = parallel_map(jobs.len(), threads, |j| {
+        let (i, k, w) = jobs[j];
+        let mate = reads[2 * i + k].seq;
+        let q = crate::pair::rescue_query(mate, w.is_rev);
+        let t = index.text_range(w.rb as u64, w.re as u64);
+        let on_kernel = rows_exact(q.len(), sc);
+        (q, t, on_kernel)
+    });
+    let picked: Vec<usize> = (0..jobs.len()).filter(|&j| prepared[j].2).collect();
+    let refs: Vec<(&[u8], &[u8])> = picked
+        .iter()
+        .map(|&j| (&prepared[j].0[..], &prepared[j].1[..]))
+        .collect();
+    let forward = kernel.forward(&refs, sc);
+    let mut slot = vec![usize::MAX; jobs.len()];
+    if forward.is_some() {
+        for (n, &j) in picked.iter().enumerate() {
+            slot[j] = n;
+        }
+    }
+    parallel_map(jobs.len(), threads, |j| {
+        let (i, k, w) = jobs[j];
+        let (q, t, _) = &prepared[j];
+        let r = match (&forward, slot[j]) {
+            (Some(f), n) if n != usize::MAX => {
+                let (gmax, te, qe, rows) = &f[n];
+                with_start(
+                    q,
+                    t,
+                    sc,
+                    true,
+                    min_sub,
+                    from_rows(*gmax, *te, *qe, rows, sc, min_sub),
+                )
+            }
+            _ => rescue_align(index, reads[2 * i + k].seq, &w, opt),
+        };
+        (w, r)
     })
 }
 
@@ -96,15 +232,14 @@ pub fn align_pairs(
         "Paare brauchen eine gerade Zahl von Reads"
     );
     // Stufe 1: Bereiche je Read.
-    let found = parallel_map(reads.len(), threads, |i| {
-        find_regions(index, reads[i].seq, opt)
-    });
+    let found = regions_of_all(index, reads, opt, threads);
     let (regions, frac_rep): (Vec<_>, Vec<_>) = found.into_iter().unzip();
     // Stufe 2: Insertgröße aus dem ganzen Block.
     let pes = estimate_insert(index, &regions, opt);
-    // Stufe 3: je Paar Partnersuche, Paarbewertung, Zeilen.
-    let lines = parallel_map(reads.len() / 2, threads, |i| {
-        let mut s = [0, 1].map(|k| {
+    // Stufe 3: je Paar Partnersuche, Paarbewertung, Zeilen. Die lokalen Ausrichtungen der
+    // Partnersuche werden vorab für den ganzen Block gesammelt und gemeinsam gerechnet.
+    let paired = |i: usize| {
+        [0, 1].map(|k| {
             let r = &reads[2 * i + k];
             PairedRead {
                 name: r.name,
@@ -113,8 +248,61 @@ pub fn align_pairs(
                 regions: regions[2 * i + k].clone(),
                 frac_rep: frac_rep[2 * i + k],
             }
-        });
-        pair_lines(index, &pes, first_pair_id + i as u64, &mut s, opt).0
+        })
+    };
+    let n_pairs = reads.len() / 2;
+    let planned = if opt.pair.batch_rescue {
+        parallel_map(n_pairs, threads, |i| {
+            planned_rescues(index, &pes, &paired(i), opt)
+        })
+    } else {
+        Vec::new()
+    };
+    // Alle Fenster des Blocks in einer Liste: (Paar, gesuchter Read, Fenster).
+    let jobs: Vec<(usize, usize, crate::pair::RescueWindow)> = planned
+        .iter()
+        .enumerate()
+        .flat_map(|(i, p)| (0..2).flat_map(move |k| p[k].iter().map(move |w| (i, k, *w))))
+        .collect();
+    let results = match &opt.rescue_kernel {
+        Some(kernel) => rescue_with_kernel(index, reads, &jobs, opt, threads, kernel.as_ref()),
+        None if opt.pair.rescue_two => {
+            let two = parallel_map(jobs.len().div_ceil(2), threads, |g| {
+                let (i, k, w) = jobs[2 * g];
+                let a = reads[2 * i + k].seq;
+                match jobs.get(2 * g + 1) {
+                    Some(&(i2, k2, w2)) => {
+                        let b = reads[2 * i2 + k2].seq;
+                        let (ra, rb) = rescue_align_two(index, (a, &w), (b, &w2), opt);
+                        vec![(w, ra), (w2, rb)]
+                    }
+                    None => vec![(w, rescue_align(index, a, &w, opt))],
+                }
+            });
+            two.into_iter().flatten().collect()
+        }
+        None => parallel_map(jobs.len(), threads, |j| {
+            let (i, k, w) = jobs[j];
+            (w, rescue_align(index, reads[2 * i + k].seq, &w, opt))
+        }),
+    };
+    // Je Paar und Read der Abschnitt seiner Ergebnisse.
+    let mut spans = vec![[(0usize, 0usize); 2]; if planned.is_empty() { 0 } else { n_pairs }];
+    let mut at = 0;
+    for (i, p) in planned.iter().enumerate() {
+        for k in 0..2 {
+            spans[i][k] = (at, at + p[k].len());
+            at += p[k].len();
+        }
+    }
+    let lines = parallel_map(n_pairs, threads, |i| {
+        let mut s = paired(i);
+        let done = if spans.is_empty() {
+            [&[][..], &[][..]]
+        } else {
+            [0, 1].map(|k| &results[spans[i][k].0..spans[i][k].1])
+        };
+        pair_lines_with(index, &pes, first_pair_id + i as u64, &mut s, opt, done).0
     });
     (lines, pes)
 }

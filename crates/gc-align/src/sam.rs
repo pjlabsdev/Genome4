@@ -5,6 +5,7 @@
 
 use crate::align::{Alignment, region_to_alignment};
 use crate::chain::{ChainOptions, FilterOptions, chain_seeds, filter_chains};
+use crate::fast::{FastMode, check_against_full, fast_region};
 use crate::finalize::{FinalizeOptions, mapq, mark_primary, sort_dedup};
 use crate::global::{Cigar, Op};
 use crate::pair::PairOptions;
@@ -23,6 +24,11 @@ pub struct AlignOptions {
     pub finalize: FinalizeOptions,
     pub sam: SamOptions,
     pub pair: PairOptions,
+    /// Schnellweg für leichte Reads ([`crate::fast`]); aus heißt Ausgabe wie bwa.
+    pub fast: FastMode,
+    /// Rechenkern für die gesammelten Ausrichtungen der Partnersuche (zum Beispiel auf der
+    /// Grafikeinheit). Ohne rechnet der Prozessor; die Ausgabe ist in beiden Fällen dieselbe.
+    pub rescue_kernel: Option<std::sync::Arc<dyn crate::local::RescueKernel>>,
 }
 
 /// Einstellungen der Ausgabe.
@@ -77,10 +83,42 @@ pub fn align_read(
 /// nach Score, dann Lage geordnet (bwa `mem_align1_core`). So gehen sie bei Paaren in die
 /// Schätzung der Insertgröße und in die Partnersuche.
 pub fn find_regions(index: &FmIndex, read: &[u8], opt: &AlignOptions) -> (Vec<Region>, f32) {
-    let l = index.reference().len();
+    match opt.fast {
+        FastMode::Off => find_regions_full(index, read, opt),
+        FastMode::On | FastMode::Simple => {
+            match fast_region(index, read, opt, opt.fast == FastMode::On) {
+                Some(r) => (vec![r], 0.0),
+                None => find_regions_full(index, read, opt),
+            }
+        }
+        FastMode::Check => {
+            let full = find_regions_full(index, read, opt);
+            if let Some(r) = fast_region(index, read, opt, true) {
+                check_against_full(&r, &full.0, opt);
+            }
+            full
+        }
+    }
+}
+
+/// Der volle Weg nach BWA-MEM: Seeds, Ketten, Verlängern, Bereiche bereinigen.
+pub fn find_regions_full(index: &FmIndex, read: &[u8], opt: &AlignOptions) -> (Vec<Region>, f32) {
     let intervals = collect_intervals(index, read, &opt.seed);
-    let frac_rep = repeat_fraction(&intervals, opt.seed.max_occ, read.len());
-    let seeds = locate_seeds(index, &intervals, &opt.seed);
+    regions_from_intervals(index, read, &intervals, opt)
+}
+
+/// [`find_regions`] ab den fertigen Treffern der Seed-Suche (aus [`collect_intervals`] oder
+/// [`crate::seed::collect_intervals_many`]).
+pub fn regions_from_intervals(
+    index: &FmIndex,
+    read: &[u8],
+    intervals: &[gc_index::Smem],
+    opt: &AlignOptions,
+) -> (Vec<Region>, f32) {
+    crate::region::neuer_read();
+    let l = index.reference().len();
+    let frac_rep = repeat_fraction(intervals, opt.seed.max_occ, read.len());
+    let seeds = locate_seeds(index, intervals, &opt.seed);
     let chains = filter_chains(chain_seeds(&seeds, l, &opt.chain), &opt.filter);
     let mut regions = Vec::new();
     for c in &chains {

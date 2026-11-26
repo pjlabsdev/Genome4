@@ -51,6 +51,25 @@ impl Packed {
     pub fn get(&self, i: u64) -> u8 {
         (self.words[(i / 32) as usize] >> (2 * (i % 32)) & 3) as u8
     }
+
+    /// Hängt die Basen `[from, to)` an `out` an, Wort für Wort statt Base für Base. Gleich wie
+    /// `get` für jede Stelle.
+    pub fn extend_range(&self, from: u64, to: u64, out: &mut Vec<u8>) {
+        if from >= to {
+            return;
+        }
+        out.reserve((to - from) as usize);
+        let mut i = from;
+        while i < to {
+            let mut word = self.words[(i / 32) as usize] >> (2 * (i % 32));
+            let n = (32 - i % 32).min(to - i);
+            for _ in 0..n {
+                out.push((word & 3) as u8);
+                word >>= 2;
+            }
+            i += n;
+        }
+    }
 }
 
 /// Das Referenzgenom, wie es in den Index eingeht.
@@ -158,6 +177,27 @@ impl Reference {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn extend_range_equals_get() {
+        let mut packed = Packed::default();
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        for _ in 0..300 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            packed.push((state & 3) as u8);
+        }
+        for from in 0..=packed.len {
+            for to in from..=packed.len {
+                let mut got = vec![9];
+                packed.extend_range(from, to, &mut got);
+                let want: Vec<u8> = (from..to).map(|i| packed.get(i)).collect();
+                assert_eq!(got[0], 9);
+                assert_eq!(got[1..], want[..], "[{from}, {to})");
+            }
+        }
+    }
+
     use super::*;
 
     #[test]

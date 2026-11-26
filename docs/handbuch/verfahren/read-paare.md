@@ -82,6 +82,62 @@ MAPQ, wenn das Paar gewinnt:
 Hat ein Read mehrere Teile an verschiedenen Orten (geteilter Read), wird das Paar wie zwei
 einzelne Reads gemeldet, mit den Feldern des Partners.
 
+### Partnersuche gesammelt rechnen
+Vor dem Paaren plant `planned_rescues` für jedes Paar die Fenster, die die Partnersuche mit den
+Bereichen vor der Suche ausrichten würde. Alle Fenster des Blocks werden dann gemeinsam gerechnet
+(heute auf allen Kernen, später auch auf der Grafikeinheit), und `pair_lines_with` nimmt beim
+Paaren die fertigen Ergebnisse. Ändert die Suche selbst die Bereiche so, dass ein Fenster
+dazukommt, wird es einzeln gerechnet; ein überflüssiges bleibt ungenutzt. Die Ausgabe ist in jedem
+Fall dieselbe. Auf 421.564 HG002-Paaren (GRCh38) waren 218.556 Fenster geplant und 218.563
+gebraucht, die BAM war byte-gleich, das Tempo gleich. `PairOptions::batch_rescue = false` schaltet
+das Sammeln ab.
+
+**Je zwei Fenster verzahnt.** Die gesammelten Fenster werden paarweise ausgerichtet
+(`local_align_pair`): Die Vorwärtsläufe zweier Fenster rechnen Zeile für Zeile in derselben
+Schleife. Die Hauptschleife eines Laufs ist eine Kette, in der jeder Schritt auf den vorigen
+wartet; zwei unabhängige Ketten nebeneinander lassen die Rechenwerke weniger leer laufen. Jeder
+Lauf rechnet genau seine Schritte wie allein, ein Test vergleicht beide Wege auf zufälligen
+Reads und Fenstern (gleich und verschieden lang, beide Breiten, mit und ohne Anfangssuche).
+Auf 421.564 HG002-Paaren war die BAM byte-gleich. Schalter zurück:
+`PairOptions::rescue_two = false`; Messprogramm `examples/swbench` mit `PAIR=1`. Auf dem Mac
+(M5) ist der Rechenkern allein so 32 % schneller, im ganzen Lauf auf 1 Mio. PJ-Paaren aber nur
+rund 1 %: Rechnen alle Kerne gleichzeitig, schrumpft der Gewinn auf etwa 17 %, und unter
+Dauerlast begrenzt die Wärme des lüfterlosen Geräts den Takt.
+
+**Weniger Bereiche.** Die Partnersuche läuft für bis zu `PairOptions::max_matesw` Bereiche
+eines Reads (bwa `-m`, 50), die fast so gut sind wie der beste. Bei Reads aus Wiederholungen
+sind das viele Fenster, von denen rund 70 % nichts finden. `fq2bam --partnersuche-bereiche`
+setzt die Zahl; weniger spart Rechenzeit, ändert aber einzelne Zeilen. Auf 421.564
+HG002-Paaren (GRCh38, Schnellweg an):
+
+| Bereiche | Fenster | Zeilen anders (von 844.609) |
+|---|---|---|
+| 50 (bwa) | 218.556 | 0 |
+| 10 | 83.343 | 1.070 |
+| 3 | 32.974 | 1.415 |
+| 1 | 12.232 | 1.882 |
+
+Bei 10 sind die Unterschiede zu 72 % nur ein anderer MAPQ (meist etwas höher, weil weniger
+gerettete Nebenstellen den zweitbesten Score drücken), 21 % andere Zusatzfelder, 5 % ein anderer
+Ort, davon fast alle bei Reads mit MAPQ 0.
+
+Auf echten MGI-Daten ändert sich mehr: Bei 1 Mio. PJ-Paaren (Mac M5) sind mit 20 Bereichen
+1,7 % der Sätze anders (mit 10: 2,3 %, mit 3: 3,2 %), die Wandzeit sinkt von 38,5 auf 33,3 s
+(10: 30,9 s, 3: 28,7 bis 30,4 s). Ob das schadet, zeigt der Vergleich mit GIAB v4.2.1 (HG002,
+Benchmark-Regionen, einfacher Rufer aus gestapelten Reads mit MAPQ und Basenqualität ab 20):
+
+| Daten | Bereiche | richtig | falsch | fehlend |
+|---|---|---|---|---|
+| chr20 10–12 Mb, Illumina | 50 / 20 / 10 | 2.728 | 27 | 38 |
+| chr20 10–12 Mb, MGI (BGIseq) | 50 / 20 / 10 | 2.724 | 22 | 42 |
+| ganzes chr20, MGI, 6,37 Mio. Paare | 50 | 81.532 | 1.497 | 1.793 |
+| ganzes chr20, MGI, 6,37 Mio. Paare | 20 | 81.526 | 1.491 | 1.799 |
+
+Dazu an 100.000 simulierten Paaren mit bekanntem Ursprung: sicher (MAPQ ab 20) falsch platziert
+mit 50 und 20 Bereichen je 10 Reads, mit 10 Bereichen 20, mit 3 Bereichen 39. Seit dem
+2026-11-26 nimmt `fq2bam` deshalb 20 (pj); `--partnersuche-bereiche 50` gibt die bwa-gleiche
+Ausgabe. `PairOptions::max_matesw` bleibt in der Bibliothek 50.
+
 ## Was in den SAM-Zeilen dazukommt
 
 | Feld | Bedeutung |
@@ -116,9 +172,13 @@ sind (`--block-basen`). Zwei Folgen:
   ab (eine Deletion direkt nach einer Insertion gibt es nicht). `local.rs` rechnet dieselben
   Schritte in derselben Anordnung und liefert in 1.000 Prüffällen jeden Wert wie bwa (Score,
   Enden, zweitbester Score, Anfänge). Die Spuren sind feste Felder aus 16 Bytes oder 8 Werten
-  mit 16 Bit, die Schritte gesättigte Additionen, Subtraktionen und Maxima. Der Übersetzer macht
-  daraus Vektorbefehle (SSE2 auf Intel und AMD, NEON auf ARM), ohne systemnahen Code; das
-  Ergebnis ist auf jedem System dasselbe. Die erste Fassung, die jeden Wert einzeln mit 32 Bit
+  mit 16 Bit, die Schritte gesättigte Additionen, Subtraktionen und Maxima. Die Vektoren kommen
+  aus `gc-sys` (`simd.rs`): SSE2 auf Intel und AMD, NEON auf ARM, sonst gewöhnliche Felder. Ein
+  Test prüft jede Operation gegen die Felder. Vorher sollte der Übersetzer die Felder selbst in
+  Vektorbefehle verwandeln; das gelang nur zum Teil. Mit den Vektoren ist das lokale Alignment
+  2,6-mal so schnell (148 gegen 1.000 Basen) und das Ausrichten auf chr20 10 bis 15 % schneller,
+  bei gleicher BAM. Schalter `GENOME_SIMD=0` rechnet wieder mit den Feldern. Das Ergebnis ist
+  auf jedem System dasselbe. Die erste Fassung, die jeden Wert einzeln mit 32 Bit
   rechnet, bleibt als Prüfmaßstab im Test: 3.000 Zufallsfälle, beide Breiten, jeder Wert gleich.
 - **Bei der Partnersuche gefundene Bereiche** haben keinen Anteil häufiger Seeds (er bleibt 0)
   und werden für den CIGAR mit schmalem Band ausgerichtet, wie in bwa.

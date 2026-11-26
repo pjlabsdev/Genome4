@@ -71,8 +71,40 @@ Cache, der Prozessor wartet also bei jedem Schritt auf den Hauptspeicher. Deshal
 die Zählblöcke aller Bereiche dieses Schritts angefordert (`prefetch_row`, über `gc-sys`) und erst
 dann gezählt. Die Wartezeiten überlappen sich. Am Ergebnis ändert das nichts, es ist nur ein
 Hinweis an den Prozessor. Muster, die in der Tabelle für kurze Muster stehen, brauchen keinen
-Block und werden übersprungen. Der Schritt nach rechts kann das nicht nutzen: Dort hängt jeder
-Schritt vom vorigen ab.
+Block und werden übersprungen. Innerhalb eines Reads hängt der Schritt nach rechts vom vorigen
+ab.
+
+**Mehrere Reads verschränkt** (wie BWA-MEM2). Die Suchen sind deshalb in Schritte zerlegt
+(`SmemSearch` für die ersten beiden Runden, `ForwardSeed` für die dritte): Jeder Schritt rechnet
+bis einschließlich des nächsten Zugriffs auf einen Zählblock. `collect_intervals_many` führt die
+drei Runden für 32 Reads zugleich: erst fordert jede Suche die Blöcke ihres nächsten Schritts an,
+dann rechnet jede ihren Schritt. `smems_at` und `seed_forward` gehen dieselben Schritte am Stück,
+die Ergebnisse sind gleich (Test `many_reads_at_once_give_the_same_intervals`, dazu am ganzen
+GRCh38 dieselbe BAM).
+
+**Befund.** Ein Profil (callgrind, chr20) zeigt: Die Seed-Suche wartet weniger auf den Speicher
+als angenommen, sie rechnet. Am chr20-Index, der zum Teil im Cache liegt, braucht sie für 200.000
+Reads 4,1 s, am ganzen GRCh38 6,4 s auf einem Kern; rund die Hälfte der Befehle steckt im Zählen
+(`occ4`). Das Verschränken bringt am ganzen Genom deshalb nur wenige Prozent. Seither zählt
+`occ4` in der hinteren Hälfte eines Blocks vom Zählstand des nächsten Blocks zurück, statt vom
+Anfang vorwärts, so sind es höchstens 64 statt 128 Basen. Zusammen: Seed-Suche am ganzen GRCh38
+6,0 s statt 6,4 s (jeweils bester von drei Läufen auf einem Kern, siehe
+[M10](../../bench/M10-ueberlappen.md)). Im ganzen `fq2bam` am ganzen GRCh38 auf 4 Kernen der
+Cloud war das allein nicht messbar (Ausrichten 19,7 bis 20,0 s vorher wie nachher).
+
+Seit Zweig `m18-schnellweg` läuft das Verschränken zusammen mit dem
+[Schnellweg](schnellweg.md): In jeder Gruppe von 32 Reads gehen zuerst die Reads mit
+eindeutigem Treffer über den Schnellweg, nur die übrigen kommen in die verschränkte Suche.
+Schalter zurück zum alten Verhalten: `SeedOptions::interleave = false` (dann sucht jeder Read
+einzeln). Bei `--schnellweg pruefen` sucht jeder Read immer einzeln. Messung Cloud, 421.564
+HG002-Paare am ganzen GRCh38, 4 Kerne, abwechselnd: verschränkt 22,1 / 22,0 / 21,4 s, einzeln
+23,4 / 22,5 / 22,4 s, also rund 4 % weniger; die BAM ist byte-gleich. Auf dem Mac (M5) ist die
+Seed-Suche allein verschränkt 39 % schneller als einzeln (200.000 PJ-Reads, 4,5 gegen 7,4 s),
+im ganzen Lauf waren es aber nur rund 2 %: In einer Gruppe von 32 Reads gehen die meisten über
+den Schnellweg, für die verschränkte Suche blieben je Gruppe nur wenige. Seither laufen erst alle
+Reads eines Stapels über den Schnellweg, die übrigen werden dann zu vollen Gruppen von 32
+zusammengefasst (Schalter zurück: `SeedOptions::regroup = false`). Gleiche Treffer, BAM
+byte-gleich.
 
 ## Was ein Treffer enthält
 Anfang und Ende im Read und den Doppelbereich. Die Zeilenzahl ist die rohe Häufigkeit im
@@ -101,3 +133,20 @@ Stranggrenze oder eine gefüllte N-Strecke reichen; diese fallen erst beim Orten
 
 ## Literatur
 Li 2012 (FMD-Index), Li 2013 (BWA-MEM, SMEM als Seeds), siehe [Literatur](../literatur.md).
+
+## Jede Zeile einmal orten
+Dieselbe Zeile des Index kommt in den Treffern eines Reads oft mehrfach vor: derselbe Treffer
+aus mehreren Runden oder ein Treffer, der Anfang eines längeren ist. Auf 87.698 HG002-MGI-Reads,
+die der Schnellweg nicht nimmt (Index GRCh38), waren 23 % der 5,17 Mio. zu ortenden Zeilen
+doppelt. `locate_seeds` ortet jede Zeile je Read nur einmal und verteilt die Orte danach wieder;
+die Seeds sind dieselben. Schalter: `SeedOptions::locate_unique = false` ortet wieder jede
+Zeile so oft, wie sie vorkommt.
+
+| Messung (2026-11-26, 1 Kern, A-B-B-A, `LOCT=1 REST=1 seedbench`) | mehrfach | einmal |
+|---|---|---|
+| Orten der 87.698 Reads | 8,87 s / 8,81 s | 8,04 s / 8,53 s |
+| `fq2bam`, 200.000 Paare | BAM byte-gleich | BAM byte-gleich |
+
+Geprüft und verworfen: den Ort eines einmaligen Treffers aus einem schon georteten einmaligen
+Treffer desselben Reads über die Diagonale vorhersagen (mit Vergleich gegen den Text eindeutig).
+Das trifft nur 5 % der Zeilen; fast alle Zeilen stammen aus Treffern mit vielen Fundstellen.

@@ -49,6 +49,13 @@ Die drei Kriterien stehen in einer Zahl von 64 Bit: 31 Bit Contig (ohne Contig d
    Sonst laufen alle Teile und der Rest gemeinsam durch eine Vorrangschlange: Es kommt immer der
    Datensatz mit dem kleinsten Schlüssel, bei Gleichstand der aus dem früheren Teil. Weil die
    Teile in der Reihenfolge der Eingabe entstanden sind, bleibt das Ganze stabil.
+   Jeden Teil liest und entpackt ein eigener Thread vorab und reicht ganze Sätze in Stücken von
+   rund 512 KB weiter, höchstens zwei Stücke im Voraus (zusätzlicher Speicher je Teil rund
+   1,5 MB, bei 115 Teilen rund 170 MB). Der Hauptthread mischt nur noch. Prüfsumme und Zähler
+   prüft weiterhin der Lese-Thread; bricht er ab, ohne das Ende gemeldet zu haben, bricht auch
+   das Zusammenführen ab. `GC_SORT_AHEAD=0` liest wie bisher alles im Hauptthread. Gemessen
+   (Simulation über GRCh38, 300.000 Paare, `--speicher-mb 32`, 6 Teile, 4 Kerne): Zusammenführen,
+   Markieren und Schreiben 1,35 s bisher, 1,17 s mit Vorauslesen; die BAM ist bytegleich.
 
 Folge: Das Ergebnis hängt nicht von `--speicher-mb`, nicht von der Zahl der Teile und nicht von
 der Zahl der Kerne ab.

@@ -15,7 +15,7 @@ sort, markdup, index, flagstat).
 genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.bam \
   [--lesegruppe '@RG\tID:lauf1\tSM:probe\tPL:ILLUMINA'] [--kerne 0] [--speicher-mb 2048] \
   [--temp ORDNER] [--block-basen 10000000] [--max-laenge 300] [--log DATEI] \
-  [--trimmen] [--sa-ausduennen 0] [--ohne-bericht] [--ohne-optisch] \
+  [--trimmen] [--sa-ausduennen 0] [--schnellweg aus] [--ortsspeicher-mb 64] [--grafikeinheit aus] [--partnersuche-bereiche 20] [--verlaengerung-merken an] [--bam-stufe 3] [--ohne-bericht] [--ohne-optisch] \
   [--optisch-pixel 100] [--optisch-mgi-abstand 1000]
 ```
 
@@ -34,6 +34,12 @@ genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.
 | `--ohne-optisch`, `--optisch-pixel`, `--optisch-mgi-abstand` | optische Duplikate zählen wie bei [`markdup`](markdup.md); ändert keine Flags | an, 100, 1000 |
 | `--ohne-bericht` | keinen Überblick schreiben (wie vor dem Überblick) | aus |
 | `--sa-ausduennen` | nur jede n-te Suffix-Array-Stichprobe des Index laden (Zweierpotenz). 0 wählt nach dem Arbeitsspeicher: die kleinste Zahl aus 1, 2 und 4, mit der Index und Sortierpuffer in die Hälfte des Arbeitsspeichers passen (`FQ2BAM.SPEICHERPLAN` im Protokoll). Mit 2 braucht der Index von GRCh38 (standard) rund 2 GB weniger Arbeitsspeicher und das Ausrichten etwa 2 % mehr Rechenzeit, mit 4 gut 20 % mehr. Die Ausgabe bleibt byte-gleich, siehe [FM-Index](../verfahren/fm-index.md#ausdünnen-beim-laden) | 0 |
+| `--schnellweg` | `an`: leichte Reads ohne Seed-Suche ausrichten, auch neben schwachen weiteren Kopien, MAPQ gleich, `XS` kann sich ändern; `einfach`: wie `an`, aber nur Reads, deren Stücke je höchstens eine Fundstelle haben; `pruefen`: beide Wege rechnen und zählen, siehe [Schnellweg](../verfahren/schnellweg.md) | aus |
+| `--ortsspeicher-mb` | Zwischenspeicher für das Orten der Seeds im Index, in MB; 0 schaltet ihn aus. Reads aus Wiederholungen treffen immer wieder dieselben Zeilen des Index, deren Position dann nicht neu durch die BWT gesucht wird. Die Ausgabe bleibt byte-gleich, siehe [FM-Index](../verfahren/fm-index.md#ortsspeicher) | 64 |
+| `--grafikeinheit` | `an`: Die Grafikeinheit desselben Geräts rechnet die lokalen Ausrichtungen der Partnersuche, gesammelt je Block; die Ausgabe bleibt byte-gleich. Ohne nutzbare Grafikeinheit rechnet der Prozessor (`GPU.FEHLT`). Siehe [Grafikeinheit](../verfahren/grafikeinheit.md) | aus |
+| `--partnersuche-bereiche` | Für höchstens so viele Bereiche eines Reads wird der Partner gesucht. bwa nimmt 50 (`-m`), damit ist die Ausgabe bwa-gleich. Der Standard 20 spart Rechenzeit bei Reads aus Wiederholungen (Mac, 1 Mio. PJ-Paare: 33,3 statt 38,5 s) und ruft am ganzen chr20 von HG002 gegen GIAB gleich gute Varianten, ändert aber einzelne Zeilen (dort 0,75 %, bei PJ 1,7 %), meist MAPQ und Ort von Reads in Wiederholungen. Siehe [Read-Paare](../verfahren/read-paare.md#partnersuche-gesammelt-rechnen) | 20 |
+| `--verlaengerung-merken` | Gleiche Verlängerungen eines Reads nur einmal rechnen. Das Ergebnis ist byte-gleich; `aus` rechnet jede neu wie bwa (Mac, 1 Mio. PJ-Paare: 32,9 statt 34,8 s). Siehe [Seed verlängern](../verfahren/seed-verlaengern.md#gleiche-verlängerungen-nur-einmal-rechnen) | an |
+| `--bam-stufe` | Kompressionsstufe der BAM, 0 (keine) bis 9 (kleinste Datei). Vorgabe 3 (von pj am 26.11.2026 so gewählt); `--bam-stufe 6` schreibt wie samtools und wie fq2bam bisher. Kleinere Stufen schreiben schneller und größer; die Sätze sind bei jeder Stufe dieselben, nur die Bytes der Datei ändern sich. Gemessen (Simulation, 300.000 Paare, 4 Kerne): Zusammenführen 1,17 s bei 6, 0,94 s bei 3 (+3,3 % Größe), 0,63 s bei 1 (+40 %). Siehe [BAM schreiben](../verfahren/bam-schreiben.md#kompressionsstufe) | 3 |
 
 ## Ablauf
 1. Index laden ([FM-Index](../verfahren/fm-index.md)). Mit `--trimmen` läuft gleichzeitig die

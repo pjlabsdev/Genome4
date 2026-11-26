@@ -160,6 +160,33 @@ enum Command {
         /// Arbeitsspeicher). Spart Arbeitsspeicher, kostet etwas Rechenzeit; die Ausgabe bleibt gleich.
         #[arg(long, default_value_t = 0)]
         sa_ausduennen: u32,
+        /// Schnellweg für leichte Reads: aus, an, einfach (ohne Prüfung weiterer Kopien: jedes
+        /// Stück mit mehreren Fundstellen geht den vollen Weg), oder pruefen (beide Wege rechnen,
+        /// den vollen ausgeben und Unterschiede zählen)
+        #[arg(long, default_value = "aus", value_parser = ["aus", "an", "einfach", "pruefen"])]
+        schnellweg: String,
+        /// Zwischenspeicher für das Orten der Seeds in MB (0 = aus). Reads aus Wiederholungen
+        /// treffen immer wieder dieselben Stellen des Index; die Ausgabe bleibt gleich
+        #[arg(long, default_value_t = 64)]
+        ortsspeicher_mb: usize,
+        /// Grafikeinheit für die Partnersuche: aus oder an. Mit an rechnet die Grafikeinheit
+        /// desselben Geräts die lokalen Ausrichtungen der Partnersuche; die Ausgabe bleibt gleich.
+        /// Ohne nutzbare Grafikeinheit rechnet der Prozessor (Warnung im Protokoll)
+        #[arg(long, default_value = "aus", value_parser = ["aus", "an"])]
+        grafikeinheit: String,
+        /// Für höchstens so viele Bereiche eines Reads wird der Partner gesucht. bwa nimmt 50
+        /// (`-m`); 50 gibt die bwa-gleiche Ausgabe. 20 spart Rechenzeit in Wiederholungen und
+        /// ruft gegen GIAB gleich gute Varianten, ändert aber einzelne Zeilen
+        #[arg(long, default_value_t = 20)]
+        partnersuche_bereiche: usize,
+        /// Gleiche Verlängerungen eines Reads nur einmal rechnen (an). Das Ergebnis ist dasselbe;
+        /// `aus` rechnet jede Verlängerung neu wie bwa, zum Vergleich
+        #[arg(long, default_value = "an", value_parser = ["an", "aus"])]
+        verlaengerung_merken: String,
+        /// Kompressionsstufe der BAM, 0 (keine) bis 9 (kleinste Datei). 3 schreibt schneller bei
+        /// rund 3 % größerer Datei; 6 wie samtools. Die Sätze sind bei jeder Stufe dieselben
+        #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(0..=9))]
+        bam_stufe: u8,
         /// Keinen Überblick (`<aus ohne .bam>.html` und `.bamqc.json`) schreiben
         #[arg(long)]
         ohne_bericht: bool,
@@ -428,6 +455,14 @@ struct SamRun<'a> {
     mate_tags: bool,
     /// Paare vor dem Ausrichten trimmen; verworfene Paare werden nicht ausgerichtet.
     trimmer: Option<&'a gc_io::trim::Trimmer>,
+    /// Schnellweg für leichte Reads ([`gc_align::FastMode`]).
+    fast: gc_align::FastMode,
+    /// Rechenkern für die Partnersuche (Grafikeinheit); ohne rechnet der Prozessor.
+    rescue_kernel: Option<&'a std::sync::Arc<dyn gc_align::local::RescueKernel>>,
+    /// Für so viele Bereiche eines Reads wird der Partner gesucht (bwa `-m`, 50).
+    max_matesw: usize,
+    /// Gleiche Verlängerungen eines Reads nur einmal rechnen.
+    memo: bool,
 }
 
 /// Richtet Reads aus, einzeln oder als Paare, Block für Block auf `threads` Kernen.
@@ -464,11 +499,19 @@ fn align_into(
         read_group,
         mate_tags,
         trimmer,
+        fast,
+        rescue_kernel,
+        max_matesw,
+        memo,
         ..
     } = *run;
     let mut opt = gc_align::AlignOptions::default();
     opt.sam.read_group = read_group.map(|rg| rg.id.clone());
     opt.sam.mate_tags = mate_tags;
+    opt.fast = fast;
+    opt.rescue_kernel = rescue_kernel.cloned();
+    opt.pair.max_matesw = max_matesw;
+    opt.region.memo = memo;
     let reader1 = fastq::open(first)?;
     let reader2 = match second {
         Some(p) => Some(fastq::open(p)?),
@@ -556,6 +599,10 @@ fn align_into(
                 "sekunden_schreiben": t_write,
                 "sekunden_warten_auf_lesen": t_wait,
                 "reads_je_sekunde": if seconds > 0.0 { n_reads as f64 / seconds } else { 0.0 },
+                "schnellweg": gc_align::fast::counts()
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), json!(v)))
+                    .collect::<serde_json::Map<_, _>>(),
             }),
         );
         Ok((n_reads, n_lines, trim_counts))
@@ -683,8 +730,19 @@ struct Fq2bamRun<'a> {
     trim: bool,
     /// Nur jede n-te Suffix-Array-Stichprobe laden.
     sa_thin: u32,
+    /// Zwischenspeicher für das Orten der Seeds in MB (0 = aus).
+    locate_cache_mb: usize,
+    /// Partnersuche auf der Grafikeinheit.
+    gpu: bool,
     /// Beim Index-Durchlauf die Zahlen für den Überblick sammeln.
     report: bool,
+    fast: gc_align::FastMode,
+    /// Für so viele Bereiche eines Reads wird der Partner gesucht.
+    max_matesw: usize,
+    /// Gleiche Verlängerungen eines Reads nur einmal rechnen.
+    memo: bool,
+    /// Kompressionsstufe der BAM.
+    bam_level: u8,
 }
 
 /// Zahlen von `flagstat` als JSON, für eine der beiden Gruppen.
@@ -920,7 +978,10 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
         } else {
             run.sa_thin
         };
-        let fm = load_index_thinned(run.index, thin);
+        let mut fm = load_index_thinned(run.index, thin);
+        if let Ok(fm) = fm.as_mut() {
+            fm.enable_locate_cache(locate_cache_bits(run.locate_cache_mb));
+        }
         if fm.is_ok() {
             st.finish(json!({}));
         }
@@ -942,6 +1003,7 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
         memory_bytes: run.memory_mb.saturating_mul(1 << 20),
         temp_dir: run.temp.to_path_buf(),
     })));
+    let kernel = if run.gpu { open_gpu_kernel() } else { None };
     let sam_run = SamRun {
         block_bases: run.block_bases,
         threads: run.threads,
@@ -949,6 +1011,10 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
         read_group: read_group.as_ref(),
         mate_tags: true,
         trimmer: trimmer.as_ref(),
+        fast: run.fast,
+        rescue_kernel: kernel.as_ref(),
+        max_matesw: run.max_matesw,
+        memo: run.memo,
     };
     let (reads, lines, trim_counts) = align_into(&fm, run.fastq, run.fastq2, &sam_run, &mut out)?;
     let trim_json = trimmer.as_ref().map(|_| trim_counts_json(&trim_counts));
@@ -980,8 +1046,9 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
     let part = PathBuf::from(part);
     let st = gc_log::stage("fq2bam.zusammenfuehren", json!({ "teile": sorted.runs }));
     let written = (|| -> Result<(gc_bam::SortStats, gc_bam::DupStats, gc_bam::FlagStats)> {
-        let mut writer = gc_io::bam::create_from_text(&part, &header_text, run.threads)
-            .with_context(|| format!("{} anlegen", part.display()))?;
+        let mut writer =
+            gc_io::bam::create_from_text_level(&part, &header_text, run.threads, run.bam_level)
+                .with_context(|| format!("{} anlegen", part.display()))?;
         let mut marker = gc_bam::DupMarker::new(gc_bam::DupOptions {
             max_length: run.max_length,
             optical: run.optical,
@@ -1677,6 +1744,67 @@ const MEMORY_SHARE: f64 = 0.5;
 /// Wählt das Ausdünnen der Suffix-Array-Stichproben nach dem Arbeitsspeicher: die kleinste
 /// Zweierpotenz (1, 2 oder 4), mit der Index und Sortierpuffer in `MEMORY_SHARE` des
 /// Arbeitsspeichers passen; passt nichts, 4. Ist der Arbeitsspeicher unbekannt, 1.
+/// Die Grafikeinheit als Rechenkern der Partnersuche.
+#[derive(Debug)]
+struct GpuKernel(gc_gpu::Gpu);
+
+impl gc_align::local::RescueKernel for GpuKernel {
+    fn forward(
+        &self,
+        jobs: &[(&[u8], &[u8])],
+        sc: &gc_align::Scoring,
+    ) -> Option<Vec<gc_align::local::Forward>> {
+        let k = gc_gpu::KernelScoring {
+            matching: sc.matching as u32,
+            mismatch: sc.mismatch as u32,
+            ambiguous: sc.ambiguous as u32,
+            o_del: sc.o_del as u32,
+            e_del: sc.e_del as u32,
+            o_ins: sc.o_ins as u32,
+            e_ins: sc.e_ins as u32,
+        };
+        match self.0.forward(jobs, &k) {
+            Ok(r) => Some(r),
+            Err(cause) => {
+                gc_log::warn(
+                    "GPU.FEHLER",
+                    "Grafikeinheit ausgefallen, der Prozessor rechnet diesen Block",
+                    json!({ "ursache": cause }),
+                );
+                None
+            }
+        }
+    }
+}
+
+/// Öffnet die Grafikeinheit; ohne nutzbare eine Warnung, und der Prozessor rechnet.
+fn open_gpu_kernel() -> Option<std::sync::Arc<dyn gc_align::local::RescueKernel>> {
+    match gc_gpu::Gpu::open() {
+        Ok(gpu) => {
+            gc_log::info(
+                "GPU.BEREIT",
+                "Grafikeinheit für die Partnersuche",
+                json!({ "geraet": gpu.name }),
+            );
+            Some(std::sync::Arc::new(GpuKernel(gpu)))
+        }
+        Err(cause) => {
+            gc_log::warn(
+                "GPU.FEHLT",
+                "Keine nutzbare Grafikeinheit, der Prozessor rechnet die Partnersuche",
+                json!({ "ursache": cause }),
+            );
+            None
+        }
+    }
+}
+
+/// Plätze des Ortsspeichers als Zweierpotenz: größte, die in `mb` passt (8 Bytes je Platz).
+fn locate_cache_bits(mb: usize) -> u32 {
+    let slots = mb.saturating_mul(1 << 20) / 8;
+    if slots == 0 { 0 } else { slots.ilog2() }
+}
+
 fn plan_sa_thinning(index: &std::path::Path, memory_mb: usize) -> Result<u32> {
     let file = std::fs::File::open(index)
         .with_context(|| format!("Index {} nicht lesbar", index.display()))?;
@@ -2316,6 +2444,12 @@ fn main() -> Result<()> {
             log,
             trimmen,
             sa_ausduennen,
+            ortsspeicher_mb,
+            grafikeinheit,
+            partnersuche_bereiche,
+            verlaengerung_merken,
+            bam_stufe,
+            schnellweg,
             ohne_bericht,
         } => {
             let threads = if kerne == 0 {
@@ -2354,6 +2488,12 @@ fn main() -> Result<()> {
                 "optisch": optisch.json(),
                 "trimmen": trimmen,
                 "sa_ausduennen": sa_ausduennen,
+                "ortsspeicher_mb": ortsspeicher_mb,
+                "grafikeinheit": grafikeinheit,
+                "partnersuche_bereiche": partnersuche_bereiche,
+                "verlaengerung_merken": verlaengerung_merken,
+                "bam_stufe": bam_stufe,
+                "schnellweg": schnellweg,
                 "bericht": !ohne_bericht,
             }));
             gc_log::input_file("fastq", &fastq);
@@ -2375,7 +2515,18 @@ fn main() -> Result<()> {
                 optical: optisch.rule(),
                 trim: trimmen,
                 sa_thin: sa_ausduennen,
+                locate_cache_mb: ortsspeicher_mb,
+                gpu: grafikeinheit == "an",
+                max_matesw: partnersuche_bereiche,
+                memo: verlaengerung_merken == "an",
+                bam_level: bam_stufe,
                 report: !ohne_bericht,
+                fast: match schnellweg.as_str() {
+                    "an" => gc_align::FastMode::On,
+                    "einfach" => gc_align::FastMode::Simple,
+                    "pruefen" => gc_align::FastMode::Check,
+                    _ => gc_align::FastMode::Off,
+                },
             };
             // Ein Fehler beim Überblick lässt die fertige BAM stehen: nur eine Warnung.
             match fq2bam(&run).map(|(mut result, qc)| {
@@ -2594,6 +2745,10 @@ fn main() -> Result<()> {
                         read_group: read_group.as_ref(),
                         mate_tags: partner_angaben,
                         trimmer: None,
+                        fast: gc_align::FastMode::Off,
+                        rescue_kernel: None,
+                        max_matesw: gc_align::pair::PairOptions::default().max_matesw,
+                        memo: gc_align::RegionOptions::default().memo,
                     },
                 )?;
             }
