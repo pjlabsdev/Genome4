@@ -98,7 +98,13 @@ eindeutigem Treffer über den Schnellweg, nur die übrigen kommen in die verschr
 Schalter zurück zum alten Verhalten: `SeedOptions::interleave = false` (dann sucht jeder Read
 einzeln). Bei `--schnellweg pruefen` sucht jeder Read immer einzeln. Messung Cloud, 421.564
 HG002-Paare am ganzen GRCh38, 4 Kerne, abwechselnd: verschränkt 22,1 / 22,0 / 21,4 s, einzeln
-23,4 / 22,5 / 22,4 s, also rund 4 % weniger; die BAM ist byte-gleich.
+23,4 / 22,5 / 22,4 s, also rund 4 % weniger; die BAM ist byte-gleich. Auf dem Mac (M5) ist die
+Seed-Suche allein verschränkt 39 % schneller als einzeln (200.000 PJ-Reads, 4,5 gegen 7,4 s),
+im ganzen Lauf waren es aber nur rund 2 %: In einer Gruppe von 32 Reads gehen die meisten über
+den Schnellweg, für die verschränkte Suche blieben je Gruppe nur wenige. Seither laufen erst alle
+Reads eines Stapels über den Schnellweg, die übrigen werden dann zu vollen Gruppen von 32
+zusammengefasst (Schalter zurück: `SeedOptions::regroup = false`). Gleiche Treffer, BAM
+byte-gleich.
 
 ## Was ein Treffer enthält
 Anfang und Ende im Read und den Doppelbereich. Die Zeilenzahl ist die rohe Häufigkeit im

@@ -19,6 +19,10 @@ pub struct SeedOptions {
     /// Die Seed-Suchen mehrerer Reads verschränkt rechnen ([`collect_intervals_many`]). Gleiche
     /// Treffer; aus heißt Read für Read wie bisher.
     pub interleave: bool,
+    /// Erst alle Reads eines Stapels über den Schnellweg, dann die übrigen zu vollen Gruppen
+    /// für die verschränkte Suche zusammenfassen. Aus: Gruppen nach der Reihenfolge der Reads,
+    /// in denen nach dem Schnellweg oft nur wenige Reads übrig sind. Gleiche Treffer.
+    pub regroup: bool,
 }
 
 impl Default for SeedOptions {
@@ -30,6 +34,7 @@ impl Default for SeedOptions {
             max_occ: 500,
             max_mem_intv: 20,
             interleave: true,
+            regroup: true,
         }
     }
 }
