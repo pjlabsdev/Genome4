@@ -17,11 +17,15 @@ k-mer). Jedes Syncmer wird mit einem der 2. bis 9. folgenden verbunden, dem mit 
 Bitdifferenz der Hashes. Ein Randstrobe überspannt 25 bis etwa 70 Basen und bleibt erhalten, wenn
 eine Abweichung zwischen den beiden Strobes liegt.
 
-Der Index (`gc_index::StrobeIndex`) hält je Randstrobe 8 Bytes: 32 Bit des Hashes und die
-Position. Die obersten 24 Bit wählen das Fach. Gebaut wird beim Start aus der Referenz des
-FM-Index, in Stücken von 4 Mb mit 10 kb Überhang auf allen Kernen; das Ergebnis hängt nicht von
-der Zahl der Kerne ab (Test). N-Strecken liefern keine Syncmere. GRCh38: 586,6 Mio. Einträge,
-4,7 GB, rund 60 s auf 4 Kernen.
+Der Index (`gc_index::StrobeIndex`) hält je Ort 6 Bytes: 16 Bit des Hashes und die Position.
+Die obersten 24 Bit des Hashes wählen das Fach, zusammen unterscheiden 40 Bit. Randstrobes mit
+mehr als 1000 Orten werden nicht gespeichert, nur ihr Hash in einer Sperrliste (Test mit einer
+Wiederholung aus 1200 Kopien). Gebaut wird beim Start aus der Referenz des FM-Index, in Stücken
+von 4 Mb mit 10 kb Überhang auf allen Kernen; die Fächer werden in vier Durchgängen gefüllt,
+sortiert und verdichtet, so braucht der Bau neben dem fertigen Index nur ein Viertel der Einträge
+zusätzlich. Das Ergebnis hängt nicht von der Zahl der Kerne ab (Test). N-Strecken liefern keine
+Syncmere. GRCh38: 576,7 Mio. Orte, 5.049 gesperrte Randstrobes, 3,5 GB (vorher mit 8 Bytes je
+Ort und allen Orten 4,8 GB), rund 90 s auf 4 Kernen.
 
 ## Ablauf je Read
 1. Randstrobes des Reads und seines reversen Komplements nachschlagen. Ein Randstrobe mit mehr als
@@ -59,7 +63,7 @@ Zähler im Protokoll (`ALIGN.FERTIG`, Feld `strobeweg`): `versucht`, `genommen`,
 ## Offen
 - Vergleich gegen GIAB HG002 (Varianten), getrennt nach schwierigen Regionen.
 - Index einmal auf die Platte schreiben statt bei jedem Start bauen.
-- Speicher: zusammen mit dem FM-Index am ganzen Genom rund 15 GB; für 16 GB zu knapp.
+- Speicher: am Mac (16 GB) passte die erste Fassung (4,8 GB) neben FM-Index und Sortierpuffer nicht ohne Auslagern; mit 3,5 GB und `--sa-ausduennen 8` neu zu prüfen.
 
 ## Literatur
 Sahlin K. Strobealign: flexible seed size enables ultra-fast and accurate read alignment.

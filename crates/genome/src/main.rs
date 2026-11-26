@@ -189,7 +189,7 @@ enum Command {
         bam_stufe: u8,
         /// Strobemer-Weg: Reads, die der Schnellweg nicht nimmt, über Randstrobes verorten, wenn
         /// sie dort eindeutig und vollständig passen (`an`). Schneller, aber nicht bwa-gleich;
-        /// geprüft gegen Simulation und GIAB. Baut beim Start einen Index (rund 4,8 GB für GRCh38)
+        /// geprüft gegen Simulation und GIAB. Baut beim Start einen Index (rund 3,5 GB für GRCh38)
         #[arg(long, default_value = "aus", value_parser = ["aus", "an"])]
         strobeweg: String,
         /// Keinen Überblick (`<aus ohne .bam>.html` und `.bamqc.json`) schreiben
@@ -1014,7 +1014,7 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
     let strobe = if run.strobe {
         let st = gc_log::stage("fq2bam.strobe_index", json!({ "kerne": run.threads }));
         let s = gc_index::StrobeIndex::build(fm.reference(), run.threads);
-        st.finish(json!({ "eintraege": s.len(), "bytes": s.bytes() }));
+        st.finish(json!({ "eintraege": s.len(), "gesperrt": s.blocked(), "bytes": s.bytes() }));
         Some(std::sync::Arc::new(s))
     } else {
         None

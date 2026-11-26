@@ -7,9 +7,9 @@
 //! einzelner Abweichungen zwischen den beiden Strobes erhalten.
 //!
 //! Der Index enthält nur den Vorwärtsstrang. Ein Read wird mit beiden Orientierungen
-//! nachgeschlagen. Je Randstrobe ein Eintrag von 8 Bytes: 32 Bit des Hashes und die Position im
-//! Vorwärtsstrang. Die obersten 24 Bit des Hashes wählen das Fach, die nächsten 32 stehen im
-//! Eintrag; zusammen unterscheiden 56 Bit. Für GRCh38 sind das rund 587 Mio. Einträge (4,7 GB)
+//! nachgeschlagen. Je Ort 6 Bytes: 16 Bit des Hashes und die Position im Vorwärtsstrang; die
+//! obersten 24 Bit des Hashes wählen das Fach, zusammen unterscheiden 40 Bit. Randstrobes mit mehr
+//! als [`KEEP_MAX`] Orten stehen nur in einer Sperrliste. Für GRCh38 rund 577 Mio. Orte (3,5 GB)
 //! und 64 MB Fächer. N-Strecken (`holes`) liefern keine Syncmere.
 
 use crate::reference::Reference;
@@ -97,24 +97,50 @@ pub fn randstrobes(sy: &[(u32, u64)], out: &mut Vec<(u64, u32)>) {
 
 /// Der Index.
 pub struct StrobeIndex {
-    /// Anfang jedes Fachs in `entries`, ein Eintrag mehr als Fächer.
+    /// Anfang jedes Fachs in `keys` und `pos`, ein Eintrag mehr als Fächer.
     buckets: Vec<u32>,
-    /// Je Fach nach Schlüssel sortiert: Schlüssel (32 Bit) << 32 | Position.
-    entries: Vec<u64>,
+    /// Je Fach aufsteigend: 16 weitere Bit des Hashes, dazu die Position.
+    keys: Vec<u16>,
+    pos: Vec<u32>,
+    /// Hashes (Fach << 16 | Schlüssel) mit mehr als [`KEEP_MAX`] Orten; ihre Orte sind nicht
+    /// gespeichert, sie gelten als gesperrt.
+    blocked: Vec<u64>,
 }
+
+/// Höchstens so viele Orte je Randstrobe werden gespeichert.
+pub const KEEP_MAX: usize = 1000;
 
 impl std::fmt::Debug for StrobeIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "StrobeIndex({} Einträge)", self.entries.len())
+        write!(
+            f,
+            "StrobeIndex({} Einträge, {} gesperrt)",
+            self.keys.len(),
+            self.blocked.len()
+        )
     }
 }
 
 /// Stücke von 4 Mb mit 10 kb Überhang: Ein Randstrobe braucht nur die folgenden 9 Syncmere.
 const CHUNK: u64 = 4 << 20;
 const OVER: u64 = 10_000;
+/// Der Bau füllt die Fächer in so vielen Durchgängen; so braucht er neben dem fertigen Index
+/// nur ein Viertel der Einträge zusätzlich.
+const PASSES: usize = 4;
+
+#[inline]
+fn bucket_of(h: u64) -> usize {
+    (h >> (64 - BUCKET_BITS)) as usize
+}
+
+#[inline]
+fn key_of(h: u64) -> u16 {
+    (h >> (64 - BUCKET_BITS - 16)) as u16
+}
 
 impl StrobeIndex {
-    /// Baut den Index über den Vorwärtsstrang der Referenz, auf `threads` Kernen.
+    /// Baut den Index über den Vorwärtsstrang der Referenz, auf `threads` Kernen. Das Ergebnis
+    /// hängt nicht von der Zahl der Kerne ab.
     pub fn build(reference: &Reference, threads: usize) -> Self {
         let total = reference.len();
         assert!(
@@ -152,7 +178,33 @@ impl StrobeIndex {
         };
         let threads = threads.max(1);
         let nb = 1usize << BUCKET_BITS;
-        // 1. Zählen
+        // Alle Stücke auf allen Kernen, je Stück `f` mit seinen Strobes; die Ergebnisse je Kern.
+        let over_pieces = |f: &(dyn Fn(&[(u64, u32)], &mut Vec<(u64, u32)>) + Sync)| {
+            let next = AtomicUsize::new(0);
+            std::thread::scope(|s| {
+                let hs: Vec<_> = (0..threads)
+                    .map(|_| {
+                        s.spawn(|| {
+                            let (mut st, mut kept) = (Vec::new(), Vec::new());
+                            let mut mine = Vec::new();
+                            loop {
+                                let i = next.fetch_add(1, Ordering::Relaxed);
+                                let Some(p) = pieces.get(i) else { break };
+                                strobes_of(p, &mut st);
+                                kept.clear();
+                                f(&st, &mut kept);
+                                mine.extend_from_slice(&kept);
+                            }
+                            mine
+                        })
+                    })
+                    .collect();
+                hs.into_iter()
+                    .map(|h| h.join().expect("Strobe-Thread"))
+                    .collect::<Vec<Vec<(u64, u32)>>>()
+            })
+        };
+        // 1. Zählen je Fach
         let next = AtomicUsize::new(0);
         let counts: Vec<Vec<u32>> = std::thread::scope(|s| {
             let hs: Vec<_> = (0..threads)
@@ -165,7 +217,7 @@ impl StrobeIndex {
                             let Some(p) = pieces.get(i) else { break };
                             strobes_of(p, &mut st);
                             for &(h, _) in &st {
-                                c[(h >> (64 - BUCKET_BITS)) as usize] += 1;
+                                c[bucket_of(h)] += 1;
                             }
                         }
                         c
@@ -176,99 +228,128 @@ impl StrobeIndex {
                 .map(|h| h.join().expect("Zähl-Thread"))
                 .collect()
         });
-        let mut buckets = vec![0u32; nb + 1];
+        let mut count = vec![0u64; nb];
         for c in &counts {
             for (i, &v) in c.iter().enumerate() {
-                buckets[i + 1] += v;
+                count[i] += u64::from(v);
             }
         }
         drop(counts);
-        for i in 1..buckets.len() {
-            buckets[i] += buckets[i - 1];
-        }
-        // 2. Füllen, Stück für Stück in der Reihenfolge der Stücke (gleiches Ergebnis bei jeder
-        // Zahl von Kernen); gerechnet werden die Strobes parallel in Gruppen.
-        let mut entries = vec![0u64; buckets[nb] as usize];
-        let mut fill: Vec<u32> = buckets[..nb].to_vec();
-        for group in pieces.chunks(threads * 4) {
-            let lists: Vec<Vec<(u64, u32)>> = std::thread::scope(|s| {
-                let hs: Vec<_> = group
-                    .chunks(group.len().div_ceil(threads))
-                    .map(|part| {
-                        s.spawn(move || {
-                            part.iter()
-                                .map(|p| {
-                                    let mut st = Vec::new();
-                                    strobes_of(p, &mut st);
-                                    st
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                    })
-                    .collect();
-                hs.into_iter()
-                    .flat_map(|h| h.join().expect("Strobe-Thread"))
-                    .collect()
+        let all: u64 = count.iter().sum();
+        let mut keys: Vec<u16> = Vec::with_capacity(all as usize);
+        let mut pos: Vec<u32> = Vec::with_capacity(all as usize);
+        let mut blocked = Vec::new();
+        let mut buckets = vec![0u32; nb + 1];
+        // 2. In Durchgängen über Bereiche von Fächern: sammeln, je Fach sortieren, verdichten.
+        let per_pass = nb.div_ceil(PASSES);
+        for pass in 0..PASSES {
+            let (b0, b1) = (pass * per_pass, ((pass + 1) * per_pass).min(nb));
+            let mut start = vec![0usize; b1 - b0 + 1];
+            for i in b0..b1 {
+                start[i - b0 + 1] = start[i - b0] + count[i] as usize;
+            }
+            let mut tmp = vec![0u64; start[b1 - b0]];
+            let mut fill: Vec<usize> = start[..b1 - b0].to_vec();
+            let lists = over_pieces(&|st, kept| {
+                kept.extend(st.iter().filter(|x| (b0..b1).contains(&bucket_of(x.0))));
             });
             for list in lists {
-                for (h, pos) in list {
-                    let bi = (h >> (64 - BUCKET_BITS)) as usize;
-                    entries[fill[bi] as usize] = (((h >> 8) & 0xffff_ffff) << 32) | u64::from(pos);
+                for (h, p) in list {
+                    let bi = bucket_of(h) - b0;
+                    tmp[fill[bi]] = (u64::from(key_of(h)) << 32) | u64::from(p);
                     fill[bi] += 1;
                 }
             }
-        }
-        drop(fill);
-        // 3. Je Fach sortieren
-        {
-            let mut slices: Vec<&mut [u64]> = Vec::with_capacity(nb);
-            let mut rest: &mut [u64] = &mut entries;
-            for i in 0..nb {
-                let (a, b) = rest.split_at_mut((buckets[i + 1] - buckets[i]) as usize);
-                slices.push(a);
-                rest = b;
-            }
-            let per = slices.len().div_ceil(threads);
-            std::thread::scope(|s| {
-                for part in slices.chunks_mut(per) {
-                    s.spawn(move || {
-                        for sl in part.iter_mut() {
-                            sl.sort_unstable();
-                        }
-                    });
+            drop(fill);
+            {
+                let mut slices: Vec<&mut [u64]> = Vec::with_capacity(b1 - b0);
+                let mut rest: &mut [u64] = &mut tmp;
+                for i in 0..b1 - b0 {
+                    let (a, b) = rest.split_at_mut(start[i + 1] - start[i]);
+                    slices.push(a);
+                    rest = b;
                 }
-            });
+                let per = slices.len().div_ceil(threads);
+                std::thread::scope(|s| {
+                    for part in slices.chunks_mut(per) {
+                        s.spawn(move || {
+                            for sl in part.iter_mut() {
+                                sl.sort_unstable();
+                            }
+                        });
+                    }
+                });
+            }
+            for i in 0..b1 - b0 {
+                let sl = &tmp[start[i]..start[i + 1]];
+                let mut a = 0;
+                while a < sl.len() {
+                    let k = sl[a] >> 32;
+                    let mut e = a + 1;
+                    while e < sl.len() && sl[e] >> 32 == k {
+                        e += 1;
+                    }
+                    if e - a > KEEP_MAX {
+                        blocked.push(((b0 + i) as u64) << 16 | k);
+                    } else {
+                        for &x in &sl[a..e] {
+                            keys.push(k as u16);
+                            pos.push(x as u32);
+                        }
+                    }
+                    a = e;
+                }
+                buckets[b0 + i + 1] = keys.len() as u32;
+            }
         }
-        StrobeIndex { buckets, entries }
+        StrobeIndex {
+            buckets,
+            keys,
+            pos,
+            blocked,
+        }
     }
 
-    /// Zahl der Einträge.
+    /// Zahl der gespeicherten Orte.
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.keys.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.keys.is_empty()
+    }
+
+    /// Zahl der gesperrten Randstrobes (mehr als [`KEEP_MAX`] Orte).
+    pub fn blocked(&self) -> usize {
+        self.blocked.len()
     }
 
     /// Bytes im Speicher.
     pub fn bytes(&self) -> usize {
-        self.entries.len() * 8 + self.buckets.len() * 4
+        self.keys.len() * 6 + self.buckets.len() * 4 + self.blocked.len() * 8
     }
 
     /// Positionen (Vorwärtsstrang, Anfang des ersten Strobes) eines Randstrobe-Hashes.
-    /// `None`, wenn es mehr als `max` gibt.
+    /// `None`, wenn es mehr als `max` gibt (oder mehr als [`KEEP_MAX`]).
     pub fn lookup(&self, h: u64, max: usize) -> Option<impl Iterator<Item = u64> + '_> {
-        let bi = (h >> (64 - BUCKET_BITS)) as usize;
-        let e = &self.entries[self.buckets[bi] as usize..self.buckets[bi + 1] as usize];
-        let key = (h >> 8) & 0xffff_ffff;
-        let a = e.partition_point(|&x| (x >> 32) < key);
-        let n = e[a..]
+        let bi = bucket_of(h);
+        let k = key_of(h);
+        if self
+            .blocked
+            .binary_search(&((bi as u64) << 16 | u64::from(k)))
+            .is_ok()
+        {
+            return None;
+        }
+        let (lo, hi) = (self.buckets[bi] as usize, self.buckets[bi + 1] as usize);
+        let ks = &self.keys[lo..hi];
+        let a = ks.partition_point(|&x| x < k);
+        let n = ks[a..]
             .iter()
             .take(max + 1)
-            .take_while(|&&x| (x >> 32) == key)
+            .take_while(|&&x| x == k)
             .count();
-        (n <= max).then(|| e[a..a + n].iter().map(|&x| x & 0xffff_ffff))
+        (n <= max).then(|| self.pos[lo + a..lo + a + n].iter().map(|&p| u64::from(p)))
     }
 }
 
@@ -319,7 +400,42 @@ mod tests {
         assert!(want > 3000);
         // mit einem und mit vielen Kernen gleich
         let one = StrobeIndex::build(&reference, 1);
-        assert_eq!(one.entries, idx.entries);
+        assert_eq!(one.keys, idx.keys);
+        assert_eq!(one.pos, idx.pos);
         assert_eq!(one.buckets, idx.buckets);
+        assert_eq!(one.blocked, idx.blocked);
+    }
+
+    #[test]
+    fn strobes_of_a_repeat_with_many_copies_are_blocked() {
+        let mut state = 0x0bad_cafe_u64;
+        let unit: Vec<u8> = (0..300)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                b"ACGT"[(state & 3) as usize]
+            })
+            .collect();
+        let seq: Vec<u8> = unit.iter().cycle().take(300 * 1200).copied().collect();
+        let mut reference = Reference::new();
+        reference.push_contig("wdh", &seq);
+        let idx = StrobeIndex::build(&reference, 2);
+        assert!(idx.blocked() > 0);
+        // drei Einheiten hintereinander, geprüft werden die Strobes der mittleren
+        let codes: Vec<u8> = unit
+            .iter()
+            .cycle()
+            .take(900)
+            .map(|&b| crate::reference::encode(b).unwrap())
+            .collect();
+        let (mut sy, mut sc, mut st) = (Vec::new(), Vec::new(), Vec::new());
+        syncmers(&codes, &mut sy, &mut sc);
+        randstrobes(&sy, &mut st);
+        st.retain(|x| (300..600).contains(&x.1));
+        assert!(!st.is_empty());
+        for &(h, _) in &st {
+            assert!(idx.lookup(h, usize::MAX).is_none());
+        }
     }
 }
