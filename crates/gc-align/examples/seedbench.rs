@@ -24,6 +24,16 @@ fn main() {
                 .collect()
         })
         .collect();
+    // REST=1: nur die Reads, die der Schnellweg nicht nimmt (wie in fq2bam).
+    let reads: Vec<Vec<u8>> = if std::env::var("REST").is_ok_and(|v| v == "1") {
+        let full = gc_align::sam::AlignOptions::default();
+        reads
+            .into_iter()
+            .filter(|r| gc_align::fast::fast_region(&index, r, &full, true).is_none())
+            .collect()
+    } else {
+        reads
+    };
     let opt = SeedOptions::default();
     let t = std::time::Instant::now();
     let mut n = 0;
