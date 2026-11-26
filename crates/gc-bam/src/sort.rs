@@ -67,6 +67,8 @@ pub struct Sorter {
     stats: SortStats,
     /// Teil, der gerade im Hintergrund geschrieben wird; liefert seine Größe auf der Platte.
     pending: Option<std::thread::JoinHandle<io::Result<u64>>>,
+    /// Teile beim Zusammenführen in eigenen Threads lesen und entpacken ([`Sorter::set_read_ahead`]).
+    read_ahead: bool,
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -83,7 +85,15 @@ impl Sorter {
             runs: Vec::new(),
             stats: SortStats::default(),
             pending: None,
+            read_ahead: !std::env::var_os("GC_SORT_AHEAD").is_some_and(|v| v == "0"),
         }
+    }
+
+    /// Beim Zusammenführen liest und entpackt je Teil ein eigener Thread vorab, in Stücken von
+    /// ganzen Sätzen (Vorgabe, `GC_SORT_AHEAD=0` schaltet es ab). Der Hauptthread mischt nur noch. Gleiche Sätze in gleicher
+    /// Reihenfolge; aus liest jeder Teil im Hauptthread.
+    pub fn set_read_ahead(&mut self, on: bool) {
+        self.read_ahead = on;
     }
 
     /// Nimmt kodierte Sätze hintereinander, jeden mit seinem Längenfeld. `records` muss mit
@@ -323,7 +333,12 @@ impl Sorter {
         // gleichem Schlüssel gewinnt die frühere Quelle, so bleibt die Sortierung stabil.
         let mut readers = Vec::with_capacity(self.runs.len());
         for path in &self.runs {
-            readers.push(RunReader::open(path)?);
+            let r = RunReader::open(path)?;
+            readers.push(if self.read_ahead {
+                Source::Ahead(AheadReader::start(r))
+            } else {
+                Source::Plain(Box::new(r))
+            });
         }
         let memory = readers.len();
         let mut heap = BinaryHeap::new();
@@ -381,6 +396,99 @@ fn finish_run(
     let file = file.into_inner().map_err(|e| e.into_error())?;
     file.sync_all()?;
     Ok(file)
+}
+
+/// Ein Teil beim Zusammenführen: direkt gelesen oder von einem Thread vorab.
+enum Source {
+    Plain(Box<RunReader>),
+    Ahead(AheadReader),
+}
+
+impl Source {
+    fn next(&mut self, record: &mut Vec<u8>) -> io::Result<bool> {
+        match self {
+            Source::Plain(r) => r.next(record),
+            Source::Ahead(r) => r.next(record),
+        }
+    }
+}
+
+/// Bytes je Stück, das der Lese-Thread weitergibt (ganze Sätze).
+const AHEAD_CHUNK: usize = 1 << 19;
+
+/// Liest einen Teil in einem eigenen Thread mit [`RunReader`] (dieselben Prüfungen) und gibt
+/// ganze Sätze in Stücken weiter. Höchstens zwei Stücke warten, damit der Speicher begrenzt ist.
+struct AheadReader {
+    rx: std::sync::mpsc::Receiver<io::Result<Vec<u8>>>,
+    chunk: Vec<u8>,
+    at: usize,
+    done: bool,
+}
+
+impl AheadReader {
+    fn start(mut reader: RunReader) -> Self {
+        let (tx, rx) = std::sync::mpsc::sync_channel(2);
+        std::thread::spawn(move || {
+            let mut record = Vec::new();
+            loop {
+                let mut chunk = Vec::with_capacity(AHEAD_CHUNK + 4096);
+                let mut end = false;
+                while chunk.len() < AHEAD_CHUNK {
+                    match reader.next(&mut record) {
+                        Ok(true) => chunk.extend_from_slice(&record),
+                        Ok(false) => {
+                            end = true;
+                            break;
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Err(e));
+                            return;
+                        }
+                    }
+                }
+                if !chunk.is_empty() && tx.send(Ok(chunk)).is_err() {
+                    return;
+                }
+                if end {
+                    // Leeres Stück: Ende, Prüfung am Schluss des Teils bestanden.
+                    let _ = tx.send(Ok(Vec::new()));
+                    return;
+                }
+            }
+        });
+        AheadReader {
+            rx,
+            chunk: Vec::new(),
+            at: 0,
+            done: false,
+        }
+    }
+
+    fn next(&mut self, record: &mut Vec<u8>) -> io::Result<bool> {
+        if self.at >= self.chunk.len() {
+            if self.done {
+                return Ok(false);
+            }
+            match self.rx.recv() {
+                Ok(Ok(chunk)) if chunk.is_empty() => {
+                    self.done = true;
+                    return Ok(false);
+                }
+                Ok(Ok(chunk)) => {
+                    self.chunk = chunk;
+                    self.at = 0;
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(_) => return Err(invalid("Lese-Thread eines Teils ohne Ende abgebrochen")),
+            }
+        }
+        let b = &self.chunk[self.at..];
+        let len = u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize;
+        record.clear();
+        record.extend_from_slice(&b[..4 + len]);
+        self.at += 4 + len;
+        Ok(true)
+    }
 }
 
 /// Liest einen Teil Satz für Satz und prüft am Ende Zahl, Länge und Prüfsumme.
@@ -527,12 +635,26 @@ mod tests {
     }
 
     fn run(records: &[Vec<u8>], memory_bytes: usize, tag: &str) -> (Vec<Vec<u8>>, SortStats) {
+        let ahead = run_with(records, memory_bytes, tag, true);
+        let plain = run_with(records, memory_bytes, &format!("{tag}-ohne"), false);
+        // Vorauslesen ändert nichts am Ergebnis
+        assert_eq!(ahead, plain);
+        ahead
+    }
+
+    fn run_with(
+        records: &[Vec<u8>],
+        memory_bytes: usize,
+        tag: &str,
+        read_ahead: bool,
+    ) -> (Vec<Vec<u8>>, SortStats) {
         let temp_dir = std::env::temp_dir().join(format!("gcbam-{tag}-{}", std::process::id()));
         std::fs::create_dir_all(&temp_dir).unwrap();
         let mut sorter = Sorter::new(SortOptions {
             memory_bytes,
             temp_dir: temp_dir.clone(),
         });
+        sorter.set_read_ahead(read_ahead);
         // in ungleichen Stücken hineingeben
         for chunk in records.chunks(7) {
             sorter.push(&chunk.concat()).unwrap();
@@ -606,18 +728,19 @@ mod tests {
     #[test]
     fn damaged_run_is_detected() {
         let temp_dir = std::env::temp_dir().join(format!("gcbam-schaden-{}", std::process::id()));
-        for case in 0..3 {
+        for case in 0..6 {
             std::fs::create_dir_all(&temp_dir).unwrap();
             let mut sorter = Sorter::new(SortOptions {
                 memory_bytes: 3000,
                 temp_dir: temp_dir.clone(),
             });
+            sorter.set_read_ahead(case < 3);
             for r in random_records(400, 99) {
                 sorter.push(&r).unwrap();
             }
             let path = sorter.runs[1].clone();
             let mut data = std::fs::read(&path).unwrap();
-            match case {
+            match case % 3 {
                 0 => {
                     let mid = data.len() / 2;
                     data[mid] ^= 0x40; // ein Bit im Inhalt
