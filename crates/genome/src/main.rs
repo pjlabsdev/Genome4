@@ -165,6 +165,10 @@ enum Command {
         /// den vollen ausgeben und Unterschiede zählen)
         #[arg(long, default_value = "aus", value_parser = ["aus", "an", "einfach", "pruefen"])]
         schnellweg: String,
+        /// Zwischenspeicher für das Orten der Seeds in MB (0 = aus). Reads aus Wiederholungen
+        /// treffen immer wieder dieselben Stellen des Index; die Ausgabe bleibt gleich
+        #[arg(long, default_value_t = 64)]
+        ortsspeicher_mb: usize,
         /// Keinen Überblick (`<aus ohne .bam>.html` und `.bamqc.json`) schreiben
         #[arg(long)]
         ohne_bericht: bool,
@@ -696,6 +700,8 @@ struct Fq2bamRun<'a> {
     trim: bool,
     /// Nur jede n-te Suffix-Array-Stichprobe laden.
     sa_thin: u32,
+    /// Zwischenspeicher für das Orten der Seeds in MB (0 = aus).
+    locate_cache_mb: usize,
     /// Beim Index-Durchlauf die Zahlen für den Überblick sammeln.
     report: bool,
     fast: gc_align::FastMode,
@@ -934,7 +940,10 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
         } else {
             run.sa_thin
         };
-        let fm = load_index_thinned(run.index, thin);
+        let mut fm = load_index_thinned(run.index, thin);
+        if let Ok(fm) = fm.as_mut() {
+            fm.enable_locate_cache(locate_cache_bits(run.locate_cache_mb));
+        }
         if fm.is_ok() {
             st.finish(json!({}));
         }
@@ -1692,6 +1701,12 @@ const MEMORY_SHARE: f64 = 0.5;
 /// Wählt das Ausdünnen der Suffix-Array-Stichproben nach dem Arbeitsspeicher: die kleinste
 /// Zweierpotenz (1, 2 oder 4), mit der Index und Sortierpuffer in `MEMORY_SHARE` des
 /// Arbeitsspeichers passen; passt nichts, 4. Ist der Arbeitsspeicher unbekannt, 1.
+/// Plätze des Ortsspeichers als Zweierpotenz: größte, die in `mb` passt (8 Bytes je Platz).
+fn locate_cache_bits(mb: usize) -> u32 {
+    let slots = mb.saturating_mul(1 << 20) / 8;
+    if slots == 0 { 0 } else { slots.ilog2() }
+}
+
 fn plan_sa_thinning(index: &std::path::Path, memory_mb: usize) -> Result<u32> {
     let file = std::fs::File::open(index)
         .with_context(|| format!("Index {} nicht lesbar", index.display()))?;
@@ -2331,6 +2346,7 @@ fn main() -> Result<()> {
             log,
             trimmen,
             sa_ausduennen,
+            ortsspeicher_mb,
             schnellweg,
             ohne_bericht,
         } => {
@@ -2370,6 +2386,7 @@ fn main() -> Result<()> {
                 "optisch": optisch.json(),
                 "trimmen": trimmen,
                 "sa_ausduennen": sa_ausduennen,
+                "ortsspeicher_mb": ortsspeicher_mb,
                 "schnellweg": schnellweg,
                 "bericht": !ohne_bericht,
             }));
@@ -2392,6 +2409,7 @@ fn main() -> Result<()> {
                 optical: optisch.rule(),
                 trim: trimmen,
                 sa_thin: sa_ausduennen,
+                locate_cache_mb: ortsspeicher_mb,
                 report: !ohne_bericht,
                 fast: match schnellweg.as_str() {
                     "an" => gc_align::FastMode::On,

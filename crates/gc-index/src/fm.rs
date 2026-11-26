@@ -100,7 +100,38 @@ pub struct FmIndex {
     reference: Reference,
     /// Bereiche aller kurzen Muster, beim Anlegen des Index berechnet (nicht in der Datei).
     pub(crate) short: crate::smem::ShortTable,
+    /// Zwischenspeicher für `locate_many` (leer = aus), siehe [`FmIndex::enable_locate_cache`].
+    locate_cache: LocateCache,
 }
+
+/// Plätze des Zwischenspeichers. Gehört nicht zum Inhalt des Index: Vergleiche sehen ihn nicht,
+/// eine Kopie beginnt leer mit gleich vielen Plätzen.
+#[derive(Debug, Default)]
+struct LocateCache(Vec<std::sync::atomic::AtomicU64>);
+
+impl Clone for LocateCache {
+    fn clone(&self) -> Self {
+        LocateCache(
+            (0..self.0.len())
+                .map(|_| std::sync::atomic::AtomicU64::new(0))
+                .collect(),
+        )
+    }
+}
+
+impl PartialEq for LocateCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for LocateCache {}
+
+/// Aufteilung eines Platzes im Zwischenspeicher von `locate_many`: Bit 63 belegt, darunter die
+/// oberen Bits der Zeile (die unteren sind die Platznummer), darunter 33 Bit Position.
+const CACHE_POS_BITS: u32 = 33;
+const CACHE_POS_MASK: u64 = (1 << CACHE_POS_BITS) - 1;
+const CACHE_TAG_MASK: u64 = (1 << (63 - CACHE_POS_BITS)) - 1;
 
 const REP: [u64; 4] = [
     0,
@@ -269,6 +300,7 @@ impl Builder {
             sa_samples: self.sa_samples,
             reference,
             short: crate::smem::ShortTable::default(),
+            locate_cache: LocateCache::default(),
         };
         index.short = crate::smem::ShortTable::build(&index);
         index
@@ -631,6 +663,49 @@ impl FmIndex {
         }
     }
 
+    /// Schaltet einen Zwischenspeicher für [`FmIndex::locate_many`] ein: `2^bits` Plätze zu je 8
+    /// Bytes, `bits = 0` schaltet ihn aus. Reads aus Wiederholungen (Alu, L1) finden ihre Seeds
+    /// immer wieder in denselben Zeilen des Index; jede Zeile kostet ohne Speicher bis zu
+    /// `sa_interval` Schritte durch die BWT, fast jeder davon außerhalb des Prozessor-Caches. Ein
+    /// Platz hält Zeile und Position zusammen in einem Wort; ein Treffer liefert genau den Wert,
+    /// den der Weg durch die BWT ergäbe. Mehrere Kerne lesen und schreiben ohne Sperre.
+    /// Geht nur, wenn Zeilen und Positionen in 33 Bit passen (bis 4,2 Mrd. Basen Referenz);
+    /// sonst bleibt er aus.
+    pub fn enable_locate_cache(&mut self, bits: u32) {
+        self.locate_cache = LocateCache(
+            if bits == 0 || bits > 30 || self.rows >= 1 << CACHE_POS_BITS {
+                Vec::new()
+            } else {
+                (0..1usize << bits)
+                    .map(|_| std::sync::atomic::AtomicU64::new(0))
+                    .collect()
+            },
+        );
+    }
+
+    fn cache_get(&self, row: u64) -> Option<u64> {
+        let n = self.locate_cache.0.len() as u64;
+        if n == 0 {
+            return None;
+        }
+        let e = self.locate_cache.0[(row & (n - 1)) as usize]
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let tag = row >> n.trailing_zeros();
+        (e >> 63 == 1 && (e >> CACHE_POS_BITS) & CACHE_TAG_MASK == tag)
+            .then_some(e & CACHE_POS_MASK)
+    }
+
+    fn cache_put(&self, row: u64, pos: u64) {
+        let n = self.locate_cache.0.len() as u64;
+        if n == 0 {
+            return;
+        }
+        let tag = row >> n.trailing_zeros();
+        let e = 1 << 63 | tag << CACHE_POS_BITS | pos;
+        self.locate_cache.0[(row & (n - 1)) as usize]
+            .store(e, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Textpositionen vieler Zeilen auf einmal, angehängt an `out` in der Reihenfolge von `rows`.
     /// Dasselbe Ergebnis wie `locate` je Zeile, aber die Wege mehrerer Zeilen laufen im
     /// Gleichschritt: In jeder Runde wird erst für alle offenen Zeilen der Block der BWT gelesen,
@@ -644,14 +719,20 @@ impl FmIndex {
         let out = &mut out[start..];
         let interval = u64::from(self.sa_interval);
         let mut row = [0u64; LANES];
+        let mut first = [0u64; LANES];
         let mut steps = [0u64; LANES];
         let mut slot = [0usize; LANES];
         let mut code = [0u8; LANES];
         let (mut live, mut next) = (0, 0);
         loop {
             while live < LANES && next < rows.len() {
-                (row[live], steps[live], slot[live]) = (rows[next], 0, next);
-                live += 1;
+                if let Some(pos) = self.cache_get(rows[next]) {
+                    out[next] = pos;
+                } else {
+                    (row[live], first[live], steps[live], slot[live]) =
+                        (rows[next], rows[next], 0, next);
+                    live += 1;
+                }
                 next += 1;
             }
             if live == 0 {
@@ -671,8 +752,10 @@ impl FmIndex {
                 match done {
                     Some(pos) => {
                         out[slot[i]] = pos;
+                        self.cache_put(first[i], pos);
                         live -= 1;
-                        (row[i], steps[i], slot[i]) = (row[live], steps[live], slot[live]);
+                        (row[i], first[i], steps[i], slot[i]) =
+                            (row[live], first[live], steps[live], slot[live]);
                     }
                     None => i += 1,
                 }
@@ -1083,6 +1166,7 @@ impl FmIndex {
             sa_samples,
             reference,
             short: crate::smem::ShortTable::default(),
+            locate_cache: LocateCache::default(),
         };
         index.short = crate::smem::ShortTable::build(&index);
         Ok(index)
@@ -1362,6 +1446,29 @@ mod tests {
                 let mut want = vec![7u64];
                 want.extend(rows.iter().map(|&r| index.locate(r)));
                 assert_eq!(got, want);
+            }
+        }
+    }
+
+    #[test]
+    fn the_locate_cache_gives_the_same_positions() {
+        for variant in [Variant::Kompakt, Variant::Schnell] {
+            let plain = build(&random_genome(5), variant);
+            // Kleiner Speicher mit 2^4 Plätzen: viele Zeilen teilen sich einen Platz.
+            for bits in [4, 12] {
+                let mut index = plain.clone();
+                index.enable_locate_cache(bits);
+                let mut rng = Rng(11);
+                for round in 0..3 {
+                    let rows: Vec<u64> = (0..500).map(|_| rng.next() % index.rows()).collect();
+                    // Zweimal dieselben Zeilen: beim zweiten Mal kommen viele aus dem Speicher.
+                    for _ in 0..2 {
+                        let mut got = Vec::new();
+                        index.locate_many(&rows, &mut got);
+                        let want: Vec<u64> = rows.iter().map(|&r| plain.locate(r)).collect();
+                        assert_eq!(got, want, "{variant:?}, 2^{bits} Plätze, Runde {round}");
+                    }
+                }
             }
         }
     }

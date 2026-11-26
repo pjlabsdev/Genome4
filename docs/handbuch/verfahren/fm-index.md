@@ -100,6 +100,23 @@ voneinander ab, der Prozessor wartet also auf mehrere Stellen des Arbeitsspeiche
 auf eine nach der anderen. Beim ganzen Genom liegt fast jeder Schritt außerhalb des
 Zwischenspeichers. Der Aligner ortet so alle Seeds eines Reads gemeinsam.
 
+### Ortsspeicher
+Reads aus Wiederholungen (Alu, L1) finden ihre Seeds immer wieder in denselben Zeilen: Jeder
+Alu-Read ortet bis zu 500 Fundstellen je Seed, und es sind meist dieselben. `locate_many` merkt
+sich deshalb Zeile und Position in einem Speicher mit `2^b` Plätzen (`fq2bam --ortsspeicher-mb`,
+Vorgabe 64 MB, 0 = aus). Platz = untere `b` Bits der Zeile; im Platz steht in einem Wort ein
+Belegt-Bit, die oberen Bits der Zeile und 33 Bit Position. Ein Treffer liefert genau den Wert, den
+der Weg durch die BWT ergäbe; ein neuer Wert überschreibt den alten Platz. Alle Kerne teilen sich
+den Speicher und lesen und schreiben ohne Sperre, denn ein Platz ist ein einziges atomares Wort.
+Geht nur bis 2^33 Zeilen (Referenz bis 4,2 Mrd. Basen), sonst bleibt er aus.
+
+| Messung (421.564 HG002-Paare, GRCh38, 4 Kerne, `--schnellweg an`) | ohne | 16 MB | 64 MB | 128 MB |
+|---|---|---|---|---|
+| Orten je Read aus Wiederholung | 121–124 µs | 75 µs | 75–79 µs | 81 µs |
+| Ausrichten gesamt | 25,3–26,5 s | 23,0 s | 22,4–24,0 s | 23,7 s |
+
+Die BAM ist byte-gleich mit und ohne Speicher (844.609 von 844.609 Sätzen).
+
 ## Von der Textposition zum Treffer
 Eine Fundstelle der Länge m an Textposition p liegt auf dem Vorwärtsstrang, wenn p + m ≤ L, und
 auf dem Gegenstrang, wenn p ≥ L (linkes Ende auf dem Vorwärtsstrang: 2L − p − m). Verworfen wird

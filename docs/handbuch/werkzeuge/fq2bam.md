@@ -15,7 +15,7 @@ sort, markdup, index, flagstat).
 genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.bam \
   [--lesegruppe '@RG\tID:lauf1\tSM:probe\tPL:ILLUMINA'] [--kerne 0] [--speicher-mb 2048] \
   [--temp ORDNER] [--block-basen 10000000] [--max-laenge 300] [--log DATEI] \
-  [--trimmen] [--sa-ausduennen 0] [--schnellweg aus] [--ohne-bericht] [--ohne-optisch] \
+  [--trimmen] [--sa-ausduennen 0] [--schnellweg aus] [--ortsspeicher-mb 64] [--ohne-bericht] [--ohne-optisch] \
   [--optisch-pixel 100] [--optisch-mgi-abstand 1000]
 ```
 
@@ -35,6 +35,7 @@ genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.
 | `--ohne-bericht` | keinen Überblick schreiben (wie vor dem Überblick) | aus |
 | `--sa-ausduennen` | nur jede n-te Suffix-Array-Stichprobe des Index laden (Zweierpotenz). 0 wählt nach dem Arbeitsspeicher: die kleinste Zahl aus 1, 2 und 4, mit der Index und Sortierpuffer in die Hälfte des Arbeitsspeichers passen (`FQ2BAM.SPEICHERPLAN` im Protokoll). Mit 2 braucht der Index von GRCh38 (standard) rund 2 GB weniger Arbeitsspeicher und das Ausrichten etwa 2 % mehr Rechenzeit, mit 4 gut 20 % mehr. Die Ausgabe bleibt byte-gleich, siehe [FM-Index](../verfahren/fm-index.md#ausdünnen-beim-laden) | 0 |
 | `--schnellweg` | `an`: leichte Reads ohne Seed-Suche ausrichten, auch neben schwachen weiteren Kopien, MAPQ gleich, `XS` kann sich ändern; `einfach`: wie `an`, aber nur Reads, deren Stücke je höchstens eine Fundstelle haben; `pruefen`: beide Wege rechnen und zählen, siehe [Schnellweg](../verfahren/schnellweg.md) | aus |
+| `--ortsspeicher-mb` | Zwischenspeicher für das Orten der Seeds im Index, in MB; 0 schaltet ihn aus. Reads aus Wiederholungen treffen immer wieder dieselben Zeilen des Index, deren Position dann nicht neu durch die BWT gesucht wird. Die Ausgabe bleibt byte-gleich, siehe [FM-Index](../verfahren/fm-index.md#ortsspeicher) | 64 |
 
 ## Ablauf
 1. Index laden ([FM-Index](../verfahren/fm-index.md)). Mit `--trimmen` läuft gleichzeitig die
