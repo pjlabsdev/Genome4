@@ -9,9 +9,9 @@ prüfen.
     cargo build --release
     zcat ref.fa.gz | ./target/release/strobe - reads_1.fq [reads_2.fq]
 
-Ausgabe je FASTQ `strobeN.tsv`: Name, Ort (1-basiert relativ zum Contig der Wahrheit im Namen,
-sonst global+1 minus 0), Strang, Fehlzahl, Fehlzahl des Zweitbesten, gesperrte Strobes, Treffer der
-größten Gruppe. Index ganzes GRCh38: 586,6 Mio. Strobes, 4,8 GB, Spitze 10,2 GB beim Bau.
+Ausgabe je FASTQ `strobeN.tsv`: Name, Contig, Ort (1-basiert), Strang (1 = Gegenstrang), Fehlzahl,
+Fehlzahl des Zweitbesten, gesperrte Strobes, Treffer der größten Gruppe. Steht die Wahrheit im
+Namen (`chr:pos:…`), zählt das Programm richtig und falsch mit. Index ganzes GRCh38: 586,6 Mio. Strobes, 4,8 GB, Spitze 10,2 GB beim Bau.
 
 Messung Cloud (4 Kerne, 300.000 simulierte Reads über GRCh38): 34 µs je Read; 82,4 % „sicher“
 (≤ 5 Fehler, Zweitbester ≥ 3 schlechter, nichts gesperrt), davon 7 falsch.

@@ -81,6 +81,8 @@ fn main() {
         }
         genome.extend(l.bytes().map(|b| b.to_ascii_uppercase()));
     }
+    let mut by_start: Vec<(i64, String)> = starts.iter().map(|(k, &v)| (v, k.clone())).collect();
+    by_start.sort();
     // Contig-Stücke (zwischen den N-Trennern), je Stück Strobes rechnen; zweimal: zählen, füllen.
     let mut cuts: Vec<i64> = starts.values().copied().collect();
     cuts.sort();
@@ -199,7 +201,9 @@ fn main() {
     let (mut ok, mut wrong, mut none, mut uniq_ok, mut uniq_wrong) = (0, 0, 0, 0, 0);
     for ((h, _), (best, n, second, _, _)) in reads.iter().zip(&res) {
         let f: Vec<&str> = h[1..].split(':').collect();
-        let pos: i64 = starts[f[0]] + f[1].parse::<i64>().unwrap() - 1;
+        let Some(&cs) = starts.get(f[0]) else { continue };
+        let Ok(tp) = f.get(1).unwrap_or(&"x").parse::<i64>() else { continue };
+        let pos: i64 = cs + tp - 1;
         if *n == 0 { none += 1; continue; }
         let p = (best & ((1 << 40) - 1)) - (1 << 32);
         let good = (p - pos).abs() <= 30;
@@ -210,9 +214,10 @@ fn main() {
         use std::io::Write;
         let mut f = std::io::BufWriter::new(std::fs::File::create(format!("strobe{}.tsv", fi + 1)).unwrap());
         for ((h, _), (best, n, second, skipped, top)) in reads.iter().zip(&res) {
-            let parts: Vec<&str> = h[1..].split(':').collect();
-            let p = (best & ((1 << 40) - 1)) - (1 << 32) - starts[parts[0]] + 1;
-            writeln!(f, "{}\t{}\t{}\t{}\t{}\t{}\t{}", &h[1..], p, best >> 40, n.wrapping_sub(1), second, skipped, top).unwrap();
+            let g = (best & ((1 << 40) - 1)) - (1 << 32);
+            let ci = by_start.partition_point(|x| x.0 <= g).saturating_sub(1);
+            let (contig, p) = (&by_start[ci].1, g - by_start[ci].0 + 1);
+            writeln!(f, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", h[1..].split_whitespace().next().unwrap(), contig, p, best >> 40, n.wrapping_sub(1), second, skipped, top).unwrap();
         }
     }
     let n = reads.len();
