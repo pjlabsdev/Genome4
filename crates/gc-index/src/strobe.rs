@@ -128,6 +128,9 @@ const OVER: u64 = 10_000;
 /// nur ein Viertel der Einträge zusätzlich.
 const PASSES: usize = 4;
 
+/// Wählt aus den Strobes eines Stücks die für einen Durchgang.
+type StrobeFilter<'a> = dyn Fn(&[(u64, u32)], &mut Vec<(u64, u32)>) + Sync + 'a;
+
 #[inline]
 fn bucket_of(h: u64) -> usize {
     (h >> (64 - BUCKET_BITS)) as usize
@@ -179,7 +182,7 @@ impl StrobeIndex {
         let threads = threads.max(1);
         let nb = 1usize << BUCKET_BITS;
         // Alle Stücke auf allen Kernen, je Stück `f` mit seinen Strobes; die Ergebnisse je Kern.
-        let over_pieces = |f: &(dyn Fn(&[(u64, u32)], &mut Vec<(u64, u32)>) + Sync)| {
+        let over_pieces = |f: &StrobeFilter<'_>| {
             let next = AtomicUsize::new(0);
             std::thread::scope(|s| {
                 let hs: Vec<_> = (0..threads)
