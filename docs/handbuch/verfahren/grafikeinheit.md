@@ -42,10 +42,14 @@ MacBook Air (M5, Metal), `gpubench` mit Fenstern zu 1.320 Basen und Reads zu 148
 | Fassung des Rechenkerns | Grafikeinheit je Fenster | Prozessor, 10 Kerne, je Fenster | abweichend |
 |---|---|---|---|
 | ein Faden je Ausrichtung (9ef0395) | 72–74 µs | 3,3–3,4 µs | 0 von 90.000 |
-| ein Faden je Spur (Untergruppen) | steht aus | | |
+| ein Faden je Spur (Untergruppen, 3710a6c) | 48 µs | 3,2 µs | 0 von 70.000 |
 
-Die erste Fassung war richtig, aber 22-mal langsamer als der Prozessor: Ein Faden ging allein
-über 1.320 × 160 Zellen, und seine Felder (5 KB) passten nicht in die Register. Die Cloud-Rechner
+Beide Fassungen sind richtig, aber 22- und 15-mal langsamer als die zehn Kerne. Die gestreifte
+Rechenfolge, die die Ausgabe gleich hält, geht Zeile für Zeile mit Nachkorrektur, also 1.320
+abhängige Schritte je Fenster; die NEON-Vektoren des M5 sind dafür gebaut. `--grafikeinheit`
+bleibt deshalb aus. Schneller wäre auf der Grafikeinheit ein Lauf über Antidiagonalen, der die
+Eigenheiten des gestreiften Laufs (keine Deletion direkt nach einer Insertion, Nachkorrektur ohne
+Rückwirkung auf die offene Deletion) Wert für Wert nachbilden müsste. Die Cloud-Rechner
 der Entwicklung haben keine Grafikeinheit; gemessen wird auf dem Mac.
 
 ## Grenzen
