@@ -82,14 +82,16 @@ pub fn align_read(
 pub fn find_regions(index: &FmIndex, read: &[u8], opt: &AlignOptions) -> (Vec<Region>, f32) {
     match opt.fast {
         FastMode::Off => find_regions_full(index, read, opt),
-        FastMode::On => match fast_region(index, read, opt) {
-            Some(r) => (vec![r], 0.0),
-            None => find_regions_full(index, read, opt),
-        },
+        FastMode::On | FastMode::Simple => {
+            match fast_region(index, read, opt, opt.fast == FastMode::On) {
+                Some(r) => (vec![r], 0.0),
+                None => find_regions_full(index, read, opt),
+            }
+        }
         FastMode::Check => {
             let full = find_regions_full(index, read, opt);
-            if let Some(r) = fast_region(index, read, opt) {
-                check_against_full(&r, &full.0);
+            if let Some(r) = fast_region(index, read, opt, true) {
+                check_against_full(&r, &full.0, opt);
             }
             full
         }

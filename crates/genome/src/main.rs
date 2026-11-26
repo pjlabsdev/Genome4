@@ -160,9 +160,10 @@ enum Command {
         /// Arbeitsspeicher). Spart Arbeitsspeicher, kostet etwas Rechenzeit; die Ausgabe bleibt gleich.
         #[arg(long, default_value_t = 0)]
         sa_ausduennen: u32,
-        /// Schnellweg für leichte Reads: aus, an, oder pruefen (beide Wege rechnen, den vollen
-        /// ausgeben und Unterschiede zählen)
-        #[arg(long, default_value = "aus", value_parser = ["aus", "an", "pruefen"])]
+        /// Schnellweg für leichte Reads: aus, an, einfach (ohne Prüfung weiterer Kopien: jedes
+        /// Stück mit mehreren Fundstellen geht den vollen Weg), oder pruefen (beide Wege rechnen,
+        /// den vollen ausgeben und Unterschiede zählen)
+        #[arg(long, default_value = "aus", value_parser = ["aus", "an", "einfach", "pruefen"])]
         schnellweg: String,
         /// Keinen Überblick (`<aus ohne .bam>.html` und `.bamqc.json`) schreiben
         #[arg(long)]
@@ -2394,6 +2395,7 @@ fn main() -> Result<()> {
                 report: !ohne_bericht,
                 fast: match schnellweg.as_str() {
                     "an" => gc_align::FastMode::On,
+                    "einfach" => gc_align::FastMode::Simple,
                     "pruefen" => gc_align::FastMode::Check,
                     _ => gc_align::FastMode::Off,
                 },

@@ -42,6 +42,9 @@ pub struct FastCounts {
     pub too_few_pieces: AtomicU64,
     pub disagree: AtomicU64,
     pub verify_failed: AtomicU64,
+    /// Weitere Kopien geprüft und schwach genug; zu gut oder zu nah.
+    pub copies_checked: AtomicU64,
+    pub copy_too_good: AtomicU64,
     /// Nur im Prüfmodus: der volle Weg lieferte genau diesen einen Bereich.
     pub same_as_full: AtomicU64,
     pub differs_from_full: AtomicU64,
@@ -54,6 +57,8 @@ pub static COUNTS: FastCounts = FastCounts {
     too_few_pieces: AtomicU64::new(0),
     disagree: AtomicU64::new(0),
     verify_failed: AtomicU64::new(0),
+    copies_checked: AtomicU64::new(0),
+    copy_too_good: AtomicU64::new(0),
     same_as_full: AtomicU64::new(0),
     differs_from_full: AtomicU64::new(0),
 };
@@ -71,8 +76,12 @@ pub enum FastMode {
     /// Aus: jeder Read geht den vollen Weg (Ausgabe wie bisher).
     #[default]
     Off,
-    /// An: leichte Reads nehmen den Schnellweg.
+    /// An: leichte Reads nehmen den Schnellweg, auch wenn einzelne Stücke an wenigen weiteren
+    /// Stellen passen und diese Kopien nachweislich schwach genug sind.
     On,
+    /// Einfach: wie `On`, aber jedes Stück mit mehr als einer Fundstelle schickt den Read den
+    /// vollen Weg (Stand vor den Kopien).
+    Simple,
     /// Prüfen: beide Wege rechnen, das Ergebnis des vollen Wegs ausgeben und zählen, wie oft der
     /// Schnellweg genau denselben Bereich geliefert hätte.
     Check,
@@ -91,8 +100,26 @@ fn seed_coverage(len: i32, mismatch: Option<i32>, min_len: i32) -> (i32, i32) {
     }
 }
 
+/// Höchstens so viele Fundstellen je Stück, damit der Schnellweg die übrigen Kopien noch prüft.
+const MAX_PIECE_HITS: u64 = 8;
+/// Höchstens so viele weitere Kopien (Anfänge, die nicht der gewählte sind).
+const MAX_COPIES: usize = 4;
+/// So weit über den Read hinaus wird bei einer weiteren Kopie ausgerichtet (Lücken bis zur
+/// Bandbreite 100 von bwa passen hinein).
+const COPY_MARGIN: u64 = 128;
+
 /// Sucht den einen Bereich eines leichten Reads. `None` heißt: voller Weg.
-pub fn fast_region(index: &FmIndex, read: &[u8], opt: &AlignOptions) -> Option<Region> {
+///
+/// Mit `copies` dürfen Stücke bis zu [`MAX_PIECE_HITS`] Fundstellen haben. Jede weitere Kopie
+/// wird dann mit dem ganzen Read lokal ausgerichtet; der Read nimmt den Schnellweg nur, wenn
+/// keine davon so gut ist, dass bwa sie in `XA` meldete, die MAPQ senkte oder von ihr aus den
+/// Partner suchte (siehe [`copy_limit`]).
+pub fn fast_region(
+    index: &FmIndex,
+    read: &[u8],
+    opt: &AlignOptions,
+    copies: bool,
+) -> Option<Region> {
     bump(&COUNTS.tried);
     let len = read.len();
     if len < 60 || read.iter().any(|&c| c > 3) {
@@ -101,31 +128,68 @@ pub fn fast_region(index: &FmIndex, read: &[u8], opt: &AlignOptions) -> Option<R
     }
     // Stücke von mindestens PIECE_MIN Basen. Eine zweite Kopie, die sich in höchstens
     // `n - 1` Ereignissen (Abweichung oder Lücke) vom Read unterscheidet, passt in mindestens
-    // einem Stück genau und fällt dort als zweite Fundstelle auf.
+    // einem Stück genau und fällt dort als weitere Fundstelle auf.
     let n = (len / PIECE_MIN).max(3);
     let cut = |k: usize| k * len / n;
-    let mut counts = [0u64; 16];
-    let n = n.min(counts.len());
-    let mut first = None;
-    for (k, c) in counts.iter_mut().enumerate().take(n) {
+    let mut iv = [(0u64, 0u64); 16];
+    let n = n.min(iv.len());
+    let max_hits = if copies { MAX_PIECE_HITS } else { 1 };
+    let mut many = false;
+    for (k, slot) in iv.iter_mut().enumerate().take(n) {
         let (lo, hi) = index.interval(&read[cut(k)..cut(k + 1)]);
-        *c = hi - lo;
-        if *c > 1 {
+        if hi - lo > max_hits {
             bump(&COUNTS.repeat);
             return None;
         }
-        if *c == 1 && first.is_none() {
-            first = Some((k, lo));
-        }
+        many |= hi - lo > 1;
+        *slot = (lo, hi);
     }
-    let zero = counts[..n].iter().filter(|&&c| c == 0).count();
-    let Some((k0, row)) = first.filter(|_| zero <= 1) else {
-        bump(&COUNTS.too_few_pieces);
-        return None;
-    };
-    let Some(s) = index.locate(row).checked_sub(cut(k0) as u64) else {
-        bump(&COUNTS.disagree);
-        return None;
+    let count = |k: usize| iv[k].1 - iv[k].0;
+    // Anfänge je Stück. Ohne Stück mit mehreren Fundstellen genügt ein Nachschlagen.
+    let mut starts: Vec<(u64, usize)> = Vec::new();
+    let s = if many {
+        for (k, &(lo, hi)) in iv.iter().enumerate().take(n) {
+            for row in lo..hi {
+                if let Some(s) = index.locate(row).checked_sub(cut(k) as u64) {
+                    starts.push((s, k));
+                }
+            }
+        }
+        starts.sort_unstable();
+        // Der Anfang, den alle Stücke bis auf höchstens eines teilen.
+        let mut best: Option<(u64, usize)> = None;
+        let mut i = 0;
+        while i < starts.len() {
+            let j = starts[i..]
+                .iter()
+                .take_while(|x| x.0 == starts[i].0)
+                .count()
+                + i;
+            if j - i + 1 >= n {
+                if best.is_some() {
+                    bump(&COUNTS.disagree);
+                    return None;
+                }
+                best = Some((starts[i].0, j - i));
+            }
+            i = j;
+        }
+        let Some((s, _)) = best else {
+            bump(&COUNTS.too_few_pieces);
+            return None;
+        };
+        s
+    } else {
+        let zero = (0..n).filter(|&k| count(k) == 0).count();
+        let Some(k0) = (0..n).find(|&k| count(k) == 1).filter(|_| zero <= 1) else {
+            bump(&COUNTS.too_few_pieces);
+            return None;
+        };
+        let Some(s) = index.locate(iv[k0].0).checked_sub(cut(k0) as u64) else {
+            bump(&COUNTS.disagree);
+            return None;
+        };
+        s
     };
     let hit = index.hit_at(s, len as u64);
     if hit.is_none() {
@@ -143,13 +207,24 @@ pub fn fast_region(index: &FmIndex, read: &[u8], opt: &AlignOptions) -> Option<R
             mismatch = Some(i as i32);
         }
     }
-    // Jedes Stück ohne die Abweichung liegt genau bei `s` und hat dort seine eine Fundstelle.
-    // Das Stück mit der Abweichung darf keine haben, sonst passt es anderswo genau.
     let bad = mismatch.map(|m| (0..n).find(|&k| (m as usize) < cut(k + 1)).unwrap_or(n - 1));
-    for (k, &c) in counts.iter().enumerate().take(n) {
-        if (Some(k) == bad) != (c == 0) {
-            bump(&COUNTS.disagree);
-            return None;
+    if many {
+        // Jedes Stück ohne die Abweichung muss bei `s` liegen.
+        for k in 0..n {
+            let at_s = starts.iter().any(|&(x, kk)| kk == k && x == s);
+            if (Some(k) == bad) == at_s {
+                bump(&COUNTS.disagree);
+                return None;
+            }
+        }
+    } else {
+        // Jedes Stück ohne die Abweichung liegt genau bei `s` und hat dort seine eine
+        // Fundstelle. Das Stück mit der Abweichung darf keine haben, sonst passt es anderswo.
+        for k in 0..n {
+            if (Some(k) == bad) != (count(k) == 0) {
+                bump(&COUNTS.disagree);
+                return None;
+            }
         }
     }
     let hit = hit?;
@@ -167,6 +242,46 @@ pub fn fast_region(index: &FmIndex, read: &[u8], opt: &AlignOptions) -> Option<R
             (across.max(stop), across)
         }
     };
+    if many {
+        // Die übrigen Anfänge sind weitere Kopien. Liegen mehrere dicht beieinander, ist es
+        // dieselbe Kopie (mit Lücke); sie wird einmal ausgerichtet.
+        let mut others: Vec<u64> = starts.iter().map(|x| x.0).filter(|&x| x != s).collect();
+        others.dedup();
+        let mut windows: Vec<(u64, u64)> = Vec::new();
+        let total = index.reference().len();
+        for o in others {
+            if o.abs_diff(s) < len as u64 + 2 * COPY_MARGIN {
+                bump(&COUNTS.copy_too_good);
+                return None;
+            }
+            let (half_beg, half_end) = if o < total {
+                (0, total)
+            } else {
+                (total, 2 * total)
+            };
+            let beg = o.saturating_sub(COPY_MARGIN).max(half_beg);
+            let end = (o + len as u64 + COPY_MARGIN).min(half_end);
+            match windows.last_mut() {
+                Some(w) if beg <= w.1 => w.1 = w.1.max(end),
+                _ => windows.push((beg, end)),
+            }
+        }
+        if windows.len() > MAX_COPIES {
+            bump(&COUNTS.repeat);
+            return None;
+        }
+        let limit = copy_limit(score, opt);
+        let byte = len as i32 * sc.matching < 250;
+        for (beg, end) in windows {
+            let target = index.text_range(beg, end);
+            let r = crate::local::local_align(read, &target, sc, byte, 0x10000, false);
+            if r.score > limit {
+                bump(&COUNTS.copy_too_good);
+                return None;
+            }
+        }
+        bump(&COUNTS.copies_checked);
+    }
     let (seedcov, seedlen0) = seed_coverage(l, mismatch, opt.seed.min_seed_len as i32);
     bump(&COUNTS.taken);
     Some(Region {
@@ -192,6 +307,20 @@ pub fn fast_region(index: &FmIndex, read: &[u8], opt: &AlignOptions) -> Option<R
 /// steuern nur das Verlängern innerhalb einer Kette und das Zusammenlegen von Bereichen, und
 /// bei einem einzigen Bereich über den ganzen Read gehen sie in keine Zeile der Ausgabe ein
 /// (die MAPQ rechnet ohne sie, siehe `finalize::mapq`).
+/// Höchster Score einer weiteren Kopie, bei dem die Ausgabe gleich bleibt. Eine Kopie mit
+/// Score `x` neben dem besten Score `b`:
+/// - erscheint in `XA` erst ab `x >= 0,8 b`,
+/// - senkt die MAPQ (60 bei 150 Basen) erst ab `b - x` unter etwa 17,
+/// - wird erst ab `b - x <= 17` (Abzug für ungepaarte Reads) zum Ausgangspunkt der Partnersuche
+///   und kann erst dann ein Paar bilden, das das beste Paar schlägt oder seine MAPQ senkt.
+///
+/// Der Abstand 31 lässt für alle drei Spielraum; der Score der Kopie im vollen Weg ist höchstens
+/// der lokale Score über das ganze Fenster.
+pub fn copy_limit(score: i32, opt: &AlignOptions) -> i32 {
+    let xa = (f64::from(score) * f64::from(opt.sam.xa_drop_ratio)).ceil() as i32 - 1;
+    xa.min(score - 31)
+}
+
 pub fn same_output(a: &Region, b: &Region) -> bool {
     let norm = |r: &Region| Region {
         seedcov: 0,
@@ -202,8 +331,11 @@ pub fn same_output(a: &Region, b: &Region) -> bool {
 }
 
 /// Vergleicht im Prüfmodus den Bereich des Schnellwegs mit dem Ergebnis des vollen Wegs.
-pub fn check_against_full(fast: &Region, full: &[Region]) {
-    let same = full.len() == 1 && same_output(&full[0], fast);
+pub fn check_against_full(fast: &Region, full: &[Region], opt: &AlignOptions) {
+    let limit = copy_limit(fast.score, opt);
+    let same = !full.is_empty()
+        && same_output(&full[0], fast)
+        && full[1..].iter().all(|r| r.score <= limit);
     bump(if same {
         &COUNTS.same_as_full
     } else {
@@ -222,6 +354,8 @@ pub fn counts() -> Vec<(&'static str, u64)> {
         ("zu_wenig_stuecke", g(&c.too_few_pieces)),
         ("stuecke_uneinig", g(&c.disagree)),
         ("pruefung_nicht_bestanden", g(&c.verify_failed)),
+        ("kopien_geprueft", g(&c.copies_checked)),
+        ("kopie_zu_gut", g(&c.copy_too_good)),
         ("gleich_wie_voller_weg", g(&c.same_as_full)),
         ("anders_als_voller_weg", g(&c.differs_from_full)),
     ]
@@ -277,7 +411,7 @@ mod tests {
                 read = revcomp(&read);
             }
             let (full, _) = find_regions(&index, &read, &opt);
-            if let Some(fast) = fast_region(&index, &read, &opt) {
+            if let Some(fast) = fast_region(&index, &read, &opt, true) {
                 taken += 1;
                 assert!(
                     full.len() == 1 && same_output(&full[0], &fast),
@@ -299,7 +433,42 @@ mod tests {
         r.push_contig("a", &s);
         let index = FmIndex::build(r, gc_index::Variant::Kompakt, 0).unwrap().0;
         let read = g[1050..1200].to_vec();
-        assert!(fast_region(&index, &read, &AlignOptions::default()).is_none());
+        assert!(fast_region(&index, &read, &AlignOptions::default(), true).is_none());
+    }
+
+    #[test]
+    fn a_weak_copy_keeps_the_read_on_the_fast_way() {
+        let (_, g) = setup();
+        let mut s: Vec<u8> = g.iter().map(|&c| b"ACGT"[c as usize]).collect();
+        // Die Stelle 1000..1300 noch einmal anhängen, aber mit einer Abweichung alle 9 Basen:
+        // Stücke von 21 Basen passen dort nirgends genau. Dazu 60 Basen von 5100 genau: Dort
+        // passen zwei Stücke eines Reads ab 5050 genau, der Score bleibt aber bei etwa 60.
+        let mut weak = s[1000..1300].to_vec();
+        for (i, b) in weak.iter_mut().enumerate() {
+            if i % 9 == 4 {
+                *b = if *b == b'A' { b'C' } else { b'A' };
+            }
+        }
+        let half = s[5100..5160].to_vec();
+        s.extend_from_slice(&weak);
+        s.extend_from_slice(&half);
+        let mut r = gc_index::Reference::new();
+        r.push_contig("a", &s);
+        let index = FmIndex::build(r, gc_index::Variant::Kompakt, 0).unwrap().0;
+        let opt = AlignOptions::default();
+        for at in [1050, 5050] {
+            let read = g[at..at + 150].to_vec();
+            let fast = fast_region(&index, &read, &opt, true).expect("Schnellweg bei {at}");
+            let (full, _) = find_regions(&index, &read, &opt);
+            assert!(same_output(&full[0], &fast), "{full:?} gegen {fast:?}");
+            let limit = copy_limit(fast.score, &opt);
+            assert!(full[1..].iter().all(|r| r.score <= limit), "{full:?}");
+            // Ohne Prüfung der Kopien geht der Read bei 5050 den vollen Weg.
+            assert_eq!(
+                fast_region(&index, &read, &opt, false).is_some(),
+                at == 1050
+            );
+        }
     }
 
     #[test]
@@ -308,10 +477,10 @@ mod tests {
         let opt = AlignOptions::default();
         let mut read = g[500..650].to_vec();
         read[10] = 4;
-        assert!(fast_region(&index, &read, &opt).is_none());
+        assert!(fast_region(&index, &read, &opt, true).is_none());
         let mut read = g[500..650].to_vec();
         read[60] = (read[60] + 1) & 3;
         read[140] = (read[140] + 1) & 3;
-        assert!(fast_region(&index, &read, &opt).is_none());
+        assert!(fast_region(&index, &read, &opt, true).is_none());
     }
 }
