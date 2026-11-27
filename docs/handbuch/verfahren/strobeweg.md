@@ -49,6 +49,14 @@ Kernen: bauen 117 s, laden 6,1 s; die BAM ist in beiden Fällen dieselbe.
    Gruppe, deren beweisbare 5-mer-Schranke ([Schnellweg](schnellweg.md#kopien-ohne-ausrichtung-ausschließen))
    höchstens den besten Score minus 15 erreicht, wird nicht ausgerichtet; ihre Schranke zählt als
    Zweitbester (vorsichtig: die MAPQ wird dadurch höchstens kleiner).
+   Vor jeder Annahme ohne Lücke (ganzer Read beim Vergleich entlang der Diagonale, Enden beim
+   Verlängern in Schritt 4) wird geprüft, ob eine einzelne Lücke von 1 bis 3 Basen besser passt
+   (Vor- und Nachsummen auf den Nachbardiagonalen, Kosten wie beim vollen Weg). Dann richtet die
+   lokale Ausrichtung den Read aus, oder beim Verlängern geht er den vollen Weg. Ohne diese
+   Prüfung wurden Indels nahe am Read-Ende (`144M1D6M`) als `150M` mit Abweichungen geschrieben:
+   GIAB HG002 chr20 Indel F1 0,7347 statt 0,7357. Simulation: Reads, deren Indel ohne Strobemer-Weg
+   erkannt wird und mit ihm nicht, 62 vor, 2 nach der Prüfung; Ausrichten rund 8 % langsamer.
+   Schalter zurück: `GC_STROBE_LUECKENPRUEFUNG=0`.
    Ist der Zweitbeste schon weniger als 15 unter dem Besten, bricht der Read ab und geht den
    vollen Weg, ohne die übrigen Gruppen auszurichten (Schalter zurück: `GC_STROBE_FRUEH=0`).
 4. Abgeschnittene Enden ohne Lücke bis zum Read-Ende verlängern, wenn das je Seite höchstens den

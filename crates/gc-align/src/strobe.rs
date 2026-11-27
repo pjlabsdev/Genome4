@@ -39,6 +39,9 @@ pub struct StrobeOptions {
     pub ungapped_first: bool,
     /// Sobald ein Zweiter zu nah ist, abbrechen (Schalter zurück: `GC_STROBE_FRUEH=0`).
     pub stop_early: bool,
+    /// Ohne Lücke nur, wenn keine kurze Lücke besser passt (Schalter zurück:
+    /// `GC_STROBE_LUECKENPRUEFUNG=0`).
+    pub gap_check: bool,
 }
 
 impl Default for StrobeOptions {
@@ -58,6 +61,7 @@ impl Default for StrobeOptions {
                 .unwrap_or(25),
             ungapped_first: std::env::var("GC_STROBE_HAMMING").map_or(true, |v| v != "0"),
             stop_early: std::env::var("GC_STROBE_FRUEH").map_or(true, |v| v != "0"),
+            gap_check: std::env::var("GC_STROBE_LUECKENPRUEFUNG").map_or(true, |v| v != "0"),
         }
     }
 }
@@ -118,6 +122,97 @@ struct Scratch {
     rc: Vec<u8>,
     hits: Vec<u64>,
     groups: Vec<(u32, u64)>,
+    gap: Vec<i32>,
+}
+
+/// Größte geprüfte Lücke beim Vergleich ohne Lücke.
+const MAX_GAP: usize = 3;
+
+/// Welche Seite eines Stücks auf der gegebenen Diagonale bleiben muss.
+#[derive(Clone, Copy, PartialEq)]
+enum Fixed {
+    /// Anfang (rechtes Ende eines Reads hinter einer Ausrichtung)
+    Start,
+    /// Ende (linkes Ende eines Reads vor einer Ausrichtung)
+    End,
+    /// eine von beiden (ganzer Read)
+    Either,
+}
+
+/// Bester Score von `q` ganz, mit genau einer Lücke von 1 bis [`MAX_GAP`] Basen, wobei die
+/// feste Seite ohne Lücke auf `t[off + i]` liegt. `None`, wenn das Fenster dafür nicht reicht.
+fn best_one_gap(
+    q: &[u8],
+    t: &[u8],
+    off: usize,
+    sc: &crate::extend::Scoring,
+    fixed: Fixed,
+    buf: &mut Vec<i32>,
+) -> Option<i32> {
+    let n = q.len();
+    let g = MAX_GAP;
+    if off < g || off + n + g > t.len() || n < 2 {
+        return None;
+    }
+    // Für jede Diagonale x = off - g ..= off + g: Vorsummen P[k] und Nachsummen S[k]
+    let w = n + 1;
+    let nd = 2 * g + 1;
+    buf.clear();
+    buf.resize(2 * nd * w, 0);
+    let (pre, suf) = buf.split_at_mut(nd * w);
+    for j in 0..nd {
+        let x = off + j - g;
+        let (p, s) = (&mut pre[j * w..(j + 1) * w], &mut suf[j * w..(j + 1) * w]);
+        for i in 0..n {
+            let v = if q[i] == t[x + i] {
+                sc.matching
+            } else {
+                -sc.mismatch
+            };
+            p[i + 1] = p[i] + v;
+        }
+        for i in (0..n).rev() {
+            let v = if q[i] == t[x + i] {
+                sc.matching
+            } else {
+                -sc.mismatch
+            };
+            s[i] = s[i + 1] + v;
+        }
+    }
+    let p = |j: usize, k: usize| pre[j * w + k];
+    let s = |j: usize, k: usize| suf[j * w + k];
+    let mut best = i32::MIN;
+    for d in 1..=g {
+        let del = sc.o_del + sc.e_del * d as i32;
+        let ins = sc.o_ins + sc.e_ins * d as i32;
+        // (linke Diagonale, rechte Diagonale) als Index in 0..nd; Mitte g = `off`
+        let all = [
+            (g, g + d, true, fixed != Fixed::End), // Deletion: rechts um d weiter
+            (g, g - d, false, fixed != Fixed::End), // Insertion: rechts um d zurück
+            (g - d, g, true, fixed != Fixed::Start),
+            (g + d, g, false, fixed != Fixed::Start),
+        ];
+        for (lj, rj, deletion, _) in all.into_iter().filter(|a| a.3) {
+            let (lo, hi) = match fixed {
+                Fixed::Start => (0, n),
+                Fixed::End => (0, n),
+                Fixed::Either => (1, n - 1),
+            };
+            if deletion {
+                for k in lo..=hi {
+                    best = best.max(p(lj, k) + s(rj, k) - del);
+                }
+            } else {
+                for k in lo..=hi.saturating_sub(d) {
+                    if k + d <= n {
+                        best = best.max(p(lj, k) + s(rj, k + d) - ins);
+                    }
+                }
+            }
+        }
+    }
+    Some(best)
 }
 
 /// Ein Bereich für den Read oder `None` (dann der volle Weg).
@@ -248,7 +343,14 @@ pub fn strobe_region(
                 };
                 let ends_ok = tail(&read[..top.1], &t[..top.1]) >= -opt.region.pen_clip5
                     && tail(&read[top.2..], &t[top.2..]) >= -opt.region.pen_clip3;
+                // Eine kurze Lücke darf nicht besser passen als ohne Lücke (Indel nahe am Ende),
+                // sonst richtet die lokale Ausrichtung sie aus.
+                let full = tail(read, t);
+                let no_gap_better = !so.gap_check
+                    || best_one_gap(read, &target, off as usize, sc, Fixed::Either, &mut s.gap)
+                        .is_some_and(|b| b <= full);
                 let tight = ends_ok
+                    && no_gap_better
                     && (!bound_ok
                         || crate::fast::kmer_bound(read, &target).is_none_or(|b| b <= top.0)
                         || best.is_none_or(|(b, ..)| top.0 > b));
@@ -326,7 +428,23 @@ pub fn strobe_region(
                 return None;
             }
             let d = side(&read[..qb as usize], &index.text_range(rb - n, rb));
-            if d < -opt.region.pen_clip5 {
+            let g = MAX_GAP as u64;
+            let gapped = if !so.gap_check {
+                Some(i32::MIN)
+            } else if rb < n + g || (rb < l) != (rb - n - g < l) || (rb + g <= l) != (rb <= l) {
+                None
+            } else {
+                let w = index.text_range(rb - n - g, rb + g);
+                best_one_gap(
+                    &read[..qb as usize],
+                    &w,
+                    MAX_GAP,
+                    sc,
+                    Fixed::End,
+                    &mut s.gap,
+                )
+            };
+            if d < -opt.region.pen_clip5 || gapped.is_none_or(|b| b > d) {
                 bump(&COUNTS.clipped);
                 return None;
             }
@@ -340,7 +458,27 @@ pub fn strobe_region(
                 return None;
             }
             let d = side(&read[qe as usize..], &index.text_range(re, re + n));
-            if d < -opt.region.pen_clip3 {
+            let g = MAX_GAP as u64;
+            let gapped = if !so.gap_check {
+                Some(i32::MIN)
+            } else if re < g
+                || re + n + g > 2 * l
+                || (re - g < l) != (re < l)
+                || (re <= l) != (re + n + g <= l)
+            {
+                None
+            } else {
+                let w = index.text_range(re - g, re + n + g);
+                best_one_gap(
+                    &read[qe as usize..],
+                    &w,
+                    MAX_GAP,
+                    sc,
+                    Fixed::Start,
+                    &mut s.gap,
+                )
+            };
+            if d < -opt.region.pen_clip3 || gapped.is_none_or(|b| b > d) {
                 bump(&COUNTS.clipped);
                 return None;
             }
@@ -388,6 +526,41 @@ mod tests {
         *state ^= *state >> 7;
         *state ^= *state << 17;
         *state
+    }
+
+    #[test]
+    fn a_short_gap_near_the_end_beats_the_ungapped_comparison() {
+        let sc = crate::extend::Scoring::default();
+        let mut state = 0x5eed_u64;
+        let t: Vec<u8> = (0..200).map(|_| (xorshift(&mut state) & 3) as u8).collect();
+        let mut buf = Vec::new();
+        let off = 20;
+        let n = 150;
+        // ohne Änderung: keine Lücke ist besser als ohne Lücke
+        let q: Vec<u8> = t[off..off + n].to_vec();
+        let full: i32 = n as i32 * sc.matching;
+        let b = best_one_gap(&q, &t, off, &sc, Fixed::Either, &mut buf).unwrap();
+        assert!(b < full);
+        // eine Base 8 vor dem Ende fehlt im Read (Deletion): mit Lücke besser als ohne
+        let mut q: Vec<u8> = t[off..off + n - 8].to_vec();
+        q.extend_from_slice(&t[off + n - 7..off + n + 1]);
+        let ungapped: i32 = q
+            .iter()
+            .zip(&t[off..])
+            .map(|(a, b)| if a == b { sc.matching } else { -sc.mismatch })
+            .sum();
+        let b = best_one_gap(&q, &t, off, &sc, Fixed::Either, &mut buf).unwrap();
+        assert_eq!(b, n as i32 * sc.matching - sc.o_del - sc.e_del);
+        assert!(b > ungapped);
+        // eine eingefügte Base 6 vor dem Ende, als Ende hinter einer Ausrichtung geprüft
+        let tail_at = off + 100;
+        let mut tail: Vec<u8> = t[tail_at..tail_at + 44].to_vec();
+        tail.insert(44, 1 ^ t[tail_at + 44]);
+        tail.extend_from_slice(&t[tail_at + 44..tail_at + 49]);
+        let b = best_one_gap(&tail, &t, tail_at, &sc, Fixed::Start, &mut buf).unwrap();
+        assert_eq!(b, 49 * sc.matching - sc.o_ins - sc.e_ins);
+        // zu nah am Rand des Fensters: keine Aussage
+        assert!(best_one_gap(&q, &t, 1, &sc, Fixed::Either, &mut buf).is_none());
     }
 
     #[test]
