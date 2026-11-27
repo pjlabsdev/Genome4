@@ -55,6 +55,14 @@ genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.
    vorigen in den Sortierer. Die Blöcke sind dieselben wie nacheinander, die Ausgabe hängt
    nicht davon ab. `ALIGN.FERTIG` nennt die Sekunden je Schritt und wie lange das Ausrichten auf
    das Lesen gewartet hat.
+
+   Das Lesen selbst ist geteilt: Jede FASTQ wird in einem eigenen Faden entpackt und in Stücke
+   von 8192 Reads zerlegt, die Paare eines Stücks werden auf allen Kernen getrimmt, danach
+   schneidet ein Faden die Blöcke wie nacheinander nach den getrimmten Basen. Auf HG002
+   (10 Mio. Paare, Mac M5) war vorher ein einzelner Faden fast die ganze Laufzeit mit Entpacken,
+   Zerlegen und Trimmen beschäftigt, und das Ausrichten wartete 140 bis 167 s auf ihn.
+   `GC_LESEN_PARALLEL=0` liest wie bisher in einem Faden. Die BAM ist in beiden Fällen dieselbe,
+   auch mit Stückgrenzen mitten in einem Block (Test).
 3. Zusammenführen der Teile. Der sortierte Strom läuft durch das Markieren der Duplikate
    ([Duplikate](../verfahren/duplikate-markieren.md)) und die Zählung nach Flags
    ([flagstat](flagstat.md)) und wird als BAM geschrieben.

@@ -166,6 +166,52 @@ fn output_is_the_same_for_any_core_count_and_as_bam() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// Paralleles Lesen und Trimmen ergibt dieselben Blöcke und damit dieselbe BAM wie nacheinander,
+/// auch mit Stückgrenzen mitten in einem Block.
+#[test]
+fn parallel_reading_gives_the_same_bam() {
+    let dir = std::env::temp_dir().join(format!("genome-lesen-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (fasta, r1, r2) = make_data(&dir);
+    let index = dir.join("ref.gcfm");
+    let s = |p: &Path| p.to_str().unwrap().to_string();
+    genome(&["index", "build", &s(&fasta), &s(&index)]);
+    let run = |parallel: &str, chunk: &str, trim: bool| {
+        let bam = dir.join(format!("p{parallel}-{chunk}-{trim}.bam"));
+        let (i, a, b, o) = (s(&index), s(&r1), s(&r2), s(&bam));
+        let mut args = vec!["fq2bam", "--fastq", &a, "--fastq2", &b, "--aus", &o];
+        args.extend(["--block-basen", "20000", "--kerne", "3", "--ohne-bericht"]);
+        if trim {
+            args.push("--trimmen");
+        }
+        args.push(&i);
+        let out = Command::new(env!("CARGO_BIN_EXE_genome"))
+            .args(&args)
+            .env("GC_LESEN_PARALLEL", parallel)
+            .env("GC_LESEN_STUECK", chunk)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        bam_records(&bam)
+    };
+    for trim in [false, true] {
+        let serial = run("0", "8192", trim);
+        assert!(serial.len() >= 790, "{}", serial.len());
+        for chunk in ["7", "64", "8192"] {
+            assert_eq!(
+                run("1", chunk, trim),
+                serial,
+                "Stück {chunk}, trimmen {trim}"
+            );
+        }
+    }
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// N in der Referenz zählt als unbekannt: Abzug 1, `N` in `MD`, gezählt in `NM`. Das Ergebnis
 /// hängt nicht von der Füllbase ab, die der Index dort für die Suche führt.
 #[test]

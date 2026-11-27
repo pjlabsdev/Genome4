@@ -540,8 +540,21 @@ fn align_into(
     std::thread::scope(|scope| -> Result<(u64, u64, gc_io::trim::Counts)> {
         let (block_tx, block_rx) = std::sync::mpsc::sync_channel::<Vec<Record>>(1);
         let (lines_tx, lines_rx) = std::sync::mpsc::sync_channel::<Vec<Vec<gc_align::Line>>>(1);
-        let reader = scope
-            .spawn(move || read_blocks(reader1, reader2, first, block_bases, trimmer, block_tx));
+        let reader = scope.spawn(move || {
+            if parallel_reading() {
+                read_blocks_parallel(
+                    reader1,
+                    reader2,
+                    first,
+                    block_bases,
+                    trimmer,
+                    threads,
+                    block_tx,
+                )
+            } else {
+                read_blocks(reader1, reader2, first, block_bases, trimmer, block_tx)
+            }
+        });
         let writer = scope.spawn(move || -> Result<(u64, f64)> {
             let (mut n_lines, mut busy) = (0u64, 0f64);
             for lines in lines_rx {
@@ -700,6 +713,174 @@ fn read_blocks(
             return Ok((trim_counts, busy));
         }
     }
+}
+
+/// Lesen parallel: jede FASTQ in eigenem Thread entpacken und zerlegen, Trimmen auf mehreren
+/// Kernen. Schalter zurück: `GC_LESEN_PARALLEL=0`.
+fn parallel_reading() -> bool {
+    std::env::var("GC_LESEN_PARALLEL").map_or(true, |v| v != "0")
+}
+
+/// So viele Reads je Stück beim parallelen Lesen (`GC_LESEN_STUECK` setzt sie für Tests).
+fn read_chunk() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("GC_LESEN_STUECK")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(8192)
+    })
+}
+
+type Fastq = fastq::Reader<Box<dyn std::io::BufRead + Send>>;
+
+/// Liest eine FASTQ in Stücken von [`read_chunk`] Reads; das letzte Stück ist kürzer (oder leer).
+fn read_chunks(mut reader: Fastq, tx: std::sync::mpsc::SyncSender<Result<Vec<Record>>>) {
+    let n = read_chunk();
+    loop {
+        let mut v = Vec::with_capacity(n);
+        while v.len() < n {
+            let mut r = Record::default();
+            match reader.read_record(&mut r) {
+                Ok(true) => v.push(r),
+                Ok(false) => break,
+                Err(e) => {
+                    let _ = tx.send(Err(e.into()));
+                    return;
+                }
+            }
+        }
+        let last = v.len() < n;
+        if tx.send(Ok(v)).is_err() || last {
+            return;
+        }
+    }
+}
+
+/// Wie [`read_blocks`], mit denselben Blöcken in derselben Reihenfolge: Die Dateien werden je in
+/// eigenem Thread gelesen, die Paare eines Stücks auf `threads` Kernen getrimmt, danach werden
+/// die Blöcke wie nacheinander nach den getrimmten Basen geschnitten.
+fn read_blocks_parallel(
+    reader1: Fastq,
+    reader2: Option<Fastq>,
+    first: &std::path::Path,
+    block_bases: u64,
+    trimmer: Option<&gc_io::trim::Trimmer>,
+    threads: usize,
+    tx: std::sync::mpsc::SyncSender<Vec<Record>>,
+) -> Result<(gc_io::trim::Counts, f64)> {
+    let path2 = reader2.as_ref().map(|r| r.path().to_path_buf());
+    std::thread::scope(|scope| {
+        let (tx1, rx1) = std::sync::mpsc::sync_channel(4);
+        scope.spawn(move || read_chunks(reader1, tx1));
+        let rx2 = reader2.map(|r| {
+            let (tx2, rx2) = std::sync::mpsc::sync_channel(4);
+            scope.spawn(move || read_chunks(r, tx2));
+            rx2
+        });
+        let mut trim_counts = gc_io::trim::Counts::default();
+        let mut busy = 0f64;
+        let mut pairs_seen = 0u64;
+        let mut records: Vec<Record> = Vec::new();
+        let mut bases = 0u64;
+        let mut done = false;
+        while !done {
+            let mut t0 = std::time::Instant::now();
+            let a = rx1.recv().unwrap_or_else(|_| Ok(Vec::new()))?;
+            let mut items: Vec<Record> = match &rx2 {
+                None => a,
+                Some(rx2) => {
+                    let b = rx2.recv().unwrap_or_else(|_| Ok(Vec::new()))?;
+                    if a.len() != b.len() {
+                        anyhow::bail!(
+                            "die beiden FASTQ-Dateien haben verschieden viele Reads ({} und {})",
+                            first.display(),
+                            path2.as_deref().unwrap_or(first).display()
+                        );
+                    }
+                    for (i, (x, y)) in a.iter().zip(&b).enumerate() {
+                        if x.pair_key() != y.pair_key() {
+                            anyhow::bail!(
+                                "Paar {}: Namen passen nicht zusammen ({} und {})",
+                                pairs_seen + i as u64 + 1,
+                                String::from_utf8_lossy(&x.name),
+                                String::from_utf8_lossy(&y.name)
+                            );
+                        }
+                    }
+                    pairs_seen += a.len() as u64;
+                    let mut pairs: Vec<(Record, Record)> = a.into_iter().zip(b).collect();
+                    let kept: Vec<bool> = match trimmer {
+                        None => vec![true; pairs.len()],
+                        Some(t) => {
+                            let per = pairs.len().div_ceil(threads.max(1)).max(1);
+                            let reports: Vec<gc_io::trim::PairReport> = std::thread::scope(|ts| {
+                                let hs: Vec<_> = pairs
+                                    .chunks_mut(per)
+                                    .map(|part| {
+                                        ts.spawn(move || {
+                                            part.iter_mut()
+                                                .map(|(x, y)| t.trim_pair(x, y))
+                                                .collect::<Vec<_>>()
+                                        })
+                                    })
+                                    .collect();
+                                hs.into_iter()
+                                    .flat_map(|h| h.join().expect("Trimmen abgestürzt"))
+                                    .collect()
+                            });
+                            reports
+                                .iter()
+                                .map(|r| {
+                                    trim_counts.add(r);
+                                    r.kept()
+                                })
+                                .collect()
+                        }
+                    };
+                    pairs
+                        .into_iter()
+                        .zip(kept)
+                        .filter(|(_, k)| *k)
+                        .flat_map(|((x, y), _)| [x, y])
+                        .collect()
+                }
+            };
+            if items.is_empty() {
+                done = true;
+            }
+            // Blöcke wie nacheinander schneiden: ein Block endet, sobald er `block_bases` erreicht.
+            let step = if rx2.is_some() { 2 } else { 1 };
+            let mut it = std::mem::take(&mut items).into_iter();
+            loop {
+                if bases >= block_bases {
+                    busy += t0.elapsed().as_secs_f64();
+                    if tx.send(std::mem::take(&mut records)).is_err() {
+                        return Ok((trim_counts, busy));
+                    }
+                    t0 = std::time::Instant::now();
+                    bases = 0;
+                }
+                let mut got = false;
+                for _ in 0..step {
+                    if let Some(r) = it.next() {
+                        bases += r.seq.len() as u64;
+                        records.push(r);
+                        got = true;
+                    }
+                }
+                if !got {
+                    break;
+                }
+            }
+            busy += t0.elapsed().as_secs_f64();
+        }
+        if !records.is_empty() {
+            let _ = tx.send(records);
+        }
+        Ok((trim_counts, busy))
+    })
 }
 
 /// Protokolliert die geschätzte Insertgröße eines Blocks.
