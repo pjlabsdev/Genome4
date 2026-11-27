@@ -60,13 +60,6 @@ sich die Wartezeiten auf den Speicher überlappen. Die Bereiche sind dieselben w
 Stück für Stück (Test `intervals_many_equals_interval`). Der Schalter
 `SeedOptions::fast_pieces_together = false` sucht jedes Stück wieder einzeln von vorn.
 
-Seit 2026-11-27 läuft der Schnellweg in Gruppen von 32 Reads (`fast_regions_group`): Die Stücke
-aller Reads der Gruppe werden zu je 32 verschränkt gesucht, und die Orte aller Reads gemeinsam
-nachgeschlagen (`FmIndex::locate_many`), statt Read für Read einzeln durch die BWT zu gehen. Im
-Profil auf echten Reads ging fast die Hälfte der Zeit des Schnellwegs in dieses Nachschlagen. Das
-Ergebnis ist Read für Read dasselbe (Test `the_group_gives_the_same_regions_as_read_by_read`).
-Schalter zurück: `GC_SCHNELL_GRUPPE=0`.
-
 | Messung (2026-11-26) | einzeln | gemeinsam |
 |---|---|---|
 | Schnellweg allein, 200.000 HG002-MGI-Reads chr20, Index GRCh38, 1 Kern, A-B-B-A (`FAST=1 seedbench`) | 5,68 s / 4,98 s | 3,08 s / 2,97 s |

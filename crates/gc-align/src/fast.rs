@@ -205,124 +205,13 @@ pub fn fast_region(
             *slot = (lo, hi);
         }
     }
-    decide(index, read, opt, &iv, n, many, &mut |row| index.locate(row))
-}
-
-/// Schnellweg für eine Gruppe von Reads mit demselben Ergebnis wie [`fast_region`] Read für Read:
-/// Die Intervalle aller Stücke werden verschränkt gesucht (bis 32 Stücke zugleich) und die Orte
-/// aller Reads gemeinsam nachgeschlagen ([`FmIndex::locate_many`]), damit die Wege durch den
-/// Index, die fast alle außerhalb des Prozessor-Caches liegen, gleichzeitig laufen statt
-/// nacheinander. Schalter zurück: `GC_SCHNELL_GRUPPE=0`.
-pub fn fast_regions_group(
-    index: &FmIndex,
-    reads: &[&[u8]],
-    opt: &AlignOptions,
-    copies: bool,
-) -> Vec<Option<Region>> {
-    let max_hits = if copies { MAX_PIECE_HITS } else { 1 };
-    // Je Read: Anzahl Stücke (0 = nicht geeignet) und Platz der Stücke in `pieces`
-    let mut plan: Vec<(usize, usize)> = Vec::with_capacity(reads.len());
-    let mut pieces: Vec<&[u8]> = Vec::new();
-    for read in reads {
-        bump(&COUNTS.tried);
-        let len = read.len();
-        if len < 60 || read.iter().any(|&c| c > 3) {
-            bump(&COUNTS.too_few_pieces);
-            plan.push((0, 0));
-            continue;
-        }
-        let n = (len / PIECE_MIN).clamp(3, 16);
-        let at = pieces.len();
-        pieces.extend((0..n).map(|k| &read[k * len / n..(k + 1) * len / n]));
-        plan.push((n, at));
-    }
-    let mut iv = vec![(0u64, 0u64); pieces.len()];
-    for (p, o) in pieces.chunks(32).zip(iv.chunks_mut(32)) {
-        index.intervals_many(p, o);
-    }
-    // Wiederholungen ablehnen, die nachzuschlagenden Zeilen sammeln
-    let mut rows: Vec<u64> = Vec::new();
-    // Je Read: viele Fundstellen? und Anfang seiner Zeilen in `rows`
-    let mut state: Vec<Option<(bool, usize)>> = Vec::with_capacity(reads.len());
-    for &(n, at) in &plan {
-        if n == 0 {
-            state.push(None);
-            continue;
-        }
-        let v = &iv[at..at + n];
-        if v.iter().any(|&(lo, hi)| hi - lo > max_hits) {
-            bump(&COUNTS.repeat);
-            state.push(None);
-            continue;
-        }
-        let many = v.iter().any(|&(lo, hi)| hi - lo > 1);
-        state.push(Some((many, rows.len())));
-        rows_to_locate(v, many, &mut rows);
-    }
-    let mut pos = Vec::with_capacity(rows.len());
-    index.locate_many(&rows, &mut pos);
-    reads
-        .iter()
-        .zip(plan.iter().zip(&state))
-        .map(|(read, (&(n, at), st))| {
-            let (many, first) = (*st)?;
-            let v = &iv[at..at + n];
-            let mut k = first;
-            decide(index, read, opt, v, n, many, &mut |row| {
-                // dieselbe Reihenfolge wie beim Sammeln; zur Sicherheit geprüft
-                debug_assert_eq!(rows[k], row);
-                let p = if rows.get(k) == Some(&row) {
-                    pos[k]
-                } else {
-                    index.locate(row)
-                };
-                k += 1;
-                p
-            })
-        })
-        .collect()
-}
-
-pub fn fast_group_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("GC_SCHNELL_GRUPPE").map_or(true, |v| v != "0"))
-}
-
-/// Ob ein Read mit diesen Stück-Intervallen eine Zeile nachschlagen lässt, und welche (in der
-/// Reihenfolge, in der [`decide`] sie abfragt).
-fn rows_to_locate(iv: &[(u64, u64)], many: bool, rows: &mut Vec<u64>) {
-    if many {
-        for &(lo, hi) in iv {
-            rows.extend(lo..hi);
-        }
-    } else {
-        let zero = iv.iter().filter(|x| x.1 == x.0).count();
-        if let Some(&(lo, _)) = iv.iter().find(|x| x.1 - x.0 == 1).filter(|_| zero <= 1) {
-            rows.push(lo);
-        }
-    }
-}
-
-/// Zweiter Teil des Schnellwegs: aus den Intervallen der Stücke und ihren Orten (`loc`) den
-/// Bereich bilden oder ablehnen.
-fn decide(
-    index: &FmIndex,
-    read: &[u8],
-    opt: &AlignOptions,
-    iv: &[(u64, u64)],
-    n: usize,
-    many: bool,
-    loc: &mut dyn FnMut(u64) -> u64,
-) -> Option<Region> {
-    let len = read.len();
-    let cut = |k: usize| k * len / n;
     let count = |k: usize| iv[k].1 - iv[k].0;
     // Anfänge je Stück. Ohne Stück mit mehreren Fundstellen genügt ein Nachschlagen.
     let mut starts: Vec<(u64, usize)> = Vec::new();
     let s = if many {
         for (k, &(lo, hi)) in iv.iter().enumerate().take(n) {
             for row in lo..hi {
-                if let Some(s) = loc(row).checked_sub(cut(k) as u64) {
+                if let Some(s) = index.locate(row).checked_sub(cut(k) as u64) {
                     starts.push((s, k));
                 }
             }
@@ -357,7 +246,7 @@ fn decide(
             bump(&COUNTS.too_few_pieces);
             return None;
         };
-        let Some(s) = loc(iv[k0].0).checked_sub(cut(k0) as u64) else {
+        let Some(s) = index.locate(iv[k0].0).checked_sub(cut(k0) as u64) else {
             bump(&COUNTS.disagree);
             return None;
         };
@@ -597,50 +486,6 @@ mod tests {
             }
         }
         assert!(taken > 150, "nur {taken} Reads auf dem Schnellweg");
-    }
-
-    #[test]
-    fn the_group_gives_the_same_regions_as_read_by_read() {
-        let (_, g) = setup();
-        // Mit Kopien (Stücke mit zwei Fundstellen) und kurzen Reads, N und Abweichungen gemischt
-        let mut s: Vec<u8> = g.iter().map(|&c| b"ACGT"[c as usize]).collect();
-        let copy = s[3000..3400].to_vec();
-        s.extend_from_slice(&copy);
-        let mut r = gc_index::Reference::new();
-        r.push_contig("a", &s);
-        let index = FmIndex::build(r, gc_index::Variant::Kompakt, 0).unwrap().0;
-        let opt = AlignOptions::default();
-        let mut rng = 4242u64;
-        let mut reads = Vec::new();
-        for i in 0..200 {
-            let at = if i % 7 == 0 {
-                3000 + (xorshift(&mut rng) % 200) as usize
-            } else {
-                (xorshift(&mut rng) % (g.len() as u64 - 200)) as usize
-            };
-            let len = if i % 11 == 0 { 50 } else { 150 };
-            let mut read = g[at..at + len].to_vec();
-            for _ in 0..xorshift(&mut rng) % 3 {
-                let p = (xorshift(&mut rng) % len as u64) as usize;
-                read[p] = (read[p] + 1) & 3;
-            }
-            if i % 13 == 0 {
-                read[5] = 4;
-            }
-            if xorshift(&mut rng) & 1 == 1 {
-                read = revcomp(&read);
-            }
-            reads.push(read);
-        }
-        for copies in [true, false] {
-            let refs: Vec<&[u8]> = reads.iter().map(|r| &r[..]).collect();
-            for group in refs.chunks(32) {
-                let together = fast_regions_group(&index, group, &opt, copies);
-                for (read, got) in group.iter().zip(together) {
-                    assert_eq!(got, fast_region(&index, read, &opt, copies));
-                }
-            }
-        }
     }
 
     #[test]

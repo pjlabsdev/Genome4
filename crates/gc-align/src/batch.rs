@@ -131,33 +131,9 @@ fn regions_of_all(
     if opt.seed.regroup {
         // Erst der Schnellweg für alle Reads, dann die übrigen in vollen Gruppen.
         let mut out: Vec<Option<(Vec<crate::region::Region>, f32)>> =
-            if crate::fast::fast_group_enabled()
-                && matches!(opt.fast, FastMode::On | FastMode::Simple)
-            {
-                parallel_map(reads.len().div_ceil(SEED_GROUP), threads, |g| {
-                    let group = &reads[g * SEED_GROUP..((g + 1) * SEED_GROUP).min(reads.len())];
-                    let seqs: Vec<&[u8]> = group.iter().map(|r| r.seq).collect();
-                    crate::fast::fast_regions_group(index, &seqs, opt, opt.fast == FastMode::On)
-                        .into_iter()
-                        .zip(&seqs)
-                        .map(|(f, seq)| {
-                            f.or_else(|| {
-                                opt.strobe_index
-                                    .as_ref()
-                                    .and_then(|s| crate::strobe::strobe_region(index, s, seq, opt))
-                            })
-                            .map(|x| (vec![x], 0.0))
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .into_iter()
-                .flatten()
-                .collect()
-            } else {
-                parallel_map(reads.len(), threads, |i| {
-                    quick_region(index, reads[i].seq, opt).map(|x| (vec![x], 0.0))
-                })
-            };
+            parallel_map(reads.len(), threads, |i| {
+                quick_region(index, reads[i].seq, opt).map(|x| (vec![x], 0.0))
+            });
         let rest: Vec<usize> = (0..reads.len()).filter(|&i| out[i].is_none()).collect();
         let found = parallel_map(rest.len().div_ceil(SEED_GROUP), threads, |g| {
             let ids = &rest[g * SEED_GROUP..((g + 1) * SEED_GROUP).min(rest.len())];
