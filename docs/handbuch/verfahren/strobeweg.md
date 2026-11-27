@@ -57,6 +57,14 @@ Kernen: bauen 117 s, laden 6,1 s; die BAM ist in beiden Fällen dieselbe.
    GIAB HG002 chr20 Indel F1 0,7347 statt 0,7357. Simulation: Reads, deren Indel ohne Strobemer-Weg
    erkannt wird und mit ihm nicht, 62 vor, 2 nach der Prüfung; Ausrichten rund 8 % langsamer.
    Schalter zurück: `GC_STROBE_LUECKENPRUEFUNG=0`.
+   Seit 1 bis 15 Basen geprüft werden, gehen auch 4 bis 7 Basen lange Indels in Wiederholungen
+   (GIAB: `137M4D14M` als `151M`, 167 Reads auf chr20 mit 1 bis 3 Basen) nicht mehr verloren.
+   Geprüft werden nur Längen `d`, mit denen eine Lücke überhaupt mehr Punkte als ohne Lücke
+   erreichen kann (Deletion höchstens alle Basen minus `o_del + d·e_del`, Insertion `d` Basen
+   weniger minus `o_ins + d·e_ins`); ein Read mit höchstens einer Abweichung braucht gar keine
+   Prüfung. Die Antwort bleibt dieselbe, die Arbeit schrumpft. Reicht das Fenster (Rand 12) für die
+   nötige Länge nicht, richtet die lokale Ausrichtung aus. Simulation (600.000 Reads): Hauptdatensätze
+   gleich wie mit 3 Basen, Zeit im Rauschen. Schalter zurück: `GC_STROBE_LUECKE_BIS=3`.
    Ist der Zweitbeste schon weniger als 15 unter dem Besten, bricht der Read ab und geht den
    vollen Weg, ohne die übrigen Gruppen auszurichten (Schalter zurück: `GC_STROBE_FRUEH=0`).
 4. Abgeschnittene Enden ohne Lücke bis zum Read-Ende verlängern, wenn das je Seite höchstens den
