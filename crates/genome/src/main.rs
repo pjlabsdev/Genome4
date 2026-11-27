@@ -1177,7 +1177,7 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
         let planned = second.map(|second| scope.spawn(move || plan_trimming(run.fastq, second)));
         let st = gc_log::stage("fq2bam.index_laden", json!({}));
         let thin = if run.sa_thin == 0 {
-            plan_sa_thinning(run.index, run.memory_mb)?
+            plan_sa_thinning(run.index, run.memory_mb, run.strobe)?
         } else {
             run.sa_thin
         };
@@ -1979,8 +1979,9 @@ fn load_index(path: &std::path::Path) -> Result<gc_index::FmIndex> {
 const MEMORY_SHARE: f64 = 0.5;
 
 /// Wählt das Ausdünnen der Suffix-Array-Stichproben nach dem Arbeitsspeicher: die kleinste
-/// Zweierpotenz (1, 2 oder 4), mit der Index und Sortierpuffer in `MEMORY_SHARE` des
-/// Arbeitsspeichers passen; passt nichts, 4. Ist der Arbeitsspeicher unbekannt, 1.
+/// Zweierpotenz (1, 2, 4 oder 8), mit der Index, Sortierpuffer und (mit Strobemer-Weg) der
+/// Strobe-Index in `MEMORY_SHARE` des Arbeitsspeichers passen; passt nichts, 8. Ist der
+/// Arbeitsspeicher unbekannt, 1.
 /// Die Grafikeinheit als Rechenkern der Partnersuche.
 #[derive(Debug)]
 struct GpuKernel(gc_gpu::Gpu);
@@ -2042,7 +2043,7 @@ fn locate_cache_bits(mb: usize) -> u32 {
     if slots == 0 { 0 } else { slots.ilog2() }
 }
 
-fn plan_sa_thinning(index: &std::path::Path, memory_mb: usize) -> Result<u32> {
+fn plan_sa_thinning(index: &std::path::Path, memory_mb: usize, strobe: bool) -> Result<u32> {
     let file = std::fs::File::open(index)
         .with_context(|| format!("Index {} nicht lesbar", index.display()))?;
     let file_bytes = file.metadata()?.len();
@@ -2051,15 +2052,19 @@ fn plan_sa_thinning(index: &std::path::Path, memory_mb: usize) -> Result<u32> {
     let ram = gc_sys::physical_memory_bytes();
     let sample_bytes = rows.div_ceil(u64::from(sa)) * gc_index::FmIndex::SAMPLE_BYTES;
     let sort_bytes = memory_mb as u64 * (1 << 20);
-    let need = |k: u64| file_bytes - sample_bytes + sample_bytes / k + sort_bytes;
+    // Der Strobe-Index braucht rund 1,15 Bytes je Base der Referenz (GRCh38: 3,53 GB); die
+    // Zeilen des FM-Index sind zwei je Base. Ohne ihn zu zählen, rutschte ein Lauf mit
+    // Strobemer-Weg auf 16 GB ins Auslagern.
+    let strobe_bytes = if strobe { rows / 2 * 23 / 20 } else { 0 };
+    let need = |k: u64| file_bytes - sample_bytes + sample_bytes / k + sort_bytes + strobe_bytes;
     let keep = match ram {
         None => 1,
         Some(ram) => {
             let budget = (ram as f64 * MEMORY_SHARE) as u64;
-            [1u64, 2, 4]
+            [1u64, 2, 4, 8]
                 .into_iter()
                 .find(|&k| need(k) <= budget)
-                .unwrap_or(4)
+                .unwrap_or(8)
         }
     };
     gc_log::info(
@@ -2070,6 +2075,7 @@ fn plan_sa_thinning(index: &std::path::Path, memory_mb: usize) -> Result<u32> {
             "index_bytes": file_bytes,
             "stichproben_bytes": sample_bytes,
             "sortierpuffer_bytes": sort_bytes,
+            "strobe_index_bytes_geschaetzt": strobe_bytes,
             "sa_ausduennen": keep,
             "bedarf_bytes": need(keep),
         }),
