@@ -122,6 +122,9 @@ impl std::fmt::Debug for StrobeIndex {
 }
 
 /// Stücke von 4 Mb mit 10 kb Überhang: Ein Randstrobe braucht nur die folgenden 9 Syncmere.
+/// Kennung gespeicherter Strobe-Indizes.
+const FILE_MAGIC: &[u8; 8] = b"GCSTRB01";
+
 const CHUNK: u64 = 4 << 20;
 const OVER: u64 = 10_000;
 /// Der Bau füllt die Fächer in so vielen Durchgängen; so braucht er neben dem fertigen Index
@@ -328,6 +331,126 @@ impl StrobeIndex {
     }
 
     /// Bytes im Speicher.
+    /// Fingerabdruck der Referenz, zu der eine gespeicherte Datei passen muss (Namen, Längen,
+    /// Basen und die Einstellungen der Randstrobes).
+    pub fn fingerprint(reference: &Reference) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut mix = |v: u64| {
+            h = (h ^ v).wrapping_mul(0x0000_0100_0000_01b3);
+            h ^= h >> 29;
+        };
+        for v in [
+            K as u64,
+            S as u64,
+            W_MIN as u64,
+            W_MAX as u64,
+            KEEP_MAX as u64,
+        ] {
+            mix(v);
+        }
+        mix(u64::from(BUCKET_BITS));
+        mix(reference.len());
+        for c in &reference.contigs {
+            mix(c.offset);
+            mix(c.len);
+            for b in c.name.bytes() {
+                mix(u64::from(b));
+            }
+        }
+        for x in &reference.holes {
+            mix(x.offset);
+            mix(x.len);
+        }
+        for &w in &reference.forward.words {
+            mix(w);
+        }
+        h
+    }
+
+    /// Schreibt den Index nach `path` (erst in eine Nebendatei, dann umbenannt).
+    pub fn save(&self, path: &std::path::Path, fingerprint: u64) -> std::io::Result<()> {
+        use std::io::Write;
+        let tmp = path.with_extension("teil");
+        {
+            let mut w = std::io::BufWriter::with_capacity(1 << 22, std::fs::File::create(&tmp)?);
+            w.write_all(FILE_MAGIC)?;
+            w.write_all(&fingerprint.to_le_bytes())?;
+            for n in [self.buckets.len(), self.keys.len(), self.blocked.len()] {
+                w.write_all(&(n as u64).to_le_bytes())?;
+            }
+            let mut buf = Vec::with_capacity(1 << 22);
+            macro_rules! put {
+                ($v:expr) => {
+                    for c in $v.chunks(1 << 19) {
+                        buf.clear();
+                        for x in c {
+                            buf.extend_from_slice(&x.to_le_bytes());
+                        }
+                        w.write_all(&buf)?;
+                    }
+                };
+            }
+            put!(self.buckets);
+            put!(self.keys);
+            put!(self.pos);
+            put!(self.blocked);
+            w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        }
+        std::fs::rename(&tmp, path)
+    }
+
+    /// Lädt einen mit [`StrobeIndex::save`] geschriebenen Index; `Ok(None)`, wenn die Datei zu
+    /// einer anderen Referenz oder anderen Einstellungen gehört.
+    pub fn load(path: &std::path::Path, fingerprint: u64) -> std::io::Result<Option<Self>> {
+        use std::io::Read;
+        let mut r = std::io::BufReader::with_capacity(1 << 22, std::fs::File::open(path)?);
+        let mut head = [0u8; 40];
+        r.read_exact(&mut head)?;
+        let word = |i: usize| u64::from_le_bytes(head[i..i + 8].try_into().expect("8 Bytes"));
+        if &head[..8] != FILE_MAGIC || word(8) != fingerprint {
+            return Ok(None);
+        }
+        let (nb, nk, nx) = (word(16) as usize, word(24) as usize, word(32) as usize);
+        if nb != (1usize << BUCKET_BITS) + 1 {
+            return Ok(None);
+        }
+        let mut buf = vec![0u8; 1 << 22];
+        macro_rules! get {
+            ($t:ty, $n:expr) => {{
+                const W: usize = std::mem::size_of::<$t>();
+                let mut v: Vec<$t> = Vec::with_capacity($n);
+                let mut left = $n;
+                while left > 0 {
+                    let m = left.min(buf.len() / W);
+                    r.read_exact(&mut buf[..m * W])?;
+                    v.extend(
+                        buf[..m * W]
+                            .chunks_exact(W)
+                            .map(|c| <$t>::from_le_bytes(c.try_into().expect("Breite"))),
+                    );
+                    left -= m;
+                }
+                v
+            }};
+        }
+        let buckets = get!(u32, nb);
+        let keys = get!(u16, nk);
+        let pos = get!(u32, nk);
+        let blocked = get!(u64, nx);
+        if buckets.last().map(|&b| b as usize) != Some(nk) || r.read(&mut [0u8; 1])? != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Strobe-Index beschädigt",
+            ));
+        }
+        Ok(Some(Self {
+            buckets,
+            keys,
+            pos,
+            blocked,
+        }))
+    }
+
     pub fn bytes(&self) -> usize {
         self.keys.len() * 6 + self.buckets.len() * 4 + self.blocked.len() * 8
     }
@@ -407,6 +530,34 @@ mod tests {
         assert_eq!(one.pos, idx.pos);
         assert_eq!(one.buckets, idx.buckets);
         assert_eq!(one.blocked, idx.blocked);
+        // gespeichert und geladen gleich; andere Referenz oder beschädigte Datei erkannt
+        let dir = std::env::temp_dir().join(format!("gc-strobe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("x.gcstrobe");
+        let fp = StrobeIndex::fingerprint(&reference);
+        idx.save(&path, fp).unwrap();
+        let back = StrobeIndex::load(&path, fp).unwrap().unwrap();
+        assert_eq!(back.keys, idx.keys);
+        assert_eq!(back.pos, idx.pos);
+        assert_eq!(back.buckets, idx.buckets);
+        assert_eq!(back.blocked, idx.blocked);
+        let mut other = Reference::new();
+        other.push_contig("a", &seq[..20_000]);
+        assert_ne!(StrobeIndex::fingerprint(&other), fp);
+        assert!(
+            StrobeIndex::load(&path, StrobeIndex::fingerprint(&other))
+                .unwrap()
+                .is_none()
+        );
+        let len = std::fs::metadata(&path).unwrap().len();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(len - 3)
+            .unwrap();
+        assert!(StrobeIndex::load(&path, fp).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

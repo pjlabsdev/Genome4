@@ -192,6 +192,10 @@ enum Command {
         /// geprüft gegen Simulation und GIAB. Baut beim Start einen Index (rund 3,5 GB für GRCh38)
         #[arg(long, default_value = "aus", value_parser = ["aus", "an"])]
         strobeweg: String,
+        /// Strobe-Index hier speichern und beim nächsten Start laden statt neu bauen (passt er
+        /// nicht zur Referenz, wird er neu gebaut und ersetzt). Ohne: bei jedem Start bauen
+        #[arg(long)]
+        strobe_datei: Option<std::path::PathBuf>,
         /// Keinen Überblick (`<aus ohne .bam>.html` und `.bamqc.json`) schreiben
         #[arg(long)]
         ohne_bericht: bool,
@@ -760,6 +764,7 @@ struct Fq2bamRun<'a> {
     bam_level: u8,
     /// Strobemer-Weg für Reads, die der Schnellweg nicht nimmt.
     strobe: bool,
+    strobe_file: Option<&'a std::path::Path>,
 }
 
 /// Zahlen von `flagstat` als JSON, für eine der beiden Gruppen.
@@ -1013,8 +1018,33 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
     })?;
     let strobe = if run.strobe {
         let st = gc_log::stage("fq2bam.strobe_index", json!({ "kerne": run.threads }));
-        let s = gc_index::StrobeIndex::build(fm.reference(), run.threads);
-        st.finish(json!({ "eintraege": s.len(), "gesperrt": s.blocked(), "bytes": s.bytes() }));
+        let fp = run
+            .strobe_file
+            .map(|_| gc_index::StrobeIndex::fingerprint(fm.reference()));
+        let loaded = match (run.strobe_file, fp) {
+            (Some(p), Some(fp)) if p.exists() => gc_index::StrobeIndex::load(p, fp)
+                .with_context(|| format!("Strobe-Index {} nicht lesbar", p.display()))?,
+            _ => None,
+        };
+        let from_file = loaded.is_some();
+        let s = match loaded {
+            Some(s) => s,
+            None => {
+                let s = gc_index::StrobeIndex::build(fm.reference(), run.threads);
+                if let (Some(p), Some(fp)) = (run.strobe_file, fp) {
+                    s.save(p, fp).with_context(|| {
+                        format!("Strobe-Index {} nicht schreibbar", p.display())
+                    })?;
+                }
+                s
+            }
+        };
+        st.finish(json!({
+            "eintraege": s.len(),
+            "gesperrt": s.blocked(),
+            "bytes": s.bytes(),
+            "aus_datei": from_file,
+        }));
         Some(std::sync::Arc::new(s))
     } else {
         None
@@ -2476,6 +2506,7 @@ fn main() -> Result<()> {
             verlaengerung_merken,
             bam_stufe,
             strobeweg,
+            strobe_datei,
             schnellweg,
             ohne_bericht,
         } => {
@@ -2521,6 +2552,7 @@ fn main() -> Result<()> {
                 "verlaengerung_merken": verlaengerung_merken,
                 "bam_stufe": bam_stufe,
                 "strobeweg": strobeweg,
+                "strobe_datei": strobe_datei,
                 "schnellweg": schnellweg,
                 "bericht": !ohne_bericht,
             }));
@@ -2549,6 +2581,7 @@ fn main() -> Result<()> {
                 memo: verlaengerung_merken == "an",
                 bam_level: bam_stufe,
                 strobe: strobeweg == "an",
+                strobe_file: strobe_datei.as_deref(),
                 report: !ohne_bericht,
                 fast: match schnellweg.as_str() {
                     "an" => gc_align::FastMode::On,

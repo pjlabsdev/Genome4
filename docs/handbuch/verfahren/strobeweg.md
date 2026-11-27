@@ -27,6 +27,13 @@ zusätzlich. Das Ergebnis hängt nicht von der Zahl der Kerne ab (Test). N-Strec
 Syncmere. GRCh38: 576,7 Mio. Orte, 5.049 gesperrte Randstrobes, 3,5 GB (vorher mit 8 Bytes je
 Ort und allen Orten 4,8 GB), rund 90 s auf 4 Kernen.
 
+Mit `--strobe-datei PFAD` wird der Index einmal gebaut und gespeichert (Kennung `GCSTRB01`,
+Fingerabdruck der Referenz und der Einstellungen, dann die vier Felder in Little-Endian), danach
+nur geladen. Gehört die Datei zu einer anderen Referenz, wird neu gebaut und ersetzt; eine
+gekürzte oder beschädigte Datei bricht ab (Test). Geschrieben wird erst in `PFAD.teil`, dann
+umbenannt, damit ein abgebrochener Lauf keine halbe Datei hinterlässt. GRCh38 in der Cloud auf 4
+Kernen: bauen 117 s, laden 6,1 s; die BAM ist in beiden Fällen dieselbe.
+
 ## Ablauf je Read
 1. Randstrobes des Reads und seines reversen Komplements nachschlagen. Ein Randstrobe mit mehr als
    1000 Orten gilt als gesperrt. Sind mehr als 25 % gesperrt, geht der Read den vollen Weg
@@ -78,7 +85,6 @@ lokale Ausrichtung), `lokal` (Kandidaten mit lokaler Ausrichtung).
 
 ## Offen
 - Vergleich gegen GIAB HG002 (Varianten), getrennt nach schwierigen Regionen.
-- Index einmal auf die Platte schreiben statt bei jedem Start bauen.
 - Speicher: am Mac (16 GB) passte die erste Fassung (4,8 GB) neben FM-Index und Sortierpuffer nicht ohne Auslagern; mit 3,5 GB und `--sa-ausduennen 8` neu zu prüfen.
 
 ## Literatur

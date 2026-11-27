@@ -15,7 +15,7 @@ sort, markdup, index, flagstat).
 genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.bam \
   [--lesegruppe '@RG\tID:lauf1\tSM:probe\tPL:ILLUMINA'] [--kerne 0] [--speicher-mb 2048] \
   [--temp ORDNER] [--block-basen 10000000] [--max-laenge 300] [--log DATEI] \
-  [--trimmen] [--sa-ausduennen 0] [--schnellweg aus] [--ortsspeicher-mb 64] [--grafikeinheit aus] [--partnersuche-bereiche 20] [--verlaengerung-merken an] [--bam-stufe 3] [--strobeweg aus] [--ohne-bericht] [--ohne-optisch] \
+  [--trimmen] [--sa-ausduennen 0] [--schnellweg aus] [--ortsspeicher-mb 64] [--grafikeinheit aus] [--partnersuche-bereiche 20] [--verlaengerung-merken an] [--bam-stufe 3] [--strobeweg aus] [--strobe-datei PFAD] [--ohne-bericht] [--ohne-optisch] \
   [--optisch-pixel 100] [--optisch-mgi-abstand 1000]
 ```
 
@@ -41,6 +41,7 @@ genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.
 | `--verlaengerung-merken` | Gleiche Verlängerungen eines Reads nur einmal rechnen. Das Ergebnis ist byte-gleich; `aus` rechnet jede neu wie bwa (Mac, 1 Mio. PJ-Paare: 32,9 statt 34,8 s). Siehe [Seed verlängern](../verfahren/seed-verlaengern.md#gleiche-verlängerungen-nur-einmal-rechnen) | an |
 | `--bam-stufe` | Kompressionsstufe der BAM, 0 (keine) bis 9 (kleinste Datei). Vorgabe 3 (von pj am 26.11.2026 so gewählt); `--bam-stufe 6` schreibt wie samtools und wie fq2bam bisher. Kleinere Stufen schreiben schneller und größer; die Sätze sind bei jeder Stufe dieselben, nur die Bytes der Datei ändern sich. Gemessen (Simulation, 300.000 Paare, 4 Kerne): Zusammenführen 1,17 s bei 6, 0,94 s bei 3 (+3,3 % Größe), 0,63 s bei 1 (+40 %). Siehe [BAM schreiben](../verfahren/bam-schreiben.md#kompressionsstufe) | 3 |
 | `--strobeweg` | `an`: Reads, die der Schnellweg nicht nimmt, über Randstrobes verorten, wenn sie dort eindeutig und vollständig passen; alle anderen gehen den vollen Weg. Schneller (Simulation über GRCh38, 300.000 Paare: Ausrichten 23,1 statt 30,6 s, falsche Reads mit MAPQ ≥ 20 gleich: 10), aber nicht bwa-gleich. Baut beim Start einen Index (GRCh38: rund 90 s auf 4 Kernen, 3,5 GB). Siehe [Strobemer-Weg](../verfahren/strobeweg.md) | aus |
+| `--strobe-datei PFAD` | Strobe-Index dort speichern und beim nächsten Start laden statt neu bauen. Die Datei trägt einen Fingerabdruck der Referenz (Namen, Längen, Basen) und der Einstellungen; passt er nicht, wird neu gebaut und die Datei ersetzt. Eine beschädigte Datei bricht mit Fehler ab. Nur mit `--strobeweg an` wirksam | ohne (bei jedem Start bauen) |
 
 ## Ablauf
 1. Index laden ([FM-Index](../verfahren/fm-index.md)). Mit `--trimmen` läuft gleichzeitig die
