@@ -67,17 +67,6 @@ Kernen: bauen 117 s, laden 6,1 s; die BAM ist in beiden Fällen dieselbe.
    gleich wie mit 3 Basen, Zeit im Rauschen. Schalter zurück: `GC_STROBE_LUECKE_BIS=3`.
    Ist der Zweitbeste schon weniger als 15 unter dem Besten, bricht der Read ab und geht den
    vollen Weg, ohne die übrigen Gruppen auszurichten (Schalter zurück: `GC_STROBE_FRUEH=0`).
-   **Versuch (Vorgabe aus, `GC_STROBE_MEHRERE=1`):** Ist der Zweitbeste zu nah, gibt der
-   Strobemer-Weg alle ausgerichteten Orte als Bereiche ab (bester zuerst, einander nicht
-   überlappend), statt den vollen Weg zu gehen. Primären Ort, Zweitbesten, Zahl fast gleich guter
-   Orte und die Paarbildung bestimmen dann dieselben Schritte wie nach dem vollen Weg. Das gilt
-   nur, wenn kein Randstrobe gesperrt war und hinter den 16 ausgerichteten Gruppen keine mehr kam,
-   die mindestens ein Drittel so groß ist wie die größte; sonst könnten weitere Kopien fehlen und
-   die MAPQ zu hoch werden. Simulation (600.000 Reads, ganzes GRCh38): Ausrichten 22,0 s statt
-   23,1 s, falsch mit MAPQ ≥ 20 gleich (10), mit MAPQ 1 bis 19 153 statt 151, mit MAPQ 0 85
-   richtige Orte mehr. Ohne die Bedingung zu gesperrten Randstrobes stiegen zwei Paare in
-   Wiederholungen nahe am Zentromer von MAPQ 0 bis 5 auf 24 bis 59 (falsch). Prüfung gegen GIAB
-   steht aus.
 4. Abgeschnittene Enden ohne Lücke bis zum Read-Ende verlängern, wenn das je Seite höchstens den
    Abzug fürs Abschneiden kostet (5, wie bwa `-L 5,5`). Sonst geht der Read den vollen Weg.
 5. Genommen wird der Read, wenn der Score höchstens 30 unter dem vollen liegt und der
