@@ -1,7 +1,8 @@
 # Strobemer-Weg
 
-Stand: Versuch (`fq2bam --strobeweg an`, Vorgabe aus). Die Ausgabe ist nicht bwa-gleich und wird
-gegen die Wahrheit geprüft, nicht gegen bwa.
+Stand: Vorgabe seit 2026-11-28 (`fq2bam --strobeweg auto`: an ab 14 GiB Arbeitsspeicher; pjs
+Entscheidung nach dem GIAB-Vergleich). Die Ausgabe ist nicht bwa-gleich und wird gegen die Wahrheit
+geprüft, nicht gegen bwa; `--strobeweg aus` gibt den bwa-gleichen Weg.
 
 ## Aufgabe
 Der volle Weg (Seed-Suche mit Nachsuche, Ketten, Verlängern) kostet bei Reads, die der

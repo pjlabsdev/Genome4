@@ -419,6 +419,9 @@ fn chain_to_marked_duplicates() {
             &s(&whole),
             "--speicher-mb",
             memory,
+            // Vergleich mit den einzelnen Schritten: bwa-gleicher Weg.
+            "--strobeweg",
+            "aus",
         ]))
         .unwrap();
         assert!(out.contains("\"genome.fq2bam.v1\""), "{out}");
@@ -468,6 +471,8 @@ fn chain_to_marked_duplicates() {
         "--aus",
         &s(&plain_run),
         "--ohne-bericht",
+        "--strobeweg",
+        "aus",
     ]);
     assert!(bam_records(&plain_run) == after);
     assert!(!dir.join("ohne-bericht.html").exists());

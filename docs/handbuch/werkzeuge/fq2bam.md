@@ -13,9 +13,9 @@ sort, markdup, index, flagstat).
 ## Aufruf
 ```bash
 genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.bam \
-  [--lesegruppe '@RG\tID:lauf1\tSM:probe\tPL:ILLUMINA'] [--kerne 0] [--speicher-mb 2048] \
+  [--lesegruppe '@RG\tID:lauf1\tSM:probe\tPL:ILLUMINA'] [--kerne 0] [--speicher-mb 0] \
   [--temp ORDNER] [--block-basen 10000000] [--max-laenge 300] [--log DATEI] \
-  [--trimmen] [--sa-ausduennen 0] [--schnellweg aus] [--ortsspeicher-mb 64] [--grafikeinheit aus] [--partnersuche-bereiche 20] [--verlaengerung-merken an] [--bam-stufe 3] [--strobeweg aus] [--strobe-datei PFAD] [--ohne-bericht] [--ohne-optisch] \
+  [--trimmen] [--sa-ausduennen 0] [--schnellweg aus] [--ortsspeicher-mb 64] [--grafikeinheit aus] [--partnersuche-bereiche 20] [--verlaengerung-merken an] [--bam-stufe 3] [--strobeweg auto] [--strobe-datei PFAD] [--ohne-bericht] [--ohne-optisch] \
   [--optisch-pixel 100] [--optisch-mgi-abstand 1000]
 ```
 
@@ -25,7 +25,7 @@ genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.
 | `--aus` | Ausgabe-BAM | |
 | `--lesegruppe` | Kopfzeile `@RG` wie bei `bwa mem -R`, Tabulatoren als `\t` | keine |
 | `--kerne` | Kerne (0 = alle); die Ausgabe hängt nicht davon ab | 0 |
-| `--speicher-mb` | Speicher für das Sortieren; die Ausgabe hängt nicht davon ab | 2048 |
+| `--speicher-mb` | Speicher für das Sortieren in MB; die Ausgabe hängt nicht davon ab. 0 wählt: 2048, mit Strobemer-Weg auf Geräten unter 24 GiB Arbeitsspeicher 512 (`FQ2BAM.SORTIERPUFFER` im Protokoll). Der Puffer belegt rund das 1,4-Fache seiner Größe; auf dem MacBook Air M5 mit 16 GB liefen alle Messungen mit Strobemer-Weg bei 512 ohne Auslagern | 0 |
 | `--temp` | Ordner für die Teile des Sortierens | Ordner der Ausgabe |
 | `--block-basen` | Paare: Basen je Block, aus dem die Insertgröße geschätzt wird | 10.000.000 |
 | `--max-laenge` | längster erwarteter Read für das Markieren der Duplikate | 300 |
@@ -40,8 +40,8 @@ genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.
 | `--partnersuche-bereiche` | Für höchstens so viele Bereiche eines Reads wird der Partner gesucht. bwa nimmt 50 (`-m`), damit ist die Ausgabe bwa-gleich. Der Standard 20 spart Rechenzeit bei Reads aus Wiederholungen (Mac, 1 Mio. PJ-Paare: 33,3 statt 38,5 s) und ruft am ganzen chr20 von HG002 gegen GIAB gleich gute Varianten, ändert aber einzelne Zeilen (dort 0,75 %, bei PJ 1,7 %), meist MAPQ und Ort von Reads in Wiederholungen. Siehe [Read-Paare](../verfahren/read-paare.md#partnersuche-gesammelt-rechnen) | 20 |
 | `--verlaengerung-merken` | Gleiche Verlängerungen eines Reads nur einmal rechnen. Das Ergebnis ist byte-gleich; `aus` rechnet jede neu wie bwa (Mac, 1 Mio. PJ-Paare: 32,9 statt 34,8 s). Siehe [Seed verlängern](../verfahren/seed-verlaengern.md#gleiche-verlängerungen-nur-einmal-rechnen) | an |
 | `--bam-stufe` | Kompressionsstufe der BAM, 0 (keine) bis 9 (kleinste Datei). Vorgabe 3 (von pj am 26.11.2026 so gewählt); `--bam-stufe 6` schreibt wie samtools und wie fq2bam bisher. Kleinere Stufen schreiben schneller und größer; die Sätze sind bei jeder Stufe dieselben, nur die Bytes der Datei ändern sich. Gemessen (Simulation, 300.000 Paare, 4 Kerne): Zusammenführen 1,17 s bei 6, 0,94 s bei 3 (+3,3 % Größe), 0,63 s bei 1 (+40 %). Siehe [BAM schreiben](../verfahren/bam-schreiben.md#kompressionsstufe) | 3 |
-| `--strobeweg` | `an`: Reads, die der Schnellweg nicht nimmt, über Randstrobes verorten, wenn sie dort eindeutig und vollständig passen; alle anderen gehen den vollen Weg. Schneller (Simulation über GRCh38, 300.000 Paare: Ausrichten 23,1 statt 30,6 s, falsche Reads mit MAPQ ≥ 20 gleich: 10), aber nicht bwa-gleich. Baut beim Start einen Index (GRCh38: rund 90 s auf 4 Kernen, 3,5 GB). Siehe [Strobemer-Weg](../verfahren/strobeweg.md) | aus |
-| `--strobe-datei PFAD` | Strobe-Index dort speichern und beim nächsten Start laden statt neu bauen. Die Datei trägt einen Fingerabdruck der Referenz (Namen, Längen, Basen) und der Einstellungen; passt er nicht, wird neu gebaut und die Datei ersetzt. Eine beschädigte Datei bricht mit Fehler ab. Nur mit `--strobeweg an` wirksam | ohne (bei jedem Start bauen) |
+| `--strobeweg` | `auto` (Vorgabe seit 2026-11-28, pjs Entscheidung): an, wenn das Gerät mindestens 14 GiB Arbeitsspeicher hat, sonst aus (`FQ2BAM.STROBEWEG` im Protokoll mit Grund). `an`: Reads, die der Schnellweg nicht nimmt, über Randstrobes verorten, wenn sie dort eindeutig und vollständig passen; alle anderen gehen den vollen Weg. Nicht bwa-gleich, gegen die Wahrheit geprüft: GIAB HG002 chr20 (60 Mio. Paare, MacBook Air M5, Schnellweg aus, Ausdünnen 8) SNV F1 0,8416 und Indel F1 0,7356 wie zuvor, segdups und lowmap besser als der bwa-gleiche Weg, 3.320 statt 4.081 s; Simulation über GRCh38 (2 Mio. Paare): falsche Reads mit MAPQ ≥ 20 74 statt 76, Ausrichten 116 statt 232 s. Mit Strobemer-Weg werden die Zählblöcke des FM-Index dicht angeordnet (1 GB weniger). `aus`: bwa-gleicher Weg. Siehe [Strobemer-Weg](../verfahren/strobeweg.md) | auto |
+| `--strobe-datei PFAD` | Strobe-Index dort speichern und beim nächsten Start laden statt neu bauen (GRCh38: Bau rund 90 s auf 4 Kernen, 3,5 GB; Laden rund 1 s). Die Datei trägt einen Fingerabdruck der Referenz (Namen, Längen, Basen) und der Einstellungen; passt er nicht, wird neu gebaut und die Datei ersetzt. Eine beschädigte Datei bricht mit Fehler ab. Ohne Angabe gilt `<Index>.gcstrobe` neben dem Index; ist der Ordner nicht schreibbar, steht `FQ2BAM.STROBE_DATEI` als Warnung im Protokoll und der Lauf geht weiter. Nur mit Strobemer-Weg wirksam | `<Index>.gcstrobe` |
 
 ## Ablauf
 1. Index laden ([FM-Index](../verfahren/fm-index.md)). Mit `--trimmen` läuft gleichzeitig die

@@ -132,8 +132,9 @@ enum Command {
         /// Lesegruppe wie bei `bwa mem -R`, zum Beispiel '@RG\tID:lauf1\tSM:probe\tPL:ILLUMINA'
         #[arg(long)]
         lesegruppe: Option<String>,
-        /// Speicher für das Sortieren in MB
-        #[arg(long, default_value_t = 2048)]
+        /// Speicher für das Sortieren in MB. 0 (Vorgabe): 2048, mit Strobemer-Weg auf Geräten
+        /// unter 24 GiB Arbeitsspeicher 512 (sonst lagert ein 16-GB-Gerät aus)
+        #[arg(long, default_value_t = 0)]
         speicher_mb: usize,
         /// Ordner für die Teile des Sortierens (Vorgabe: der Ordner der Ausgabe)
         #[arg(long)]
@@ -188,12 +189,14 @@ enum Command {
         #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(0..=9))]
         bam_stufe: u8,
         /// Strobemer-Weg: Reads, die der Schnellweg nicht nimmt, über Randstrobes verorten, wenn
-        /// sie dort eindeutig und vollständig passen (`an`). Schneller, aber nicht bwa-gleich;
-        /// geprüft gegen Simulation und GIAB. Baut beim Start einen Index (rund 3,5 GB für GRCh38)
-        #[arg(long, default_value = "aus", value_parser = ["aus", "an"])]
+        /// sie dort eindeutig und vollständig passen. Schneller, aber nicht bwa-gleich; gegen
+        /// GIAB gleich gute Varianten. `auto` (Vorgabe): an, wenn das Gerät mindestens 14 GiB
+        /// Arbeitsspeicher hat (der Index braucht rund 3,5 GB für GRCh38). `aus`: bwa-gleich
+        #[arg(long, default_value = "auto", value_parser = ["auto", "aus", "an"])]
         strobeweg: String,
         /// Strobe-Index hier speichern und beim nächsten Start laden statt neu bauen (passt er
-        /// nicht zur Referenz, wird er neu gebaut und ersetzt). Ohne: bei jedem Start bauen
+        /// nicht zur Referenz, wird er neu gebaut und ersetzt). Ohne: `<Index>.gcstrobe` neben
+        /// dem Index (ist der Ordner nicht schreibbar, nur eine Warnung)
         #[arg(long)]
         strobe_datei: Option<std::path::PathBuf>,
         /// Keinen Überblick (`<aus ohne .bam>.html` und `.bamqc.json`) schreiben
@@ -946,6 +949,8 @@ struct Fq2bamRun<'a> {
     /// Strobemer-Weg für Reads, die der Schnellweg nicht nimmt.
     strobe: bool,
     strobe_file: Option<&'a std::path::Path>,
+    /// `strobe_file` ist der Vorgabe-Ort neben dem Index: Schreiben darf scheitern.
+    strobe_file_default: bool,
 }
 
 /// Zahlen von `flagstat` als JSON, für eine der beiden Gruppen.
@@ -1217,9 +1222,20 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
             None => {
                 let s = gc_index::StrobeIndex::build(fm.reference(), run.threads);
                 if let (Some(p), Some(fp)) = (run.strobe_file, fp) {
-                    s.save(p, fp).with_context(|| {
-                        format!("Strobe-Index {} nicht schreibbar", p.display())
-                    })?;
+                    match s.save(p, fp) {
+                        Ok(()) => {}
+                        Err(e) if run.strobe_file_default => gc_log::warn(
+                            "FQ2BAM.STROBE_DATEI",
+                            "Strobe-Index neben dem Index nicht schreibbar, wird beim nächsten Start neu gebaut",
+                            json!({ "datei": p, "fehler": e.to_string() }),
+                        ),
+                        Err(e) => {
+                            return Err(anyhow::Error::new(e).context(format!(
+                                "Strobe-Index {} nicht schreibbar",
+                                p.display()
+                            )));
+                        }
+                    }
                 }
                 s
             }
@@ -2087,6 +2103,48 @@ fn plan_sa_thinning(index: &std::path::Path, memory_mb: usize, strobe: bool) -> 
     Ok(keep as u32)
 }
 
+/// Ab so viel Arbeitsspeicher geht `--strobeweg auto` an: Strobe-Index (3,5 GB), FM-Index
+/// (mit Ausdünnen 8 und dichten Zählblöcken rund 3,6 GB) und Arbeit passen dann in 16 GB.
+const STROBE_MIN_RAM: u64 = 14 << 30;
+
+/// `--strobeweg`: an, aus, oder nach Arbeitsspeicher (`auto`). Die Wahl steht im Protokoll.
+fn choose_strobe(mode: &str) -> bool {
+    let ram = gc_sys::physical_memory_bytes();
+    let (on, reason) = match mode {
+        "an" => (true, "verlangt"),
+        "aus" => (false, "verlangt"),
+        _ => match ram {
+            Some(r) if r >= STROBE_MIN_RAM => (true, "genug Arbeitsspeicher"),
+            Some(_) => (false, "zu wenig Arbeitsspeicher"),
+            None => (false, "Arbeitsspeicher unbekannt"),
+        },
+    };
+    gc_log::info(
+        "FQ2BAM.STROBEWEG",
+        "Strobemer-Weg gewählt",
+        json!({ "modus": mode, "an": on, "grund": reason, "arbeitsspeicher_bytes": ram,
+                "mindestens_bytes": STROBE_MIN_RAM }),
+    );
+    on
+}
+
+/// `--speicher-mb 0`: 2048 MB, mit Strobemer-Weg unter 24 GiB Arbeitsspeicher 512 MB. Auf dem
+/// MacBook Air M5 mit 16 GB lagen alle Messungen mit Strobemer-Weg bei 512 MB ohne Auslagern
+/// (Spitze 9,0 GB); der Sortierpuffer kostet rund 1,4-mal seine Größe.
+fn sort_memory_mb(asked: usize, strobe: bool) -> usize {
+    if asked > 0 {
+        return asked;
+    }
+    let small = gc_sys::physical_memory_bytes().is_some_and(|r| r < 24 << 30);
+    let mb = if strobe && small { 512 } else { 2048 };
+    gc_log::info(
+        "FQ2BAM.SORTIERPUFFER",
+        "Sortierpuffer nach Arbeitsspeicher gewählt",
+        json!({ "speicher_mb": mb, "strobeweg": strobe, "unter_24_gib": small }),
+    );
+    mb
+}
+
 /// Zählblöcke beim Laden dicht anordnen ([`gc_index::FmIndex::densify`]): spart ein Drittel
 /// des Speichers der BWT (GRCh38 1 GB), macht aber das Zählen im vollen Weg langsamer. Darum
 /// nur mit Strobemer-Weg, der den vollen Weg selten braucht und viel Speicher belegt.
@@ -2764,13 +2822,23 @@ fn main() -> Result<()> {
                 gc_log::input_file("fastq2", p);
             }
             gc_log::input_file("index", &index);
+            let strobe = choose_strobe(&strobeweg);
+            let strobe_file = strobe
+                .then(|| {
+                    strobe_datei.clone().or_else(|| {
+                        let mut p = index.clone().into_os_string();
+                        p.push(".gcstrobe");
+                        Some(p.into())
+                    })
+                })
+                .flatten();
             let run = Fq2bamRun {
                 index: &index,
                 fastq: &fastq,
                 fastq2: fastq2.as_deref(),
                 dst: &aus,
                 read_group: lesegruppe.as_deref(),
-                memory_mb: speicher_mb,
+                memory_mb: sort_memory_mb(speicher_mb, strobe),
                 temp: &temp,
                 threads,
                 block_bases: block_basen,
@@ -2783,8 +2851,9 @@ fn main() -> Result<()> {
                 max_matesw: partnersuche_bereiche,
                 memo: verlaengerung_merken == "an",
                 bam_level: bam_stufe,
-                strobe: strobeweg == "an",
-                strobe_file: strobe_datei.as_deref(),
+                strobe,
+                strobe_file: strobe_file.as_deref(),
+                strobe_file_default: strobe_datei.is_none(),
                 report: !ohne_bericht,
                 fast: match schnellweg.as_str() {
                     "an" => gc_align::FastMode::On,

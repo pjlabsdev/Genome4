@@ -31,6 +31,9 @@ Kennungen sind fest: sie ändern ihre Bedeutung nicht. Neue kommen hinzu.
 | `GPU.FEHLT` | warn | `--grafikeinheit an`, aber keine nutzbare Grafikeinheit; der Prozessor rechnet, die Ausgabe ist dieselbe. Grund unter `ursache` | Treiber prüfen (Metal auf macOS, Vulkan unter Linux, DX12 unter Windows) oder ohne die Option laufen lassen |
 | `GPU.FEHLER` | warn | Die Grafikeinheit ist während des Laufs ausgefallen; der Prozessor rechnet diesen Block, die Ausgabe ist dieselbe | Bei Wiederholung ohne `--grafikeinheit an` laufen lassen und `ursache` melden |
 | `FQ2BAM.SPEICHERPLAN` | info | fq2bam hat das Ausdünnen der Suffix-Array-Stichproben nach dem Arbeitsspeicher gewählt (`--sa-ausduennen 0`): Arbeitsspeicher, Größe von Index und Stichproben, Sortierpuffer, geschätzter Strobe-Index, gewählter Faktor und erwarteter Bedarf | |
+| `FQ2BAM.STROBEWEG` | info | fq2bam hat den Strobemer-Weg gewählt: Modus (`auto`, `an`, `aus`), Ergebnis, Grund, Arbeitsspeicher und die Grenze für `auto` (14 GiB) | |
+| `FQ2BAM.SORTIERPUFFER` | info | fq2bam hat den Sortierpuffer gewählt (`--speicher-mb 0`): Größe in MB, ob der Strobemer-Weg läuft und ob das Gerät unter 24 GiB Arbeitsspeicher hat | |
+| `FQ2BAM.STROBE_DATEI` | warn | Der Strobe-Index ließ sich am Vorgabe-Ort neben dem Index nicht speichern; der Lauf geht weiter, beim nächsten Start wird neu gebaut | Ordner des Index schreibbar machen oder `--strobe-datei` angeben |
 | `SORT.TEIL` | info | Sortieren: der Speicher war voll, ein sortierter Teil liegt auf der Platte (Zahl der Teile, Bytes auf der Platte, Datensätze bisher) | |
 | `SORT.FERTIG` | info | Sortieren beendet: Datensätze, Bytes, Teile, Laufzeit, Datensätze je Sekunde | |
 | `MARKDUP.FERTIG` | info | Duplikate markiert: gelesen, bewertet, Duplikate mit und ohne Partner, Anteil, geschätzte Bibliotheksgröße, Spitze des Fensters, Laufzeit | |
