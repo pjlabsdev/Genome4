@@ -92,7 +92,8 @@ aus dem SRA), entscheidet der neue Name.
      Ergebnisse sind. Weil das Ergebnis eines Vergleichs dann nur von der Vergleichslänge
      abhängt, wird jede Länge nur einmal gerechnet; ein gleich langer Vergleich an der nächsten
      Stelle ergäbe dasselbe Nein (`GC_TRIM_GLEICHE_LAENGE=0` rechnet jede Stelle). Die beiden
-     Zählfelder liegen bis 256 Basen auf dem Stapel statt je Vergleich neu angelegt: Am Mac gingen
+     Zählfelder werden je Faden wiederverwendet statt je Vergleich angelegt und genullt (jeder
+     gelesene Eintrag wird vorher gesetzt): Am Mac gingen
      vorher zwei Drittel der Lesezeit in Speicher anlegen und freigeben. Die Ausgabe ist gleich
      (`genome trim` auf 300.000 simulierten und 33.000 echten Paaren byte-gleich).
 5. **Adapter-Dimer**: Wurde in Schritt 3 oder 4 etwas gekürzt und sind danach beide Reads höchstens

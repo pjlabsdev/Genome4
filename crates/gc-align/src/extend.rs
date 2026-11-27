@@ -166,8 +166,13 @@ fn extend_rows_v<V: Signed16>(
     let cols = n_q + 2 + LANES;
     let mut pool = SCRATCH.with(|c| std::mem::take(&mut *c.borrow_mut()));
     pool.clear();
-    pool.resize(2 * cols + 5 * stride + 4 * stride, 0);
-    let (h, rest) = pool.split_at_mut(cols);
+    pool.resize(2 * cols + 5 * stride + 4 * stride + stride + 1, 0);
+    let (ramp, pool_rest) = pool.split_at_mut(stride + 1);
+    for (k, r) in ramp.iter_mut().enumerate() {
+        *r = (k as i32 * sc.e_ins) as i16;
+    }
+    let ramp: &[i16] = ramp;
+    let (h, rest) = pool_rest.split_at_mut(cols);
     let (e, rest) = rest.split_at_mut(cols);
     let (profile, rest) = rest.split_at_mut(5 * stride);
     let (top, rest) = rest.split_at_mut(stride);
@@ -196,7 +201,6 @@ fn extend_rows_v<V: Signed16>(
             *p = sc.score(a as u8, q) as i16;
         }
     }
-    let ramp: Vec<i16> = (0..=stride).map(|k| (k as i32 * sc.e_ins) as i16).collect();
     // Arbeitsfelder einer Zeile (oben im Puffer): bester Wert ohne Insertion, neue Deletion,
     // laufendes Maximum, fertige Zelle.
 

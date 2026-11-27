@@ -754,16 +754,38 @@ fn match_with_one_insertion(ins: &[u8], normal: &[u8], cmplen: usize, limit: isi
     if cmplen == 0 {
         return false;
     }
-    // Ohne Speicher anzulegen (die Suche ruft das je Read Dutzende Male)
-    let (mut lbuf, mut rbuf) = ([0isize; 256], [0isize; 256]);
-    let (mut lvec, mut rvec) = (Vec::new(), Vec::new());
-    let (left, right): (&mut [isize], &mut [isize]) = if cmplen <= 256 {
-        (&mut lbuf[..cmplen], &mut rbuf[..cmplen])
-    } else {
-        lvec.resize(cmplen, 0);
-        rvec.resize(cmplen, 0);
-        (&mut lvec[..], &mut rvec[..])
-    };
+    // Ohne Speicher anzulegen oder zu nullen (die Suche ruft das je Read Dutzende Male): Felder je
+    // Faden wiederverwenden. Jeder gelesene Eintrag wird vorher gesetzt: `left` nur bis zum
+    // Abbruch, dahinter liest die Schlussschleife nicht mehr (sie endet dort mit `false`).
+    thread_local! {
+        static BUF: std::cell::RefCell<(Vec<isize>, Vec<isize>)> =
+            const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
+    }
+    BUF.with(|b| {
+        let (left, right) = &mut *b.borrow_mut();
+        if left.len() < cmplen {
+            left.resize(cmplen, 0);
+            right.resize(cmplen, 0);
+        }
+        one_insertion_with(
+            ins,
+            normal,
+            cmplen,
+            limit,
+            &mut left[..cmplen],
+            &mut right[..cmplen],
+        )
+    })
+}
+
+fn one_insertion_with(
+    ins: &[u8],
+    normal: &[u8],
+    cmplen: usize,
+    limit: isize,
+    left: &mut [isize],
+    right: &mut [isize],
+) -> bool {
     left[0] = isize::from(ins[0] != normal[0]);
     right[cmplen - 1] = isize::from(ins[cmplen] != normal[cmplen - 1]);
     for i in 1..cmplen {
