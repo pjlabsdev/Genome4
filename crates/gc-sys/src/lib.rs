@@ -89,8 +89,43 @@ pub fn physical_memory_bytes() -> Option<u64> {
     }
 }
 
+/// Größter bisher belegter Arbeitsspeicher dieses Prozesses in Bytes (Spitze der residenten
+/// Seiten, `getrusage`), wenn das Betriebssystem ihn verrät. Sonst `None`.
+pub fn peak_memory_bytes() -> Option<u64> {
+    #[cfg(unix)]
+    {
+        // SAFETY: `getrusage` füllt nur die übergebene, vollständig angelegte Struktur.
+        let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
+        if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru) } != 0 || ru.ru_maxrss <= 0 {
+            return None;
+        }
+        // macOS zählt in Bytes, Linux und die übrigen Unix-Systeme in KiB
+        let unit = if cfg!(target_vendor = "apple") {
+            1
+        } else {
+            1024
+        };
+        Some(ru.ru_maxrss as u64 * unit)
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
 #[cfg(test)]
 mod memory_tests {
+    #[test]
+    fn peak_memory_grows_with_a_touched_buffer_where_known() {
+        let Some(before) = super::peak_memory_bytes() else {
+            return;
+        };
+        let v = vec![1u8; 64 << 20];
+        let after = super::peak_memory_bytes().expect("Spitze");
+        assert!(std::hint::black_box(&v).iter().all(|&b| b == 1));
+        assert!(after >= before && after >= 64 << 20, "{before} {after}");
+    }
+
     #[test]
     fn physical_memory_is_plausible_where_known() {
         if let Some(bytes) = super::physical_memory_bytes() {

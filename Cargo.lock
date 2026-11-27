@@ -419,6 +419,7 @@ dependencies = [
 name = "gc-log"
 version = "0.1.0"
 dependencies = [
+ "gc-sys",
  "serde_json",
 ]
 

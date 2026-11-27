@@ -356,6 +356,9 @@ impl Stage {
                     "sekunden".into(),
                     json!(self.started.elapsed().as_secs_f64()),
                 );
+                if let Some(b) = gc_sys::peak_memory_bytes() {
+                    m.insert("speicher_spitze_bytes".into(), json!(b));
+                }
             }
             event(Level::Info, "STUFE.LEBT", &self.name, f);
         }
@@ -368,6 +371,9 @@ impl Stage {
             m.insert("sekunden".into(), json!(secs));
         } else {
             fields = json!({ "sekunden": secs });
+        }
+        if let (Value::Object(m), Some(b)) = (&mut fields, gc_sys::peak_memory_bytes()) {
+            m.insert("speicher_spitze_bytes".into(), json!(b));
         }
         event(Level::Info, "STUFE.ENDE", &self.name, fields);
     }

@@ -22,7 +22,7 @@ alles bis zur letzten Zeile lesbar.
 | `LAUF.START` | vollständige Befehlszeile, alle Parameter einschließlich Standardwerten, System, Architektur, Kerne, Arbeitsordner |
 | `LAUF.EINGABE` | jede Eingabedatei mit Rolle, Pfad, Größe, Änderungszeit |
 | Entscheidungen | jede automatische Wahl mit Grund, z. B. `INDEX.VERFAHREN` |
-| `STUFE.START` / `STUFE.ENDE` | jede Stufe mit Dauer und ihren Zahlen |
+| `STUFE.START` / `STUFE.ENDE` | jede Stufe mit Dauer und ihren Zahlen; `STUFE.ENDE` und `STUFE.LEBT` tragen `speicher_spitze_bytes`, den bis dahin größten belegten Arbeitsspeicher des Prozesses (Linux, macOS; fehlt, wo das System ihn nicht nennt). So zeigt das Protokoll, welche Stufe den Speicher wachsen lässt, etwa Laden des Index, Laden des Strobe-Index oder Ausrichten. |
 | `STUFE.LEBT` | Lebenszeichen langer Stufen mit Fortschritt |
 | `LAUF.FERTIG` oder `LAUF.FEHLGESCHLAGEN` | Zusammenfassung bzw. Fehlertext |
 
