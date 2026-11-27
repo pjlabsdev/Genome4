@@ -42,10 +42,6 @@ pub struct StrobeOptions {
     /// Ohne Lücke nur, wenn keine kurze Lücke besser passt (Schalter zurück:
     /// `GC_STROBE_LUECKENPRUEFUNG=0`).
     pub gap_check: bool,
-    /// Ist ein Zweiter zu nah, alle ausgerichteten Orte als Bereiche abgeben (die Paarbildung
-    /// und die Wahl des primären Orts wie im vollen Weg entscheiden), statt den vollen Weg zu
-    /// gehen. Versuch, nicht bwa-gleich (`GC_STROBE_MEHRERE=1`, Vorgabe aus).
-    pub multi: bool,
 }
 
 impl Default for StrobeOptions {
@@ -66,7 +62,6 @@ impl Default for StrobeOptions {
             ungapped_first: std::env::var("GC_STROBE_HAMMING").map_or(true, |v| v != "0"),
             stop_early: std::env::var("GC_STROBE_FRUEH").map_or(true, |v| v != "0"),
             gap_check: std::env::var("GC_STROBE_LUECKENPRUEFUNG").map_or(true, |v| v != "0"),
-            multi: std::env::var("GC_STROBE_MEHRERE").is_ok_and(|v| v == "1"),
         }
     }
 }
@@ -81,7 +76,6 @@ pub struct StrobeCounts {
     pub second_close: AtomicU64,
     pub ungapped: AtomicU64,
     pub local: AtomicU64,
-    pub multi: AtomicU64,
 }
 
 pub static COUNTS: StrobeCounts = StrobeCounts {
@@ -93,7 +87,6 @@ pub static COUNTS: StrobeCounts = StrobeCounts {
     too_weak: AtomicU64::new(0),
     second_close: AtomicU64::new(0),
     ungapped: AtomicU64::new(0),
-    multi: AtomicU64::new(0),
     local: AtomicU64::new(0),
 };
 
@@ -114,7 +107,6 @@ pub fn counts() -> Vec<(&'static str, u64)> {
         ("zweiter_zu_nah", c.second_close.load(Ordering::Relaxed)),
         ("ohne_luecke", c.ungapped.load(Ordering::Relaxed)),
         ("lokal", c.local.load(Ordering::Relaxed)),
-        ("mehrere_orte", c.multi.load(Ordering::Relaxed)),
     ]
 }
 
@@ -254,17 +246,6 @@ pub fn strobe_region(
     read: &[u8],
     opt: &AlignOptions,
 ) -> Option<Region> {
-    strobe_regions(index, strobes, read, opt).map(|v| v[0])
-}
-
-/// Wie [`strobe_region`]; mit [`StrobeOptions::multi`] bei zu nahem Zweiten alle Orte (der
-/// beste zuerst), sonst genau einer.
-pub fn strobe_regions(
-    index: &FmIndex,
-    strobes: &StrobeIndex,
-    read: &[u8],
-    opt: &AlignOptions,
-) -> Option<Vec<Region>> {
     bump(&COUNTS.tried);
     let so = &opt.strobe;
     let len = read.len();
@@ -328,7 +309,6 @@ pub fn strobe_regions(
         // (Score, Textanfang, Textende, Read-Anfang, Read-Ende)
         let mut best: Option<(i32, u64, u64, i32, i32)> = None;
         let mut second = 0i32;
-        let mut all: Vec<(i32, u64, u64, i32, i32)> = Vec::new();
         for &(_, g) in s.groups.iter().take(so.candidates) {
             let strand = g >> 63;
             let diag = (g & !(1 << 63)) as i64 - (1 << 32);
@@ -435,9 +415,6 @@ pub fn strobe_regions(
                     r.qe + 1,
                 )
             };
-            if so.multi {
-                all.push(cand);
-            }
             match best {
                 Some(b) if cand.0 <= b.0 => {
                     // dieselbe Stelle (überlappend) zählt nicht als zweiter Ort
@@ -458,7 +435,6 @@ pub fn strobe_regions(
             // statt weitere Kandidaten auszurichten (vorsichtig, ein später klar Bester ginge
             // dadurch nur den vollen Weg).
             if so.stop_early
-                && !so.multi
                 && let Some((b, ..)) = best
                 && b - second < so.min_gap
             {
@@ -543,74 +519,15 @@ pub fn strobe_regions(
             bump(&COUNTS.too_weak);
             return None;
         }
-        let close = score - second < so.min_gap;
-        // Mehrere Orte nur, wenn hinter den ausgerichteten Gruppen keine fast so große mehr kam
-        // (sonst könnte dort ein weiterer gleich guter Ort liegen, den niemand zählt).
-        let cut_off = s
-            .groups
-            .get(so.candidates)
-            .is_some_and(|&(n, _)| n * 3 >= s.groups[0].0);
-        // Gesperrte Randstrobes deuten auf weitere Kopien, die hier nicht gezählt werden.
-        if close && (!so.multi || cut_off || blocked > 0) {
+        if score - second < so.min_gap {
             bump(&COUNTS.second_close);
             return None;
         }
         // Contig des Bereichs; über eine Contig-Grenze geht der volle Weg.
         let hit = index.hit_at(rb, re - rb)?;
-        let min_sub = opt.finalize.min_seed_len * sc.matching;
-        if close {
-            // Bester Ort zuerst, dann die übrigen ausgerichteten Orte, die ihn und einander
-            // nicht überlappen; Zweitbester und Zahl fast gleich guter Orte bestimmt
-            // `mark_primary` daraus wie im vollen Weg.
-            let mut out = vec![Region {
-                rb,
-                re,
-                qb: 0,
-                qe: len as i32,
-                contig: hit.contig,
-                score,
-                truesc,
-                w: sc.band_width,
-                seedcov: len as i32,
-                seedlen0: len as i32,
-                sub: 0,
-                sub_n: 0,
-                secondary: -1,
-                csub: 0,
-                rescued: false,
-            }];
-            all.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-            for &(sc2, tb, te, qb, qe) in &all {
-                if sc2 < min_sub || out.iter().any(|r| tb < r.re && te > r.rb) {
-                    continue;
-                }
-                let Some(h) = index.hit_at(tb, te - tb) else {
-                    continue;
-                };
-                out.push(Region {
-                    rb: tb,
-                    re: te,
-                    qb,
-                    qe,
-                    contig: h.contig,
-                    score: sc2,
-                    truesc: sc2,
-                    w: sc.band_width,
-                    seedcov: qe - qb,
-                    seedlen0: qe - qb,
-                    sub: 0,
-                    sub_n: 0,
-                    secondary: -1,
-                    csub: 0,
-                    rescued: false,
-                });
-            }
-            bump(&COUNTS.multi);
-            bump(&COUNTS.taken);
-            return Some(out);
-        }
         bump(&COUNTS.taken);
-        Some(vec![Region {
+        let min_sub = opt.finalize.min_seed_len * sc.matching;
+        Some(Region {
             rb,
             re,
             qb: 0,
@@ -626,7 +543,7 @@ pub fn strobe_regions(
             secondary: -1,
             csub: 0,
             rescued: false,
-        }])
+        })
     })
 }
 
