@@ -754,8 +754,16 @@ fn match_with_one_insertion(ins: &[u8], normal: &[u8], cmplen: usize, limit: isi
     if cmplen == 0 {
         return false;
     }
-    let mut left = vec![0isize; cmplen];
-    let mut right = vec![0isize; cmplen];
+    // Ohne Speicher anzulegen (die Suche ruft das je Read Dutzende Male)
+    let (mut lbuf, mut rbuf) = ([0isize; 256], [0isize; 256]);
+    let (mut lvec, mut rvec) = (Vec::new(), Vec::new());
+    let (left, right): (&mut [isize], &mut [isize]) = if cmplen <= 256 {
+        (&mut lbuf[..cmplen], &mut rbuf[..cmplen])
+    } else {
+        lvec.resize(cmplen, 0);
+        rvec.resize(cmplen, 0);
+        (&mut lvec[..], &mut rvec[..])
+    };
     left[0] = isize::from(ins[0] != normal[0]);
     right[cmplen - 1] = isize::from(ins[cmplen] != normal[cmplen - 1]);
     for i in 1..cmplen {
@@ -785,6 +793,13 @@ fn match_with_one_insertion(ins: &[u8], normal: &[u8], cmplen: usize, limit: isi
         }
     }
     false
+}
+
+/// Gleich lange Vergleiche der Suche mit Lücke nur einmal rechnen (Schalter zurück:
+/// `GC_TRIM_GLEICHE_LAENGE=0`).
+fn same_len_skip() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("GC_TRIM_GLEICHE_LAENGE").map_or(true, |v| v != "0"))
 }
 
 /// `AdapterTrimmer::trimBySequence`; `true`, wenn gekürzt wurde.
@@ -824,25 +839,34 @@ fn trim_by_sequence(r: &mut Record, adapter: &[u8], match_req: usize) -> bool {
     // Eigenheit von fastp 1.4.0: Beide Suchen mit Lücke vergleichen immer ab dem Anfang des
     // Reads, nicht ab `pos`; nur die Vergleichslänge hängt von `pos` ab.
     if found.is_none() {
+        // Das Ergebnis hängt nur von `cmplen` ab: gleiche Länge wie eben heißt gleiches Nein.
         let mut pos = 0isize;
+        let mut last = -1isize;
         while pos < rlen - req - 1 {
             let cmplen = (rlen - pos - 1).min(alen);
-            let allowed = cmplen / ONE_MISMATCH_FOR_EACH - 1;
-            if match_with_one_insertion(seq, adapter, cmplen as usize, allowed) {
-                found = Some(pos);
-                break;
+            if cmplen != last || !same_len_skip() {
+                last = cmplen;
+                let allowed = cmplen / ONE_MISMATCH_FOR_EACH - 1;
+                if match_with_one_insertion(seq, adapter, cmplen as usize, allowed) {
+                    found = Some(pos);
+                    break;
+                }
             }
             pos += 1;
         }
     }
     if found.is_none() {
         let mut pos = 0isize;
+        let mut last = -1isize;
         while pos < rlen - req {
             let cmplen = (rlen - pos).min(alen - 1);
-            let allowed = cmplen / ONE_MISMATCH_FOR_EACH - 1;
-            if match_with_one_insertion(adapter, seq, cmplen as usize, allowed) {
-                found = Some(pos);
-                break;
+            if cmplen != last || !same_len_skip() {
+                last = cmplen;
+                let allowed = cmplen / ONE_MISMATCH_FOR_EACH - 1;
+                if match_with_one_insertion(adapter, seq, cmplen as usize, allowed) {
+                    found = Some(pos);
+                    break;
+                }
             }
             pos += 1;
         }

@@ -67,16 +67,128 @@ pub fn open(path: impl AsRef<Path>) -> Result<Reader<Box<dyn BufRead + Send>>, F
         source,
     };
     let mut file = BufReader::with_capacity(1 << 20, File::open(&path).map_err(io_err)?);
-    let gz = {
+    let (gz, bgzf) = {
         let head = file.fill_buf().map_err(io_err)?;
-        head.len() >= 2 && head[0] == 0x1f && head[1] == 0x8b
+        let gz = head.len() >= 2 && head[0] == 0x1f && head[1] == 0x8b;
+        // BGZF: gzip mit Zusatzfeld "BC" (SAM-Spezifikation, Abschnitt 4.1)
+        let bgzf = gz
+            && head.len() >= 16
+            && head[3] & 4 != 0
+            && head[12] == b'B'
+            && head[13] == b'C'
+            && head[14] == 2
+            && head[15] == 0;
+        (gz, bgzf)
     };
-    let inner: Box<dyn BufRead + Send> = if gz {
+    let inner: Box<dyn BufRead + Send> = if gz && threaded_unpacking() {
+        if bgzf {
+            // Blöcke unabhängig: auf mehreren Kernen entpacken
+            let workers = std::thread::available_parallelism()
+                .map_or(4, |n| n.get())
+                .clamp(1, 4);
+            Box::new(noodles::bgzf::io::MultithreadedReader::with_worker_count(
+                std::num::NonZero::new(workers).expect("mindestens 1"),
+                file,
+            ))
+        } else {
+            // Entpacken in eigenem Faden, das Zerlegen läuft daneben
+            Box::new(ThreadedRead::new(MultiGzDecoder::new(file)))
+        }
+    } else if gz {
         Box::new(BufReader::with_capacity(1 << 20, MultiGzDecoder::new(file)))
     } else {
         Box::new(file)
     };
     Ok(Reader::new(inner, path))
+}
+
+/// Entpacken in eigenen Fäden (Schalter zurück: `GC_LESEN_ENTPACKEN=0`).
+fn threaded_unpacking() -> bool {
+    std::env::var("GC_LESEN_ENTPACKEN").map_or(true, |v| v != "0")
+}
+
+/// Liest eine Quelle in einem eigenen Faden in Stücken von 1 MB voraus. Ein Lesefehler kommt an
+/// derselben Stelle im Strom an wie ohne Faden.
+pub struct ThreadedRead {
+    rx: std::sync::mpsc::Receiver<io::Result<Vec<u8>>>,
+    buf: Vec<u8>,
+    pos: usize,
+    done: bool,
+}
+
+impl ThreadedRead {
+    pub fn new<R: Read + Send + 'static>(mut inner: R) -> Self {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        std::thread::spawn(move || {
+            loop {
+                let mut chunk = vec![0u8; 1 << 20];
+                let mut n = 0;
+                while n < chunk.len() {
+                    match inner.read(&mut chunk[n..]) {
+                        Ok(0) => break,
+                        Ok(k) => n += k,
+                        Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                        Err(e) => {
+                            if n > 0 {
+                                chunk.truncate(n);
+                                let _ = tx.send(Ok(chunk));
+                            }
+                            let _ = tx.send(Err(e));
+                            return;
+                        }
+                    }
+                }
+                chunk.truncate(n);
+                let last = n == 0;
+                if tx.send(Ok(chunk)).is_err() || last {
+                    return;
+                }
+            }
+        });
+        Self {
+            rx,
+            buf: Vec::new(),
+            pos: 0,
+            done: false,
+        }
+    }
+}
+
+impl Read for ThreadedRead {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        let avail = self.fill_buf()?;
+        let n = avail.len().min(out.len());
+        out[..n].copy_from_slice(&avail[..n]);
+        self.consume(n);
+        Ok(n)
+    }
+}
+
+impl BufRead for ThreadedRead {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        if self.pos >= self.buf.len() && !self.done {
+            match self.rx.recv() {
+                Ok(Ok(chunk)) => {
+                    self.done = chunk.is_empty();
+                    self.buf = chunk;
+                    self.pos = 0;
+                }
+                Ok(Err(e)) => {
+                    self.done = true;
+                    return Err(e);
+                }
+                Err(_) => {
+                    self.done = true;
+                    return Err(io::Error::other("Lesefaden vorzeitig beendet"));
+                }
+            }
+        }
+        Ok(&self.buf[self.pos.min(self.buf.len())..])
+    }
+
+    fn consume(&mut self, n: usize) {
+        self.pos += n;
+    }
 }
 
 impl<R: BufRead> Reader<R> {
@@ -360,5 +472,80 @@ mod tests {
         assert!(r.read_record(&mut rec).unwrap());
         assert_eq!(rec.seq, b"AC");
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Alle Reads einer Datei, über [`open`].
+    fn all_records(p: &Path) -> Vec<Record> {
+        let mut r = open(p).unwrap();
+        let mut out = Vec::new();
+        loop {
+            let mut rec = Record::default();
+            if !r.read_record(&mut rec).unwrap() {
+                return out;
+            }
+            out.push(rec);
+        }
+    }
+
+    #[test]
+    fn gzip_and_bgzf_give_the_same_reads_as_plain_text() {
+        use flate2::{Compression, write::GzEncoder};
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("gcio-bgzf-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // gut 3 MB: mehrere Stücke des Lesefadens und viele BGZF-Blöcke
+        let mut text = Vec::new();
+        let mut x = 7u64;
+        for i in 0..20_000 {
+            let seq: String = (0..120)
+                .map(|_| {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    b"ACGT"[(x & 3) as usize] as char
+                })
+                .collect();
+            writeln!(text, "@r{i} c\n{seq}\n+\n{}", "I".repeat(120)).unwrap();
+        }
+        let plain = dir.join("a.fq");
+        std::fs::write(&plain, &text).unwrap();
+        let gz = dir.join("a.fq.gz");
+        let mut enc = GzEncoder::new(File::create(&gz).unwrap(), Compression::fast());
+        enc.write_all(&text).unwrap();
+        enc.finish().unwrap();
+        let bg = dir.join("b.fq.gz");
+        let mut w = noodles::bgzf::io::Writer::new(File::create(&bg).unwrap());
+        w.write_all(&text).unwrap();
+        w.finish().unwrap();
+        let want = all_records(&plain);
+        assert_eq!(want.len(), 20_000);
+        assert_eq!(all_records(&gz), want);
+        assert_eq!(all_records(&bg), want);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn threaded_read_passes_bytes_and_errors_in_order() {
+        struct Failing(usize);
+        impl Read for Failing {
+            fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+                if self.0 == 0 {
+                    return Err(io::Error::other("kaputt"));
+                }
+                let n = out.len().min(self.0).min(1000);
+                out[..n].fill(b'x');
+                self.0 -= n;
+                Ok(n)
+            }
+        }
+        let mut r = ThreadedRead::new(Failing(2_500_000));
+        let mut got = Vec::new();
+        let err = r.read_to_end(&mut got).unwrap_err();
+        assert_eq!(err.to_string(), "kaputt");
+        assert_eq!(got.len(), 2_500_000);
+        let mut ok = ThreadedRead::new(&b"abc"[..]);
+        let mut s = String::new();
+        ok.read_to_string(&mut s).unwrap();
+        assert_eq!(s, "abc");
     }
 }

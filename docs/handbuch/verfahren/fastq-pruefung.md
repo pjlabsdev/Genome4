@@ -4,6 +4,11 @@ Stand: gebaut (`gc-io`, `fastq.rs` und `readname.rs`).
 
 ## Lesen
 - gzip wird am Dateianfang (`1f 8b`) erkannt, mehrteilige gzip-Dateien werden ganz gelesen.
+- Entpackt wird in eigenen Fäden: gewöhnliches gzip in einem Faden, der in Stücken von 1 MB
+  vorausliest, während der Leser zerlegt; BGZF (gzip mit Zusatzfeld `BC`, wie bgzip schreibt)
+  auf bis zu 4 Kernen, weil die Blöcke unabhängig sind. Die Bytes und ein Lesefehler kommen in
+  derselben Reihenfolge an wie ohne Faden (Tests mit gzip, BGZF und einem Fehler mitten im
+  Strom). `GC_LESEN_ENTPACKEN=0` entpackt wie bisher im Leser.
 - Zeilenenden `\n` und `\r\n` gelten gleich.
 - Die Sequenz wird in Großbuchstaben gewandelt; `.` gilt als N.
 

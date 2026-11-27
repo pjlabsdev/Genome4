@@ -89,7 +89,12 @@ aus dem SRA), entscheidet der neue Name.
      Schleifen wird immer ab dem Anfang des Reads verglichen, nicht ab der Stelle `pos`; nur die
      Vergleichslänge hängt von `pos` ab. Gekürzt wird bei Treffer an `pos`. Das wird genau so
      nachgebaut und im Handbuch als Eigenheit geführt, nicht verbessert, solange das Ziel gleiche
-     Ergebnisse sind.
+     Ergebnisse sind. Weil das Ergebnis eines Vergleichs dann nur von der Vergleichslänge
+     abhängt, wird jede Länge nur einmal gerechnet; ein gleich langer Vergleich an der nächsten
+     Stelle ergäbe dasselbe Nein (`GC_TRIM_GLEICHE_LAENGE=0` rechnet jede Stelle). Die beiden
+     Zählfelder liegen bis 256 Basen auf dem Stapel statt je Vergleich neu angelegt: Am Mac gingen
+     vorher zwei Drittel der Lesezeit in Speicher anlegen und freigeben. Die Ausgabe ist gleich
+     (`genome trim` auf 300.000 simulierten und 33.000 echten Paaren byte-gleich).
 5. **Adapter-Dimer**: Wurde in Schritt 3 oder 4 etwas gekürzt und sind danach beide Reads höchstens
    2 Basen lang, fällt das Paar als Dimer weg.
 6. **Filter je Read** (`Filter::passFilter`): leer → Länge; mehr schlechte Basen (Qualität unter
