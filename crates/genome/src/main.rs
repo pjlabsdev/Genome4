@@ -1182,11 +1182,15 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
             run.sa_thin
         };
         let mut fm = load_index_thinned(run.index, thin);
+        let dense = dense_index(run.strobe);
         if let Ok(fm) = fm.as_mut() {
+            if dense {
+                fm.densify(run.threads);
+            }
             fm.enable_locate_cache(locate_cache_bits(run.locate_cache_mb));
         }
-        if fm.is_ok() {
-            st.finish(json!({}));
+        if let Ok(fm) = &fm {
+            st.finish(json!({ "dicht": dense, "tabellen_bytes": fm.table_bytes() }));
         }
         let trimmer = match planned {
             Some(h) => Some(
@@ -2081,6 +2085,18 @@ fn plan_sa_thinning(index: &std::path::Path, memory_mb: usize, strobe: bool) -> 
         }),
     );
     Ok(keep as u32)
+}
+
+/// Zählblöcke beim Laden dicht anordnen ([`gc_index::FmIndex::densify`]): spart ein Drittel
+/// des Speichers der BWT (GRCh38 1 GB), macht aber das Zählen im vollen Weg langsamer. Darum
+/// nur mit Strobemer-Weg, der den vollen Weg selten braucht und viel Speicher belegt.
+/// `GC_INDEX_DICHT=0` oder `=1` erzwingt eins von beiden.
+fn dense_index(strobe: bool) -> bool {
+    match std::env::var("GC_INDEX_DICHT").as_deref() {
+        Ok("0") => false,
+        Ok("1") => true,
+        _ => strobe,
+    }
 }
 
 fn load_index_thinned(path: &std::path::Path, keep_every: u32) -> Result<gc_index::FmIndex> {

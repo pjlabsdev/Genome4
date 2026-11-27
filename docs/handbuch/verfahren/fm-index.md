@@ -56,6 +56,30 @@ n = 4; die BAM war in allen drei Fällen gleich (ohne `@PG`). Mit n = 2 sinkt de
 Stichproben von 4,0 auf 2,0 GB. Das hilft auf Rechnern mit 16 GB, auf denen der volle Index samt
 Sortierpuffer sonst ausgelagert wird (`genome fq2bam --sa-ausduennen`).
 
+### Dichte Zählblöcke beim Laden
+
+`FmIndex::densify` ordnet die Zählblöcke nach dem Laden um: 192 statt 128 Zeilen je 64 Bytes,
+also eine Cache-Zeile je Block. Ein Block hält vier Zählstände zu je 32 Bit relativ zu einem
+Oberblock (2^24 Blöcke, volle 64-Bit-Zählstände) und sechs Wörter BWT. Die BWT braucht damit
+2,7 statt 4 Bit je Zeile, am ganzen GRCh38 rund 1 GB weniger. `occ4` zählt wie bei 128 Zeilen
+höchstens über die halbe Blocklänge (drei Wörter), vorn vorwärts vom eigenen Zählstand, hinten
+rückwärts vom Zählstand des nächsten Blocks. Alle Zahlen sind dieselben; die Datei bleibt
+unverändert, ein verdichteter Index lässt sich nicht speichern. Kurz nach dem Laden liegen beide
+Fassungen im Speicher (GRCh38: Spitze 6,5 statt 4,4 GB, das liegt unter der Spitze beim
+Ausrichten).
+
+`fq2bam` verdichtet nur mit Strobemer-Weg: Dort geht der volle Weg selten, und der Strobe-Index
+belegt 3,5 GB. `GC_INDEX_DICHT=1` verdichtet immer, `=0` nie. Test
+`occ_matches_counting_and_edges` vergleicht jede Zeile eines kleinen Genoms, auch über Grenzen
+der Oberblöcke.
+
+| Messung (GRCh38 kompakt, `--sa-ausduennen 2`, 200.000 MGI-Paare, 4 Kerne) | Ausrichten | Spitze |
+|---|---|---|
+| Strobemer-Weg, Schnellweg aus, Blöcke wie in der Datei | 12,02 s | 8,45 GB |
+| dasselbe, dicht | 12,00 s | 7,46 GB |
+| ohne Strobemer-Weg, Blöcke wie in der Datei | 22,2 s | 4,98 GB |
+| ohne Strobemer-Weg, dicht | 26,3 s | 6,47 GB (Ladespitze) |
+
 ## Suche
 `occ(c, i)` zählt die Base c in den Zeilen 0 bis i-1 der BWT: Zählstand des Blocks plus Auszählen
 der Wörter bis i. `occ4(i)` liefert die Zählung für alle vier Basen in einem Durchgang durch

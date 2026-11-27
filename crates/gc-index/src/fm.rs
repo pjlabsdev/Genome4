@@ -112,6 +112,29 @@ pub struct FmIndex {
     /// `true`: `occ4` zählt immer mit Schleifen und Verzweigungen wie früher, siehe
     /// [`FmIndex::set_occ_plain`].
     occ_plain: bool,
+    /// Dichte Zählblöcke ([`FmIndex::densify`]); dann ist `blocks` leer.
+    dense: Option<Dense>,
+}
+
+/// Zeilen je dichtem Zählblock: 64 Bytes = 4 relative Zählstände zu je 32 Bit und
+/// 6 Wörter BWT. Die Datei hat 128 Zeilen in 64 Bytes (4 Zählstände zu je 64 Bit).
+const DENSE_ROWS: u64 = 192;
+/// Blöcke je Oberblock mit vollen 64-Bit-Zählständen; 2^24 Blöcke sind 3,2 Mrd. Zeilen,
+/// die relativen Zählstände passen also in 32 Bit.
+const DENSE_SB_SHIFT: u32 = 24;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(C, align(64))]
+struct DenseBlock([u64; 8]);
+
+/// Zählblöcke mit 192 Zeilen je Cache-Zeile statt 128: ein Drittel weniger Speicher für die
+/// BWT, dieselben Zahlen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Dense {
+    blocks: Vec<DenseBlock>,
+    sb: Vec<[u64; 4]>,
+    /// Blöcke je Oberblock als Zweierexponent (sonst [`DENSE_SB_SHIFT`]; Tests kleiner).
+    sb_shift: u32,
 }
 
 /// Plätze des Zwischenspeichers. Gehört nicht zum Inhalt des Index: Vergleiche sehen ihn nicht,
@@ -346,6 +369,7 @@ impl Builder {
             short: crate::smem::ShortTable::default(),
             locate_cache: LocateCache::default(),
             occ_plain: false,
+            dense: None,
         };
         index.short = crate::smem::ShortTable::build(&index);
         index
@@ -562,8 +586,14 @@ impl FmIndex {
 
     /// Speicherbedarf der Tabellen in Bytes (ohne Contig-Namen).
     pub fn table_bytes(&self) -> u64 {
-        (self.blocks.len() * 8 + self.sa_samples.len() + self.reference.forward.words.len() * 8)
-            as u64
+        let dense = self
+            .dense
+            .as_ref()
+            .map_or(0, |d| d.blocks.len() * 64 + d.sb.len() * 32);
+        (self.blocks.len() * 8
+            + dense
+            + self.sa_samples.len()
+            + self.reference.forward.words.len() * 8) as u64
     }
 
     #[inline]
@@ -585,6 +615,9 @@ impl FmIndex {
     /// Anzahl der Base `c` in den BWT-Zeilen `0..i`.
     #[inline]
     pub fn occ(&self, c: u8, i: u64) -> u64 {
+        if self.dense.is_some() {
+            return self.occ4(i)[c as usize];
+        }
         let interval = u64::from(self.occ_interval);
         let stride = 4 + (self.occ_interval / 32) as usize;
         let base = (i >> self.occ_shift) as usize * stride;
@@ -604,6 +637,9 @@ impl FmIndex {
     /// Zählblock (bwa: `bwt_occ4`). Dasselbe wie viermal `occ`.
     #[inline]
     pub fn occ4(&self, i: u64) -> [u64; 4] {
+        if let Some(d) = &self.dense {
+            return self.occ4_dense(d, i);
+        }
         if self.occ_interval == 128 && !self.occ_plain {
             let within = i & 127;
             let base = (i >> 7) as usize * 8;
@@ -706,13 +742,9 @@ impl FmIndex {
             return (lo, self.occ4(l));
         }
         // Gleiches Wort, also auch derselbe Block.
-        let interval = u64::from(self.occ_interval);
-        let stride = 4 + (self.occ_interval / 32) as usize;
-        let base = (k >> self.occ_shift) as usize * stride;
-        let within = (k & (interval - 1)) as usize;
         let (from, to) = ((k & 31) as u32, (l & 31) as u32);
         let keep = EVEN & ((1u64 << (2 * to)) - 1) & !((1u64 << (2 * from)) - 1);
-        let w = self.blocks[base + 4 + within / 32];
+        let w = self.bwt_word(k);
         let (low, high) = (w & keep, (w >> 1) & keep);
         let both = low & high;
         let (c, g, t) = (
@@ -732,6 +764,14 @@ impl FmIndex {
     /// dieser Zeile nicht auf den Speicher warten muss. Ändert kein Ergebnis.
     #[inline]
     pub fn prefetch_row(&self, i: u64) {
+        if let Some(d) = &self.dense {
+            let j = (i / DENSE_ROWS) as usize;
+            gc_sys::prefetch(&d.blocks[j]);
+            if i - j as u64 * DENSE_ROWS > DENSE_ROWS / 2 && j + 1 < d.blocks.len() {
+                gc_sys::prefetch(&d.blocks[j + 1]);
+            }
+            return;
+        }
         let stride = 4 + (self.occ_interval / 32) as usize;
         let base = (i >> self.occ_shift) as usize * stride;
         // Ein Block hat bis zu 64 Bytes und liegt nicht ausgerichtet: Anfang und Ende holen.
@@ -744,8 +784,163 @@ impl FmIndex {
         }
     }
 
+    /// Das Wort der BWT mit der Zeile `row` (32 Zeilen je Wort).
+    #[inline]
+    fn bwt_word(&self, row: u64) -> u64 {
+        if let Some(d) = &self.dense {
+            let j = (row / DENSE_ROWS) as usize;
+            let k = ((row - j as u64 * DENSE_ROWS) / 32) as usize;
+            return d.blocks[j].0[2 + k];
+        }
+        let interval = u64::from(self.occ_interval);
+        let stride = 4 + (self.occ_interval / 32) as usize;
+        let base = (row >> self.occ_shift) as usize * stride;
+        let within = row & (interval - 1);
+        self.blocks[base + 4 + (within / 32) as usize]
+    }
+
+    /// Ordnet die Zählblöcke dicht an (192 statt 128 Zeilen je 64 Bytes): Die BWT braucht
+    /// ein Drittel weniger Speicher, alle Zahlen bleiben gleich. Kurz liegen beide Fassungen
+    /// im Speicher. Ein so verdichteter Index lässt sich nicht speichern.
+    pub fn densify(&mut self, threads: usize) {
+        self.densify_with(threads, DENSE_SB_SHIFT);
+    }
+
+    fn densify_with(&mut self, threads: usize, sb_shift: u32) {
+        if self.dense.is_some() {
+            return;
+        }
+        let n = (self.rows / DENSE_ROWS) as usize + 1;
+        let per_word = (self.occ_interval / 32) as u64;
+        let old_words = (self.blocks.len() as u64 / (4 + per_word)) * per_word;
+        let mut blocks = vec![DenseBlock::default(); n];
+        let sb: Vec<[u64; 4]> = (0..n.div_ceil(1 << sb_shift))
+            .map(|s| self.occ4(((s as u64) << sb_shift) * DENSE_ROWS))
+            .collect();
+        let chunk = n.div_ceil(threads.max(1)).max(1);
+        std::thread::scope(|scope| {
+            for (c, part) in blocks.chunks_mut(chunk).enumerate() {
+                let (this, sb) = (&*self, &sb);
+                scope.spawn(move || {
+                    for (o, b) in part.iter_mut().enumerate() {
+                        let j = c * chunk + o;
+                        let abs = this.occ4(j as u64 * DENSE_ROWS);
+                        let base = sb[j >> sb_shift];
+                        let rel = [0, 1, 2, 3].map(|k| abs[k] - base[k]);
+                        debug_assert!(rel.iter().all(|&r| r <= u64::from(u32::MAX)));
+                        b.0[0] = rel[0] | rel[1] << 32;
+                        b.0[1] = rel[2] | rel[3] << 32;
+                        for k in 0..6u64 {
+                            let g = j as u64 * 6 + k;
+                            if g < old_words {
+                                b.0[2 + k as usize] = this.bwt_word(g * 32);
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        self.blocks = Vec::new();
+        self.dense = Some(Dense {
+            blocks,
+            sb,
+            sb_shift,
+        });
+    }
+
+    /// `occ4` auf den dichten Blöcken. Wie bei `occ4_128` wird höchstens über die halbe
+    /// Blocklänge gezählt: vorn vom Zählstand dieses Blocks vorwärts, hinten vom nächsten
+    /// rückwärts, die Wahl als Auswahl von Werten statt als Sprung.
+    #[inline]
+    fn occ4_dense(&self, d: &Dense, i: u64) -> [u64; 4] {
+        let j = (i / DENSE_ROWS) as usize;
+        let block_start = j as u64 * DENSE_ROWS;
+        let within = (i - block_start) as u32;
+        let half = (DENSE_ROWS / 2) as u32;
+        let back = within > half && j + 1 < d.blocks.len();
+        if within > half && !back {
+            return self.occ4_dense_tail(d, i);
+        }
+        let cb = j + usize::from(back);
+        let w = &d.blocks[j].0;
+        let off = 2 + 3 * usize::from(back);
+        let x = within - half * u32::from(back);
+        let flip = 0u64.wrapping_sub(u64::from(back));
+        let (mut c, mut g, mut t) = (0u64, 0u64, 0u64);
+        for k in 0..3u32 {
+            let bits = (2 * x).saturating_sub(64 * k).min(64);
+            let below = u64::MAX.checked_shr(64 - bits).unwrap_or(0);
+            let m = (below ^ flip) & EVEN;
+            let word = w[off + k as usize];
+            let (lo, hi) = (word & m, (word >> 1) & m);
+            let both = lo & hi;
+            c += u64::from((lo ^ both).count_ones());
+            g += u64::from((hi ^ both).count_ones());
+            t += u64::from(both.count_ones());
+        }
+        let n = if back { half - x } else { x };
+        let (lo, hi) = if back {
+            (i, block_start + DENSE_ROWS)
+        } else {
+            (block_start, i)
+        };
+        let a = u64::from(n) - c - g - t - u64::from(self.primary >= lo && self.primary < hi);
+        let sign = 0u64.wrapping_sub(u64::from(back));
+        let cw = &d.blocks[cb].0;
+        let base = &d.sb[cb >> d.sb_shift];
+        let rel = [
+            cw[0] & 0xFFFF_FFFF,
+            cw[0] >> 32,
+            cw[1] & 0xFFFF_FFFF,
+            cw[1] >> 32,
+        ];
+        let at = |k: usize, v: u64| (base[k] + rel[k]).wrapping_add((v ^ sign).wrapping_sub(sign));
+        [at(0, a), at(1, c), at(2, g), at(3, t)]
+    }
+
+    /// Hintere Hälfte des letzten dichten Blocks: vorwärts über alle sechs Wörter.
+    #[cold]
+    fn occ4_dense_tail(&self, d: &Dense, i: u64) -> [u64; 4] {
+        let j = (i / DENSE_ROWS) as usize;
+        let block_start = j as u64 * DENSE_ROWS;
+        let within = (i - block_start) as u32;
+        let w = &d.blocks[j].0;
+        let (mut c, mut g, mut t) = (0u64, 0u64, 0u64);
+        for k in 0..6u32 {
+            let bits = (2 * within).saturating_sub(64 * k).min(64);
+            let m = u64::MAX.checked_shr(64 - bits).unwrap_or(0) & EVEN;
+            let word = w[2 + k as usize];
+            let (lo, hi) = (word & m, (word >> 1) & m);
+            let both = lo & hi;
+            c += u64::from((lo ^ both).count_ones());
+            g += u64::from((hi ^ both).count_ones());
+            t += u64::from(both.count_ones());
+        }
+        let a = u64::from(within)
+            - c
+            - g
+            - t
+            - u64::from(self.primary >= block_start && self.primary < i);
+        let base = &d.sb[j >> d.sb_shift];
+        let rel = [
+            w[0] & 0xFFFF_FFFF,
+            w[0] >> 32,
+            w[1] & 0xFFFF_FFFF,
+            w[1] >> 32,
+        ];
+        [
+            base[0] + rel[0] + a,
+            base[1] + rel[1] + c,
+            base[2] + rel[2] + g,
+            base[3] + rel[3] + t,
+        ]
+    }
+
     #[inline]
     fn bwt(&self, row: u64) -> u8 {
+        if self.dense.is_some() {
+            return (self.bwt_word(row) >> (2 * (row % 32)) & 3) as u8;
+        }
         let interval = u64::from(self.occ_interval);
         let stride = 4 + (self.occ_interval / 32) as usize;
         let base = (row >> self.occ_shift) as usize * stride;
@@ -1167,6 +1362,12 @@ impl FmIndex {
 
     /// Schreibt den Index. Alle Zahlen little-endian, am Ende eine CRC-32 über alles davor.
     pub fn write<W: Write>(&self, out: W) -> io::Result<()> {
+        if self.dense.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "verdichteter Index lässt sich nicht speichern",
+            ));
+        }
         let mut w = CrcWriter {
             inner: out,
             crc: flate2::Crc::new(),
@@ -1378,6 +1579,7 @@ impl FmIndex {
             short: crate::smem::ShortTable::default(),
             locate_cache: LocateCache::default(),
             occ_plain: false,
+            dense: None,
         };
         index.short = crate::smem::ShortTable::build(&index);
         Ok(index)
@@ -1665,6 +1867,37 @@ mod tests {
                 if row < index.rows() && row != index.primary {
                     counts[index.bwt(row) as usize] += 1;
                 }
+            }
+        }
+        // dichte Zählblöcke: dieselben Zahlen an jeder Zeile, auch über Oberblockgrenzen
+        for variant in [Variant::Standard, Variant::Schnell] {
+            let plain = build(&contigs, variant);
+            for shift in [0, 2, DENSE_SB_SHIFT] {
+                let mut dense = plain.clone();
+                dense.densify_with(3, shift);
+                if shift == DENSE_SB_SHIFT {
+                    assert!(dense.table_bytes() < plain.table_bytes());
+                }
+                for row in 0..=plain.rows() {
+                    assert_eq!(
+                        dense.occ4(row),
+                        plain.occ4(row),
+                        "dicht {shift} occ4({row})"
+                    );
+                    if row < plain.rows() {
+                        assert_eq!(dense.bwt(row), plain.bwt(row));
+                    }
+                    if row % 7 == 0 {
+                        for c in 0..4u8 {
+                            assert_eq!(dense.occ(c, row), plain.occ(c, row));
+                        }
+                        let l = (row + 13).min(plain.rows());
+                        assert_eq!(dense.occ4_pair(row, l), plain.occ4_pair(row, l));
+                    }
+                }
+                let p: Vec<u8> = (0..12).map(|i| (i * 7 % 4) as u8).collect();
+                assert_eq!(dense.interval(&p), plain.interval(&p));
+                assert!(dense.write(Vec::new()).is_err());
             }
         }
         // beide Enden eines Bereichs auf einmal, in beiden Varianten, auch über das Endzeichen
