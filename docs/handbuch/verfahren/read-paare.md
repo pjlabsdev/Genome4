@@ -52,6 +52,13 @@ Bereichen des Partners dazu. Er merkt sich auch den zweitbesten Score im Fenster
 dort eine fast gleich gute zweite Stelle (dicht benachbarte Wiederholung), begrenzt das später
 die MAPQ.
 
+Nach jedem Fenster werden die Bereiche des Partners geordnet und doppelte entfernt
+(`sort_dedup`). Bringt ein Fenster keinen neuen Bereich und wurde schon einmal geordnet, entfällt
+das: Eine geordnete Liste ändert sich dabei nicht (keine zwei verbliebenen Bereiche sind
+redundant, die Schlüssel sind eindeutig). Die BAM ist gleich (Simulation 600.000 Reads über
+GRCh38, 66.668 echte HG002-Reads auf chr20 mit und ohne Trimmen). `GC_PARTNER_ORDNEN_IMMER=1`
+ordnet wieder nach jedem Fenster.
+
 ### 4. Rangfolge je Read
 Wie bei einzelnen Reads (`mem_mark_primary_se`), jetzt einschließlich der neu gefundenen Bereiche.
 

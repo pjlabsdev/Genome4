@@ -341,8 +341,14 @@ pub fn mate_rescue_with(
     let min_seed = opt.finalize.min_seed_len;
     let windows = rescue_windows(index, pes, a, l_ms, ma, opt);
     let mut n = 0;
+    // `sort_dedup` ändert eine schon geordnete Liste nicht (keine verbliebenen zwei Bereiche
+    // sind redundant, die Schlüssel sind eindeutig). Nach einem Fenster ohne neuen Bereich
+    // reicht es daher, wenn schon einmal geordnet wurde (Schalter zurück:
+    // `GC_PARTNER_ORDNEN_IMMER=1`).
+    let mut sorted = false;
     for w in &windows {
         let (is_rev, rb) = (w.is_rev, w.rb);
+        let mut inserted = false;
         let aln = match done.iter().find(|d| d.0 == *w) {
             Some(d) => d.1,
             None => rescue_align(index, mate, w, opt),
@@ -385,11 +391,20 @@ pub fn mate_rescue_with(
                 .position(|m| m.score < b.score)
                 .unwrap_or(ma.len());
             ma.insert(at, b);
+            inserted = true;
         }
         n += 1;
-        sort_dedup(ma, index, None, sc, &opt.finalize);
+        if inserted || !sorted || sort_always() {
+            sort_dedup(ma, index, None, sc, &opt.finalize);
+            sorted = true;
+        }
     }
     n
+}
+
+fn sort_always() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("GC_PARTNER_ORDNEN_IMMER").is_ok_and(|v| v == "1"))
 }
 
 /// Das beste Paar aus den Bereichen beider Reads.
