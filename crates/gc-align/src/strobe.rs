@@ -37,6 +37,8 @@ pub struct StrobeOptions {
     /// Erst ohne Lücke entlang der Diagonale vergleichen, lokale Ausrichtung nur bei
     /// Lückenverdacht (Schalter zurück: `GC_STROBE_HAMMING=0`).
     pub ungapped_first: bool,
+    /// Sobald ein Zweiter zu nah ist, abbrechen (Schalter zurück: `GC_STROBE_FRUEH=0`).
+    pub stop_early: bool,
 }
 
 impl Default for StrobeOptions {
@@ -55,6 +57,7 @@ impl Default for StrobeOptions {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(25),
             ungapped_first: std::env::var("GC_STROBE_HAMMING").map_or(true, |v| v != "0"),
+            stop_early: std::env::var("GC_STROBE_FRUEH").map_or(true, |v| v != "0"),
         }
     }
 }
@@ -291,6 +294,16 @@ pub fn strobe_region(
                     }
                     best = Some(cand);
                 }
+            }
+            // Ein zu naher Zweiter schickt den Read ohnehin den vollen Weg: dann gleich aufhören
+            // statt weitere Kandidaten auszurichten (vorsichtig, ein später klar Bester ginge
+            // dadurch nur den vollen Weg).
+            if so.stop_early
+                && let Some((b, ..)) = best
+                && b - second < so.min_gap
+            {
+                bump(&COUNTS.second_close);
+                return None;
             }
         }
         let Some((score, mut rb, mut re, qb, qe)) = best else {

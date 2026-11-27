@@ -42,6 +42,8 @@ Ort und allen Orten 4,8 GB), rund 90 s auf 4 Kernen.
    Gruppe, deren beweisbare 5-mer-Schranke ([Schnellweg](schnellweg.md#kopien-ohne-ausrichtung-ausschließen))
    höchstens den besten Score minus 15 erreicht, wird nicht ausgerichtet; ihre Schranke zählt als
    Zweitbester (vorsichtig: die MAPQ wird dadurch höchstens kleiner).
+   Ist der Zweitbeste schon weniger als 15 unter dem Besten, bricht der Read ab und geht den
+   vollen Weg, ohne die übrigen Gruppen auszurichten (Schalter zurück: `GC_STROBE_FRUEH=0`).
 4. Abgeschnittene Enden ohne Lücke bis zum Read-Ende verlängern, wenn das je Seite höchstens den
    Abzug fürs Abschneiden kostet (5, wie bwa `-L 5,5`). Sonst geht der Read den vollen Weg.
 5. Genommen wird der Read, wenn der Score höchstens 30 unter dem vollen liegt und der
@@ -65,7 +67,9 @@ auf 37; verworfen. Gesperrte Randstrobes bis 50 % zuzulassen ergab 16 falsche; v
 Vergleich ohne Lücke zuerst (gleiche Simulation, 4 Kerne in der Cloud): Ausrichten 22,4 s statt
 25,3 s, lokale Ausrichtungen 247.991 statt 570.132. Zähler und Treffergenauigkeit gleich (falsch
 bei MAPQ ≥ 20: 10, MAPQ 60: 567.233 ohne Fehler), 32 von 600.000 Sätzen anders (gleich gute
-Stellen, Anfang aus der Diagonale). Auf echten HG002-Reads kostete die lokale Ausrichtung samt
+Stellen, Anfang aus der Diagonale). Früher Abbruch bei zu nahem Zweiten dazu: Ausrichten 20,4 s, lokale Ausrichtungen 102.272,
+genommen 248.450 statt 248.972, falsch bei MAPQ ≥ 20 weiter 10, MAPQ 60 ohne Fehler.
+Auf echten HG002-Reads kostete die lokale Ausrichtung samt
 Rückwärtslauf drei Viertel der Zeit des Strobemer-Wegs (Profil am Mac).
 
 Zähler im Protokoll (`ALIGN.FERTIG`, Feld `strobeweg`): `versucht`, `genommen`, `gesperrt`,
