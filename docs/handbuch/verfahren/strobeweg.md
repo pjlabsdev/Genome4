@@ -67,6 +67,13 @@ Kernen: bauen 117 s, laden 6,1 s; die BAM ist in beiden Fällen dieselbe.
    gleich wie mit 3 Basen, Zeit im Rauschen. Schalter zurück: `GC_STROBE_LUECKE_BIS=3`.
    Ist der Zweitbeste schon weniger als 15 unter dem Besten, bricht der Read ab und geht den
    vollen Weg, ohne die übrigen Gruppen auszurichten (Schalter zurück: `GC_STROBE_FRUEH=0`).
+   Die Randstrobes eines Strangs werden gemeinsam nachgeschlagen (`StrobeIndex::lookup_many`):
+   erst alle Fächer, dann alle Schlüssel, dann die Orte, jeweils mit vorab angeforderten
+   Speicherzeilen. Die Liste der gesperrten Hashes wird nur befragt, wenn das Fach keinen Ort
+   zum Schlüssel hat (gesperrte Hashes haben keine gespeicherten Orte). Treffer und Ausgabe
+   bleiben gleich (2 Mio. echte MGI-Paare: gleiche BAM). In der Cloud 95,1 s gegen 95,6 s
+   Ausrichten; am Mac kostete das Nachschlagen im Profil 7,9 % der Rechenzeit. Schalter zurück:
+   `GC_STROBE_GEMEINSAM=0`.
 4. Abgeschnittene Enden ohne Lücke bis zum Read-Ende verlängern, wenn das je Seite höchstens den
    Abzug fürs Abschneiden kostet (5, wie bwa `-L 5,5`). Sonst geht der Read den vollen Weg.
 5. Genommen wird der Read, wenn der Score höchstens 30 unter dem vollen liegt und der

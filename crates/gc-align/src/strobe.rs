@@ -123,6 +123,14 @@ struct Scratch {
     hits: Vec<u64>,
     groups: Vec<(u32, u64)>,
     gap: Vec<i32>,
+    found: Vec<Option<(u32, u32)>>,
+}
+
+/// Randstrobes eines Strangs gemeinsam nachschlagen ([`StrobeIndex::lookup_many`]); Schalter
+/// zurück: `GC_STROBE_GEMEINSAM=0`. Die Treffer sind dieselben.
+fn lookup_many() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("GC_STROBE_GEMEINSAM").map_or(true, |v| v != "0"))
 }
 
 /// Größte geprüfte Lücke beim Vergleich ohne Lücke (Schalter zurück: `GC_STROBE_LUECKE_BIS=3`).
@@ -264,6 +272,22 @@ pub fn strobe_region(
             let q: &[u8] = if strand == 0 { read } else { &s.rc };
             syncmers(q, &mut s.sy, &mut s.sc);
             randstrobes(&s.sy, &mut s.st);
+            if lookup_many() {
+                strobes.lookup_many(s.st.iter().map(|x| x.0), so.max_occ, &mut s.found);
+                for (&(_, qp), r) in s.st.iter().zip(&s.found) {
+                    match *r {
+                        None => blocked += 1,
+                        Some(r) => {
+                            usable += 1;
+                            for p in strobes.positions(r) {
+                                let d = (p + (1 << 32)).wrapping_sub(u64::from(qp));
+                                s.hits.push(strand << 63 | d);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
             for &(h, qp) in &s.st {
                 match strobes.lookup(h, so.max_occ) {
                     None => {

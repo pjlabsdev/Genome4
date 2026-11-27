@@ -455,6 +455,65 @@ impl StrobeIndex {
         self.keys.len() * 6 + self.buckets.len() * 4 + self.blocked.len() * 8
     }
 
+    /// Wie [`StrobeIndex::lookup`] für viele Hashes zugleich: je Hash `None` (gesperrt oder mehr
+    /// als `max` Orte) oder der Bereich seiner Orte in [`StrobeIndex::positions`]. Die drei
+    /// abhängigen Zugriffe je Hash (Fach, Schlüssel, Liste der Gesperrten) laufen stufenweise
+    /// für alle Hashes, mit vorab angeforderten Speicherzeilen, damit die Wartezeiten auf den
+    /// Speicher sich überlappen. Gesperrte Hashes haben keine gespeicherten Orte; die Liste der
+    /// Gesperrten wird deshalb nur befragt, wenn das Fach keinen Ort zum Schlüssel hat.
+    pub fn lookup_many(
+        &self,
+        hs: impl ExactSizeIterator<Item = u64> + Clone,
+        max: usize,
+        out: &mut Vec<Option<(u32, u32)>>,
+    ) {
+        out.clear();
+        for h in hs.clone() {
+            gc_sys::prefetch(&self.buckets[bucket_of(h)]);
+        }
+        // (Anfang, Ende) des Fachs
+        let mut range: Vec<(u32, u32)> = Vec::with_capacity(hs.len());
+        for h in hs.clone() {
+            let bi = bucket_of(h);
+            let (lo, hi) = (self.buckets[bi], self.buckets[bi + 1]);
+            if lo < hi {
+                gc_sys::prefetch(&self.keys[(lo + (hi - lo) / 2) as usize]);
+            }
+            range.push((lo, hi));
+        }
+        for (h, &(lo, hi)) in hs.zip(&range) {
+            let k = key_of(h);
+            let ks = &self.keys[lo as usize..hi as usize];
+            let a = ks.partition_point(|&x| x < k);
+            let n = ks[a..]
+                .iter()
+                .take(max + 1)
+                .take_while(|&&x| x == k)
+                .count();
+            let blocked = n == 0
+                && self
+                    .blocked
+                    .binary_search(&((bucket_of(h) as u64) << 16 | u64::from(k)))
+                    .is_ok();
+            out.push(if blocked || n > max {
+                None
+            } else {
+                let b = lo + a as u32;
+                if n > 0 {
+                    gc_sys::prefetch(&self.pos[b as usize]);
+                }
+                Some((b, b + n as u32))
+            });
+        }
+    }
+
+    /// Orte zu einem Bereich aus [`StrobeIndex::lookup_many`].
+    pub fn positions(&self, r: (u32, u32)) -> impl Iterator<Item = u64> + '_ {
+        self.pos[r.0 as usize..r.1 as usize]
+            .iter()
+            .map(|&p| u64::from(p))
+    }
+
     /// Positionen (Vorwärtsstrang, Anfang des ersten Strobes) eines Randstrobe-Hashes.
     /// `None`, wenn es mehr als `max` gibt (oder mehr als [`KEEP_MAX`]).
     pub fn lookup(&self, h: u64, max: usize) -> Option<impl Iterator<Item = u64> + '_> {
