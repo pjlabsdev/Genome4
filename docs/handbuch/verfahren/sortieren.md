@@ -64,7 +64,9 @@ Die drei Kriterien stehen in einer Zahl von 64 Bit: 31 Bit Contig (ohne Contig d
    mit dem Pool. Jeder Teil wird mit großem Puffer gelesen: 1 GiB geteilt durch die Zahl
    der Teile, mindestens 256 KB, höchstens 8 MB (`GC_SORT_LESEPUFFER_KB` setzt ihn fest).
    Mit 256 KB hingen die Pool-Threads auf der USB-SSD des Macs zu 70–89 % im Lesen
-   (418 Teile, ~45 MB/s statt ~390 MB/s sequentiell). Gemessen
+   (418 Teile, ~45 MB/s statt ~390 MB/s sequentiell). Die Teile öffnet der Pool selbst, denn
+   das erste Füllen der großen Puffer im Hauptthread kostete nacheinander über 3 GB Lesen.
+   Gemessen
    (Simulation über GRCh38, 300.000 Paare, `--speicher-mb 32`, 6 Teile, 4 Kerne): Zusammenführen,
    Markieren und Schreiben 1,35 s bisher, 1,17 s mit Vorauslesen; die BAM ist bytegleich.
 

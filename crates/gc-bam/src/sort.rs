@@ -369,16 +369,17 @@ impl Sorter {
                 let workers = std::thread::available_parallelism()
                     .map_or(1, |n| n.get())
                     .clamp(1, POOL_MAX_THREADS);
-                let mut groups: Vec<Vec<(RunReader, ChunkTx)>> =
+                // Geöffnet wird im Pool: Das erste Füllen der großen Puffer (bei 418 Teilen
+                // und 8 MB über 3 GB) soll nicht nacheinander im Hauptthread geschehen.
+                let mut groups: Vec<Vec<(PathBuf, ChunkTx)>> =
                     (0..workers).map(|_| Vec::new()).collect();
                 for (i, path) in self.runs.iter().enumerate() {
-                    let r = RunReader::open(path, read_buffer)?;
                     let (tx, rx) = std::sync::mpsc::sync_channel(1);
-                    groups[i % workers].push((r, tx));
+                    groups[i % workers].push((path.clone(), tx));
                     readers.push(Source::Ahead(AheadReader::from_rx(rx)));
                 }
                 for g in groups {
-                    std::thread::spawn(move || pool_worker(g, POOL_CHUNK));
+                    std::thread::spawn(move || pool_worker(g, read_buffer, POOL_CHUNK));
                 }
             }
         }
@@ -511,9 +512,11 @@ fn read_chunk(r: &mut RunReader, record: &mut Vec<u8>, size: usize) -> io::Resul
 /// Teil weiter (nie blockierend, sonst könnte der Hauptthread auf einen Teil warten, dessen
 /// Thread an einem anderen hängt). Stücke enden immer an Satzgrenzen; ein leeres Stück meldet
 /// das geprüfte Ende, ein Fehler beendet den Teil.
-fn pool_worker(mut parts: Vec<(RunReader, ChunkTx)>, size: usize) {
+fn pool_worker(parts: Vec<(PathBuf, ChunkTx)>, buffer: usize, size: usize) {
     use std::sync::mpsc::TrySendError;
     let n = parts.len();
+    let (paths, senders): (Vec<PathBuf>, Vec<ChunkTx>) = parts.into_iter().unzip();
+    let mut open: Vec<Option<RunReader>> = (0..n).map(|_| None).collect();
     let mut pending: Vec<Option<io::Result<Vec<u8>>>> = (0..n).map(|_| None).collect();
     let mut finished = vec![false; n];
     let mut ended = vec![false; n];
@@ -530,18 +533,32 @@ fn pool_worker(mut parts: Vec<(RunReader, ChunkTx)>, size: usize) {
                 Some(item) => item,
                 None if ended[i] => Ok(Vec::new()),
                 None => {
-                    let c = read_chunk(&mut parts[i].0, &mut record, size);
-                    if matches!(&c, Ok(v) if v.len() < size) {
-                        ended[i] = true;
+                    if open[i].is_none() {
+                        match RunReader::open(&paths[i], buffer) {
+                            Ok(r) => open[i] = Some(r),
+                            Err(e) => {
+                                pending[i] = Some(Err(e));
+                            }
+                        }
                     }
-                    c
+                    match (pending[i].take(), open[i].as_mut()) {
+                        (Some(err), _) => err,
+                        (None, Some(r)) => {
+                            let c = read_chunk(r, &mut record, size);
+                            if matches!(&c, Ok(v) if v.len() < size) {
+                                ended[i] = true;
+                            }
+                            c
+                        }
+                        (None, None) => Err(invalid("Teil nicht geöffnet")),
+                    }
                 }
             };
             let last = match &item {
                 Ok(v) => v.is_empty(),
                 Err(_) => true,
             };
-            match parts[i].1.try_send(item) {
+            match senders[i].try_send(item) {
                 Ok(()) => {
                     progress = true;
                     finished[i] = last;
