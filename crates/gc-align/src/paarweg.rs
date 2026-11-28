@@ -101,6 +101,10 @@ fn pair_max() -> i64 {
     *V.get_or_init(|| env_usize("GC_STROBE_PAAR_MAX", 1500) as i64)
 }
 
+pub fn pair_max_pub() -> i64 {
+    pair_max()
+}
+
 /// So viele der besten Ankerpaare werden ausgerichtet.
 fn top_pairs() -> usize {
     static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -305,7 +309,12 @@ pub fn pair_regions(
 /// Richtet den Read am Anker `g` aus: ohne Lücke, wenn höchstens [`max_mismatch`] Basen
 /// abweichen, sonst lokal; abgeschnittene Enden werden ohne Lücke angehängt, wenn das je Seite
 /// höchstens den Abzug fürs Abschneiden kostet.
-fn align_anchor(index: &FmIndex, read: &[u8], g: u64, opt: &AlignOptions) -> Option<Region> {
+pub(crate) fn align_anchor(
+    index: &FmIndex,
+    read: &[u8],
+    g: u64,
+    opt: &AlignOptions,
+) -> Option<Region> {
     let sc = &opt.region.scoring;
     let so = &opt.strobe;
     let len = read.len();

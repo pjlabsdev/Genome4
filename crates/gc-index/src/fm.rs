@@ -142,6 +142,24 @@ struct Dense {
 #[derive(Debug, Default)]
 struct LocateCache(Vec<std::sync::atomic::AtomicU64>);
 
+/// Abstand der Zwischenproben in Zeilen (siehe `locate_many_marked`), Zweierpotenz;
+/// `GC_ORT_ZWISCHEN_ABSTAND` ändert ihn.
+fn mark_every() -> u64 {
+    static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("GC_ORT_ZWISCHEN_ABSTAND")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|v| v.is_power_of_two())
+            .unwrap_or(8)
+    })
+}
+
+fn marks_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("GC_ORT_ZWISCHEN").is_ok_and(|v| v == "1"))
+}
+
 impl Clone for LocateCache {
     fn clone(&self) -> Self {
         LocateCache(
@@ -1097,6 +1115,9 @@ impl FmIndex {
     /// kann also auf mehrere Speicherzeilen gleichzeitig warten statt nacheinander. Bei einem
     /// ganzen Genom liegt fast jeder Schritt außerhalb des Zwischenspeichers, dort zählt das.
     pub fn locate_many(&self, rows: &[u64], out: &mut Vec<u64>) {
+        if !self.locate_cache.0.is_empty() && marks_on() {
+            return self.locate_many_marked(rows, out);
+        }
         const LANES: usize = 32;
         let start = out.len();
         out.resize(start + rows.len(), 0);
@@ -1140,6 +1161,90 @@ impl FmIndex {
                         live -= 1;
                         (row[i], first[i], steps[i], slot[i]) =
                             (row[live], first[live], steps[live], slot[live]);
+                    }
+                    None => i += 1,
+                }
+            }
+            for i in 0..live {
+                code[i] = self.bwt(row[i]);
+            }
+            for i in 0..live {
+                row[i] = self.c_before[code[i] as usize] + self.occ(code[i], row[i]);
+                steps[i] += 1;
+            }
+        }
+    }
+
+    /// Wie [`FmIndex::locate_many`], mit selbst angelegten Zwischenproben: Zeilen, deren Nummer
+    /// ein Vielfaches von `mark_every()` ist, werden unterwegs im Ortsspeicher nachgesehen und
+    /// nach dem Weg dort abgelegt (Position = Ziel minus Schritte). In Wiederholungen laufen die
+    /// Wege vieler Seeds durch dieselben Stellen einer Kopie; der Speicher wirkt dort wie eine
+    /// dichtere Probe des Suffix-Arrays, nur wo sie gebraucht wird. Dasselbe Ergebnis
+    /// (Schalter zurück: `GC_ORT_ZWISCHEN=0`).
+    fn locate_many_marked(&self, rows: &[u64], out: &mut Vec<u64>) {
+        const LANES: usize = 32;
+        const MARKS: usize = 24;
+        let start = out.len();
+        out.resize(start + rows.len(), 0);
+        let out = &mut out[start..];
+        let interval = u64::from(self.sa_interval);
+        let every = mark_every();
+        let mut row = [0u64; LANES];
+        let mut first = [0u64; LANES];
+        let mut steps = [0u64; LANES];
+        let mut slot = [0usize; LANES];
+        let mut code = [0u8; LANES];
+        let mut marks = [[(0u64, 0u64); MARKS]; LANES];
+        let mut n_marks = [0usize; LANES];
+        let (mut live, mut next) = (0, 0);
+        loop {
+            while live < LANES && next < rows.len() {
+                if let Some(pos) = self.cache_get(rows[next]) {
+                    out[next] = pos;
+                } else {
+                    (row[live], first[live], steps[live], slot[live]) =
+                        (rows[next], rows[next], 0, next);
+                    n_marks[live] = 0;
+                    live += 1;
+                }
+                next += 1;
+            }
+            if live == 0 {
+                break;
+            }
+            let mut i = 0;
+            while i < live {
+                let r = row[i];
+                let done = if r == self.primary {
+                    Some(steps[i])
+                } else if r & (interval - 1) == 0 {
+                    Some(self.sa_sample((r >> self.sa_shift) as usize) + steps[i])
+                } else if steps[i] > 0 && r & (every - 1) == 0 {
+                    match self.cache_get(r) {
+                        Some(p) => Some(p + steps[i]),
+                        None => {
+                            if n_marks[i] < MARKS {
+                                marks[i][n_marks[i]] = (r, steps[i]);
+                                n_marks[i] += 1;
+                            }
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                match done {
+                    Some(pos) => {
+                        out[slot[i]] = pos;
+                        self.cache_put(first[i], pos);
+                        for &(mr, ms) in &marks[i][..n_marks[i]] {
+                            self.cache_put(mr, pos - ms);
+                        }
+                        live -= 1;
+                        (row[i], first[i], steps[i], slot[i]) =
+                            (row[live], first[live], steps[live], slot[live]);
+                        marks[i] = marks[live];
+                        n_marks[i] = n_marks[live];
                     }
                     None => i += 1,
                 }
@@ -1993,6 +2098,35 @@ mod tests {
                         assert_eq!(got, want, "{variant:?}, 2^{bits} Plätze, Runde {round}");
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn intermediate_marks_give_the_same_positions() {
+        let contigs = random_genome(7);
+        let index = build(&contigs, Variant::Schnell);
+        let mut bytes = Vec::new();
+        index.write(&mut bytes).unwrap();
+        // Dünne Probe, damit die Wege lang sind und an vielen Zwischenproben vorbeikommen.
+        let plain = FmIndex::read_thinned(&bytes[..], 16).unwrap();
+        for bits in [4, 14] {
+            let mut marked = plain.clone();
+            marked.enable_locate_cache(bits);
+            let mut rng = Rng(5);
+            // Benachbarte Textstellen (aufeinanderfolgende Zeilen eines Weges) und zufällige.
+            let mut rows: Vec<u64> = (0..300).map(|_| rng.next() % plain.rows()).collect();
+            let mut r = rows[0];
+            for _ in 0..300 {
+                let c = plain.bwt(r);
+                r = plain.c_before[c as usize] + plain.occ(c, r);
+                rows.push(r);
+            }
+            for round in 0..3 {
+                let mut got = Vec::new();
+                marked.locate_many_marked(&rows, &mut got);
+                let want: Vec<u64> = rows.iter().map(|&r| plain.locate(r)).collect();
+                assert_eq!(got, want, "2^{bits} Plätze, Runde {round}");
             }
         }
     }

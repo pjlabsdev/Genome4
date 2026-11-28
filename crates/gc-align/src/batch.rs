@@ -216,6 +216,34 @@ fn regions_by_pairs(
             [q[0].is_some(), q[1].is_some()],
             opt,
         ) {
+            Some((p, crate::paarweg::Kind::Unsure, frac)) if crate::taube::mode() => {
+                let max = crate::paarweg::pair_max_pub();
+                match crate::taube::pigeonhole_pair(
+                    index,
+                    [reads[2 * i].seq, reads[2 * i + 1].seq],
+                    &p,
+                    max,
+                    opt,
+                ) {
+                    Some(t) => {
+                        let mut k = 0;
+                        let both = t.map(|mut pk| {
+                            if let Some(qk) = &q[k] {
+                                for r in qk {
+                                    if !pk.iter().any(|o| o.rb < r.re && r.rb < o.re) {
+                                        pk.push(*r);
+                                    }
+                                }
+                                pk.sort_by_key(|r| std::cmp::Reverse(r.score));
+                            }
+                            k += 1;
+                            Some(pk)
+                        });
+                        (both, crate::paarweg::Kind::Sure as u8, frac)
+                    }
+                    None => (q, NORMAL, [0.0; 2]),
+                }
+            }
             Some((_, crate::paarweg::Kind::Unsure, _)) if crate::paarweg::unsure_full() => {
                 (q, FULL_NO_RESCUE, [0.0; 2])
             }

@@ -126,6 +126,18 @@ pub fn counts() -> Vec<(&'static str, u64)> {
             "paar_unsicher",
             crate::paarweg::UNSURE.load(Ordering::Relaxed),
         ),
+        (
+            "taube_versucht",
+            crate::taube::TRIED.load(Ordering::Relaxed),
+        ),
+        (
+            "taube_genommen",
+            crate::taube::TAKEN.load(Ordering::Relaxed),
+        ),
+        (
+            "taube_zu_viele",
+            crate::taube::CROWDED.load(Ordering::Relaxed),
+        ),
     ]
 }
 

@@ -155,6 +155,30 @@ Geht nur bis 2^33 Zeilen (Referenz bis 4,2 Mrd. Basen), sonst bleibt er aus.
 
 Die BAM ist byte-gleich mit und ohne Speicher (844.609 von 844.609 Sätzen).
 
+### Zwischenproben im Ortsspeicher (Versuch, `GC_ORT_ZWISCHEN=1`)
+Der Speicher oben hilft nur, wenn genau dieselbe Startzeile wiederkommt. In Wiederholungen laufen
+aber die Wege vieler verschiedener Seeds durch dieselben Stellen einer Kopie: Ein Seed an
+Position p + 20 derselben Kopie geht über p + 19, p + 18, ... und kommt an der Zeile von p vorbei.
+Deshalb sieht `locate_many_marked` unterwegs jede Zeile nach, deren Nummer ein Vielfaches von 8
+ist (`GC_ORT_ZWISCHEN_ABSTAND`, Zweierpotenz). Steht sie im Speicher, endet der Weg dort
+(Position = gespeicherte Position plus Schritte). Sonst merkt er sich bis zu 24 solche Zeilen und
+legt sie am Ende mit Position = Ziel minus Schritte ab. Weil die Auswahl an der Zeilennummer
+hängt und nicht am Weg, finden sich Ablegen und Nachsehen immer. Der Speicher wirkt so wie ein
+dichteres Suffix-Array, aber nur in den Wiederholungen, die gerade gebraucht werden. Die
+Positionen sind exakt, die Ausgabe byte-gleich.
+
+| Messung (Cloud, 4 Kerne, `--sa-ausduennen 8`) | Ausrichten |
+|---|---|
+| 62.726 teure Paare (beide Reads in Wiederholungen), 64 MB, ohne | 116 s |
+| dieselben, 64 MB, Zwischenproben alle 8 Zeilen | 99 s |
+| dieselben, 64 MB, alle 4 / alle 16 Zeilen | 104 s / 111 s |
+| dieselben, 512 MB, ohne | 118 s |
+| dieselben, 512 MB, Zwischenproben alle 8 Zeilen | 63 s |
+
+Ganzer Simulationssatz (2 Mio. Paare über GRCh38, Strobeweg an): ohne Zwischenproben 214 s;
+mit Zwischenproben 172 s (256 MB), 153 s (512 MB), 149 s (1024 MB). Alle BAMs byte-gleich mit dem
+Lauf ohne Zwischenproben.
+
 ## Von der Textposition zum Treffer
 Eine Fundstelle der Länge m an Textposition p liegt auf dem Vorwärtsstrang, wenn p + m ≤ L, und
 auf dem Gegenstrang, wenn p ≥ L (linkes Ende auf dem Vorwärtsstrang: 2L − p − m). Verworfen wird
