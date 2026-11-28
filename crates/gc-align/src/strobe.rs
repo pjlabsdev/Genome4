@@ -53,7 +53,10 @@ impl Default for StrobeOptions {
     fn default() -> Self {
         Self {
             max_occ: 1000,
-            candidates: 16,
+            candidates: std::env::var("GC_STROBE_KANDIDATEN")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(16),
             max_loss: 30,
             min_gap: std::env::var("GC_STROBE_ABSTAND")
                 .ok()
@@ -273,6 +276,16 @@ fn best_one_gap(
     Some(best)
 }
 
+fn cheap_from() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("GC_STROBE_BILLIG_AB")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(usize::MAX)
+    })
+}
+
 fn prefetch_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("GC_STROBE_VORAB").map_or(true, |v| v != "0"))
@@ -391,7 +404,12 @@ pub fn strobe_regions(
         let mut best: Option<(i32, u64, u64, i32, i32)> = None;
         let mut all: Vec<(i32, u64, u64, i32, i32)> = Vec::new();
         let mut second = 0i32;
-        for &(_, g) in s.groups.iter().take(so.candidates) {
+        let cheap_from = cheap_from();
+        for (ci, &(_, g)) in s.groups.iter().take(so.candidates).enumerate() {
+            // Versuch: Kandidaten ab `GC_STROBE_BILLIG_AB` nur ohne Lücke prüfen (keine
+            // Lückenprüfung, keine lokale Ausrichtung); passt einer so nicht, zählt nur seine
+            // Schranke als Zweiter.
+            let cheap = so.take_close_multi && ci >= cheap_from;
             let strand = g >> 63;
             let diag = (g & !(1 << 63)) as i64 - (1 << 32);
             // Fenster im Vorwärtsstrang, dann im Indextext (Gegenstrang: gespiegelt)
@@ -454,6 +472,7 @@ pub fn strobe_regions(
                 let full = tail(read, t);
                 let g = gap_reach(len, full, sc, max_gap());
                 let no_gap_better = !so.gap_check
+                    || cheap
                     || g == 0
                     || best_one_gap(
                         read,
@@ -468,6 +487,7 @@ pub fn strobe_regions(
                 let tight = ends_ok
                     && no_gap_better
                     && (!bound_ok
+                        || cheap
                         || crate::fast::kmer_bound(read, &target).is_none_or(|b| b <= top.0)
                         || best.is_none_or(|(b, ..)| top.0 > b));
                 (top.0 >= len as i32 * sc.matching - so.max_loss && tight).then(|| {
@@ -486,6 +506,11 @@ pub fn strobe_regions(
             let cand = if let Some(c) = ungapped {
                 bump(&COUNTS.ungapped);
                 c
+            } else if cheap {
+                let bound =
+                    crate::fast::kmer_bound(read, &target).unwrap_or(len as i32 * sc.matching);
+                second = second.max(bound.min(best.map_or(bound, |b| b.0)));
+                continue;
             } else {
                 bump(&COUNTS.local);
                 let r = crate::local::local_align(read, &target, sc, byte, 0, true);

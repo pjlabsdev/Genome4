@@ -214,3 +214,27 @@ Simulationspaare (Rechenzeit aller Kerne):
 | Zeilen, Art 2 | 108.743 Paare | 16,4 s | 151 µs |
 
 Der volle Weg für 7 % der Reads kostet zwei Drittel der Zeit.
+
+## Versuch Strobe-Vollweg: mehr Kandidaten, billig geprüft (2026-11-28, Vorgabe aus)
+
+Im Versuch `GC_STROBE_NAH_NEHMEN=2` fehlte bei mehr als 16 gleich guten Kopien (Segment-
+Duplikationen, etwa chr1 q21) oft die richtige Kopie in der Kandidatenliste: Die Gruppen sind
+nach Trefferzahl und dann nach Ort geordnet, bei Gleichstand gewinnen die vorderen Orte. Dann
+legt die Paarung das ganze Paar auf eine falsche Kopie, und weil das gleich gute zweite Paar
+fehlt, ist die MAPQ zu hoch. `GC_STROBE_KANDIDATEN=N` setzt die Zahl der Kandidaten (Vorgabe 16).
+`GC_STROBE_BILLIG_AB=N` prüft Kandidaten ab dem N-ten nur ohne Lücke (ohne Lückenprüfung und
+ohne lokale Ausrichtung); passt einer so nicht, zählt nur seine 5-mer-Schranke als Zweiter.
+Auf echten Daten (Mac, 10 Mio. HG002-Paare) war ohne diese Begrenzung die lokale Ausrichtung
+dreimal so häufig (15,0 statt 4,7 Mio.), und das Ausrichten wurde langsamer (432 s statt 380 s)
+bei gleicher Qualität (MAPQ ≥ 20: 93,96 % statt 93,93 %, richtig gepaart 98,61 %).
+
+Simulation über GRCh38, 2 Mio. Paare, 4 Kerne, alle mit `NAH_NEHMEN=2`, `NAH_VORSICHT=0`:
+
+| Fassung | Ausrichten | falsch, MAPQ ≥ 20 | Reads im vollen Weg |
+|---|---|---|---|
+| Vorgabe (ohne Versuch) | 155 s | 74 | 278.372 |
+| 16 Kandidaten | 88 s | 557 | 58.458 |
+| 64 Kandidaten | 112 s | 247 | |
+| 256 Kandidaten | 170 s | 101 | 57.783 |
+| 256 Kandidaten, billig ab 1 | 102 s | 105 | 57.785 |
+| 64 Kandidaten, billig ab 4 | 92 s | 252 | 57.977 |
