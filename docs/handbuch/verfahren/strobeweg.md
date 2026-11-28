@@ -44,8 +44,9 @@ Kernen: bauen 117 s, laden 6,1 s; die BAM ist in beiden Fällen dieselbe.
    vorab in den Cache geholt (erst der Fachanfang, dann Schlüssel und Positionen). Die Abfragen
    hängen nicht voneinander ab, der Prozessor wartet so auf viele Speicherzeilen gleichzeitig.
    Dieselben Treffer, auf 400.000 leichten Simulationspaaren 5,7 % weniger Ausrichtezeit
-   (Cloud, zwei Läufe je Fassung, Sätze gleich); am Mac (10 Mio. HG002-Paare) 441 → 397 s,
-   Rechenzeit 3.954 → 3.277 s. Ebenso werden die Referenzfenster der Kandidaten vorab geholt,
+   (Cloud, zwei Läufe je Fassung, Sätze gleich); am Mac (10 Mio. HG002-Paare, je zwei Läufe)
+   mit 397 und 465 s gegen ohne 441 und 467 s, im Mittel −5 %, aber die Läufe streuen dort
+   stärker als der Unterschied (Auslagerung wächst von Lauf zu Lauf). Ebenso werden die Referenzfenster der Kandidaten vorab geholt,
    bevor der erste ausgerichtet wird (Cloud weitere rund 5 %). Schalter zurück für beides:
    `GC_STROBE_VORAB=0`.
 2. Treffer nach Diagonale gruppieren (±10), die 16 größten Gruppen nehmen.
