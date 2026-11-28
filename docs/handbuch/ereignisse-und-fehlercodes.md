@@ -14,7 +14,7 @@ Kennungen sind fest: sie ändern ihre Bedeutung nicht. Neue kommen hinzu.
 | `LAUF.FERTIG` | info | Lauf erfolgreich beendet | Zusammenfassung des Werkzeugs |
 | `LAUF.FEHLGESCHLAGEN` | error | Lauf mit Fehler beendet | `fehler` |
 | `STUFE.START` | info | Stufe beginnt (Name in `msg`) | je Stufe |
-| `STUFE.LEBT` | info | Lebenszeichen einer laufenden Stufe | Fortschritt, `sekunden`, `speicher_spitze_bytes` |
+| `STUFE.LEBT` | info | Lebenszeichen einer laufenden Stufe (die Uhr wird in Schleifen nur bei jedem 1024. Durchlauf gelesen) | Fortschritt, `sekunden`, `speicher_spitze_bytes` |
 | `STUFE.ENDE` | info | Stufe fertig | Zahlen der Stufe, `sekunden`, `speicher_spitze_bytes` |
 | `STUFE.ABGEBROCHEN` | error | Stufe wurde ohne Abschluss verlassen | `sekunden` |
 | `PROGRAMM.ABSTURZ` | error | Fehler im Programm selbst | `wo.quelltext`, `ursache`, `was_tun` |

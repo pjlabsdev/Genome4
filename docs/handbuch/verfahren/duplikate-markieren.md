@@ -117,6 +117,14 @@ Wie bei Picard zählen optische Duplikate nicht zu `N`.
   Reads. Kopien landen dann an verschiedenen Orten und bleiben unerkannt. Solche Reads haben
   MAPQ 0 und zählen bei der Variantensuche ohnehin nicht.
 
+## Tempo
+Das Fenster fragt je Satz zwei Tabellen ab (Paare und Einzelne). Seit 2026-11-28 streuen sie
+die Schlüssel mit einer schnellen Multiplikation (Art FxHash) statt mit SipHash, und die
+Puffer geschriebener Sätze werden wiederverwendet. Die Tabellen werden nie durchlaufen, die
+Ausgabe bleibt Satz für Satz gleich. Profil am Mac (HG002 30x): SipHash war rund 25 % des
+Hauptfadens, Anlegen und Freigeben der Satzpuffer rund 10 %. `GC_MARKDUP_SIPHASH=1` schaltet
+zurück auf SipHash.
+
 ## Literatur
 Danecek et al. 2021 (samtools); Lander und Waterman 1988; Picard (Broad Institute),
 `MarkDuplicates` und `DuplicationMetrics`. Siehe [Literatur](../literatur.md).

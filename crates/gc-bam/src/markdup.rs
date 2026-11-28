@@ -19,7 +19,99 @@
 //! Abdeckung ab, nicht von der Größe der Datei.
 
 use std::collections::{HashMap, VecDeque};
+use std::hash::{BuildHasher, Hasher};
 use std::io;
+
+/// Schnelle Streuung für die Schlüssel des Fensters (Art FxHash: drehen, verknüpfen, mal einer
+/// festen ungeraden Zahl). Die Tabellen werden nie durchlaufen, nur abgefragt, deshalb ändert
+/// die Streuung nichts an der Ausgabe. `GC_MARKDUP_SIPHASH=1` nimmt wieder die Vorgabe von Rust.
+#[derive(Clone, Copy)]
+struct KeyHash {
+    sip: bool,
+}
+
+impl KeyHash {
+    fn from_env() -> Self {
+        KeyHash {
+            sip: std::env::var_os("GC_MARKDUP_SIPHASH").is_some_and(|v| v == "1"),
+        }
+    }
+}
+
+enum KeyHasher {
+    Fast(u64),
+    Sip(std::collections::hash_map::DefaultHasher),
+}
+
+const FX: u64 = 0xf135_7aea_2e62_a9c5;
+
+impl KeyHasher {
+    #[inline]
+    fn add(&mut self, v: u64) {
+        match self {
+            KeyHasher::Fast(h) => *h = (h.rotate_left(26) ^ v).wrapping_mul(FX),
+            KeyHasher::Sip(h) => h.write_u64(v),
+        }
+    }
+}
+
+impl Hasher for KeyHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        match self {
+            // Die oberen Bits tragen die Mischung; hashbrown nimmt die oberen 7 als Etikett und
+            // die unteren für den Platz, darum einmal drehen.
+            KeyHasher::Fast(h) => h.rotate_left(26),
+            KeyHasher::Sip(h) => h.finish(),
+        }
+    }
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        match self {
+            KeyHasher::Fast(_) => {
+                for &b in bytes {
+                    self.add(b as u64);
+                }
+            }
+            KeyHasher::Sip(h) => h.write(bytes),
+        }
+    }
+    #[inline]
+    fn write_u8(&mut self, i: u8) {
+        self.add(i as u64);
+    }
+    #[inline]
+    fn write_i32(&mut self, i: i32) {
+        self.add(i as u32 as u64);
+    }
+    #[inline]
+    fn write_i64(&mut self, i: i64) {
+        self.add(i as u64);
+    }
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.add(i);
+    }
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.add(i as u64);
+    }
+}
+
+impl BuildHasher for KeyHash {
+    type Hasher = KeyHasher;
+    #[inline]
+    fn build_hasher(&self) -> KeyHasher {
+        if self.sip {
+            KeyHasher::Sip(std::collections::hash_map::DefaultHasher::new())
+        } else {
+            KeyHasher::Fast(0)
+        }
+    }
+}
+
+/// Höchstzahl aufbewahrter Satzpuffer zur Wiederverwendung.
+const SPARE_MAX: usize = 1 << 14;
 
 const FLAG_PAIRED: u16 = 0x1;
 const FLAG_UNMAPPED: u16 = 0x4;
@@ -192,11 +284,13 @@ pub struct DupMarker {
     /// Laufende Nummer des vordersten Satzes im Fenster.
     front: u64,
     /// Schlüssel zur laufenden Nummer des bisher besten Satzes.
-    pairs: HashMap<Key, u64>,
-    singles: HashMap<Key, u64>,
+    pairs: HashMap<Key, u64, KeyHash>,
+    singles: HashMap<Key, u64, KeyHash>,
     /// Mitglieder von Gruppen gleicher Paare; optisch eingestuft wird erst, wenn die Gruppe das
     /// Fenster verlässt und das behaltene Paar feststeht.
-    groups: HashMap<Key, Vec<u64>>,
+    groups: HashMap<Key, Vec<u64>, KeyHash>,
+    /// Puffer geschriebener Sätze zur Wiederverwendung (spart Anlegen und Freigeben je Satz).
+    spare: Vec<Vec<u8>>,
     prev_tid: i32,
     prev_pos: i64,
     stats: DupStats,
@@ -519,9 +613,10 @@ impl DupMarker {
             opt,
             queue: VecDeque::new(),
             front: 0,
-            pairs: HashMap::new(),
-            singles: HashMap::new(),
-            groups: HashMap::new(),
+            pairs: HashMap::with_hasher(KeyHash::from_env()),
+            singles: HashMap::with_hasher(KeyHash::from_env()),
+            groups: HashMap::with_hasher(KeyHash::from_env()),
+            spare: Vec::new(),
             prev_tid: 0,
             prev_pos: 0,
             stats: DupStats::default(),
@@ -606,7 +701,10 @@ impl DupMarker {
             Some((single, pair))
         };
         let name_is_smaller = |other: &[u8]| v.name() < View { b: &other[4..] }.name();
-        entry.record = record.to_vec();
+        let mut buf = self.spare.pop().unwrap_or_default();
+        buf.clear();
+        buf.extend_from_slice(record);
+        entry.record = buf;
         // Erst ins Fenster, dann vergleichen: Markiert wird immer ein Satz im Fenster.
         let mut smaller_name_than: Option<bool> = None;
         if let Some((_, Some(pair))) = &keys
@@ -745,6 +843,9 @@ impl DupMarker {
             }
             sink(&entry.record)?;
             self.stats.written += 1;
+            if self.spare.len() < SPARE_MAX {
+                self.spare.push(entry.record);
+            }
         }
         Ok(())
     }

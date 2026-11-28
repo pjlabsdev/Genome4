@@ -330,6 +330,8 @@ pub struct Stage {
     name: String,
     started: Instant,
     last_beat: Instant,
+    /// Aufrufe seit der letzten Uhrabfrage; die Uhr wird nur jeden 1024. Aufruf gelesen.
+    calls: u32,
     done: bool,
 }
 
@@ -340,14 +342,22 @@ pub fn stage(name: &str, fields: Value) -> Stage {
         name: name.to_string(),
         started: now,
         last_beat: now,
+        calls: 0,
         done: false,
     }
 }
 
 impl Stage {
-    /// Lebenszeichen, höchstens alle `every_secs` Sekunden. Billig genug für innere Schleifen,
-    /// wenn es nur alle paar tausend Durchläufe gerufen wird.
+    /// Lebenszeichen, höchstens alle `every_secs` Sekunden. Billig genug für innere Schleifen:
+    /// Die Uhr wird nur bei jedem 1024. Aufruf gelesen (bei `every_secs == 0` jedes Mal).
     pub fn heartbeat(&mut self, every_secs: u64, fields: impl FnOnce() -> Value) {
+        if every_secs > 0 {
+            self.calls += 1;
+            if self.calls < 1024 {
+                return;
+            }
+            self.calls = 0;
+        }
         if self.last_beat.elapsed().as_secs() >= every_secs {
             self.last_beat = Instant::now();
             let mut f = fields();
