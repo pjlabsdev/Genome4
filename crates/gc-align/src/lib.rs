@@ -15,6 +15,7 @@ pub mod global;
 pub mod kbtree;
 pub mod ksort;
 pub mod local;
+pub mod paarweg;
 pub mod pair;
 pub mod region;
 pub mod sam;

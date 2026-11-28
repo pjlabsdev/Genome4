@@ -114,10 +114,24 @@ pub fn counts() -> Vec<(&'static str, u64)> {
         ("zweiter_zu_nah", c.second_close.load(Ordering::Relaxed)),
         ("ohne_luecke", c.ungapped.load(Ordering::Relaxed)),
         ("lokal", c.local.load(Ordering::Relaxed)),
+        (
+            "paar_versucht",
+            crate::paarweg::TRIED.load(Ordering::Relaxed),
+        ),
+        (
+            "paar_genommen",
+            crate::paarweg::TAKEN.load(Ordering::Relaxed),
+        ),
+        (
+            "paar_unsicher",
+            crate::paarweg::UNSURE.load(Ordering::Relaxed),
+        ),
     ]
 }
 
 thread_local! {
+    /// Der letzte Aufruf endete mit zu nahem Zweitem (für den Versuch Strobe-Saat).
+    pub static LAST_CLOSE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static SCRATCH: std::cell::RefCell<Scratch> = std::cell::RefCell::new(Scratch::default());
 }
 
@@ -265,6 +279,7 @@ pub fn strobe_regions(
     opt: &AlignOptions,
 ) -> Option<Vec<Region>> {
     bump(&COUNTS.tried);
+    LAST_CLOSE.with(|c| c.set(false));
     let so = &opt.strobe;
     let len = read.len();
     if len < 60 || read.iter().any(|&c| c > 3) {
@@ -462,6 +477,7 @@ pub fn strobe_regions(
                 && b - second < so.min_gap
             {
                 bump(&COUNTS.second_close);
+                LAST_CLOSE.with(|c| c.set(blocked == 0));
                 return None;
             }
         }
@@ -562,6 +578,7 @@ pub fn strobe_regions(
         let unseen = unseen && !zero;
         if close && (!so.take_close || unseen) {
             bump(&COUNTS.second_close);
+            LAST_CLOSE.with(|c| c.set(blocked == 0));
             return None;
         }
         // Contig des Bereichs; über eine Contig-Grenze geht der volle Weg.
@@ -636,6 +653,151 @@ pub fn strobe_regions(
         Some(out)
     })
 }
+
+/// Versuch Strobe-Saat (`GC_STROBE_SAAT=1`): Seeds für den vollen Weg aus den Strobe-Treffern
+/// statt aus der SMEM-Suche. Je Diagonale (höchstens `SAAT_MAX` Gruppen) werden Read und Text
+/// Base für Base verglichen; jede Strecke gleicher Basen ab `min_seed_len` wird ein Seed.
+pub fn strobe_seeds(
+    index: &FmIndex,
+    strobes: &StrobeIndex,
+    read: &[u8],
+    opt: &AlignOptions,
+) -> Option<Vec<crate::seed::Seed>> {
+    let so = &opt.strobe;
+    let len = read.len();
+    let min_len = opt.seed.min_seed_len.max(1) as usize;
+    SCRATCH.with(|s| {
+        let s = &mut *s.borrow_mut();
+        s.rc.clear();
+        s.rc.extend(read.iter().rev().map(|&c| 3 - c));
+        s.hits.clear();
+        for strand in 0..2u64 {
+            let q: &[u8] = if strand == 0 { read } else { &s.rc };
+            syncmers(q, &mut s.sy, &mut s.sc);
+            randstrobes(&s.sy, &mut s.st);
+            for &(h, qp) in &s.st {
+                let it = strobes.lookup(h, so.max_occ)?;
+                for p in it {
+                    let d = (p + (1 << 32)).wrapping_sub(u64::from(qp));
+                    s.hits.push(strand << 63 | d);
+                }
+            }
+        }
+        s.hits.sort_unstable();
+        s.groups.clear();
+        let mut i = 0;
+        while i < s.hits.len() {
+            let mut j = i + 1;
+            while j < s.hits.len() && s.hits[j] - s.hits[j - 1] <= 10 {
+                j += 1;
+            }
+            s.groups.push(((j - i) as u32, s.hits[(i + j) / 2]));
+            i = j;
+        }
+        s.groups
+            .sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        let l = index.reference().len();
+        let n_groups = s.groups.len() as u64;
+        let mut seeds = Vec::new();
+        for &(_, g) in s.groups.iter().take(SAAT_MAX) {
+            let strand = g >> 63;
+            let diag = (g & !(1 << 63)) as i64 - (1 << 32);
+            let fb = diag.max(0) as u64;
+            let fe = ((diag + len as i64).max(0) as u64).min(l);
+            if fe <= fb + min_len as u64 {
+                continue;
+            }
+            let (tb, te) = if strand == 0 {
+                (fb, fe)
+            } else {
+                (2 * l - fe, 2 * l - fb)
+            };
+            let target = index.text_range(tb, te);
+            // Read-Position des Textanfangs
+            let q0 = if strand == 0 {
+                fb as i64 - diag
+            } else {
+                diag + len as i64 - fe as i64
+            };
+            let mut run = 0usize;
+            for (k, &t) in target.iter().enumerate() {
+                let qi = q0 + k as i64;
+                let same = qi >= 0 && (qi as usize) < len && read[qi as usize] == t && t < 4;
+                if same {
+                    run += 1;
+                }
+                if (!same || k + 1 == target.len()) && run >= min_len {
+                    let end = if same { k + 1 } else { k };
+                    let rb = tb + (end - run) as u64;
+                    if let Some(h) = index.hit_at(rb, run as u64) {
+                        seeds.push(crate::seed::Seed {
+                            rbeg: rb,
+                            qbeg: (q0 + (end - run) as i64) as u32,
+                            len: run as u32,
+                            contig: h.contig,
+                            occurrences: n_groups,
+                        });
+                    }
+                }
+                if !same {
+                    run = 0;
+                }
+            }
+        }
+        seeds.sort_unstable_by_key(|s| (s.qbeg, s.rbeg, s.len));
+        seeds.dedup_by(|a, b| a.qbeg == b.qbeg && a.rbeg == b.rbeg && a.len == b.len);
+        (!seeds.is_empty()).then_some(seeds)
+    })
+}
+
+/// Alle Anker eines Reads (Zahl der Treffer, Strang in Bit 63 | Diagonale + 2^32), die größten
+/// zuerst, dazu die Zahl gesperrter und nutzbarer Randstrobes. Für den Strobe-Paarweg.
+pub fn strobe_groups(
+    strobes: &StrobeIndex,
+    read: &[u8],
+    so: &StrobeOptions,
+) -> (Vec<(u32, u64)>, usize, usize) {
+    SCRATCH.with(|s| {
+        let s = &mut *s.borrow_mut();
+        s.rc.clear();
+        s.rc.extend(read.iter().rev().map(|&c| 3 - c));
+        s.hits.clear();
+        let (mut blocked, mut usable) = (0usize, 0usize);
+        for strand in 0..2u64 {
+            let q: &[u8] = if strand == 0 { read } else { &s.rc };
+            syncmers(q, &mut s.sy, &mut s.sc);
+            randstrobes(&s.sy, &mut s.st);
+            for &(h, qp) in &s.st {
+                match strobes.lookup(h, so.max_occ) {
+                    None => blocked += 1,
+                    Some(it) => {
+                        usable += 1;
+                        for p in it {
+                            let d = (p + (1 << 32)).wrapping_sub(u64::from(qp));
+                            s.hits.push(strand << 63 | d);
+                        }
+                    }
+                }
+            }
+        }
+        s.hits.sort_unstable();
+        let mut groups = Vec::new();
+        let mut i = 0;
+        while i < s.hits.len() {
+            let mut j = i + 1;
+            while j < s.hits.len() && s.hits[j] - s.hits[j - 1] <= 10 {
+                j += 1;
+            }
+            groups.push(((j - i) as u32, s.hits[(i + j) / 2]));
+            i = j;
+        }
+        groups.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        (groups, blocked, usable)
+    })
+}
+
+/// Höchstzahl Diagonalen für die Strobe-Saat.
+const SAAT_MAX: usize = 100;
 
 #[cfg(test)]
 mod tests {

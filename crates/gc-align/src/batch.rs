@@ -111,10 +111,25 @@ fn quick_region(
         _ => None,
     };
     fast.map(|x| vec![x]).or_else(|| {
-        opt.strobe_index
-            .as_ref()
-            .and_then(|s| crate::strobe::strobe_regions(index, s, read, opt))
+        let s = opt.strobe_index.as_ref()?;
+        let r = crate::strobe::strobe_regions(index, s, read, opt);
+        if r.is_none()
+            && strobe_seed_mode()
+            && crate::strobe::LAST_CLOSE.with(|c| c.get())
+            && let Some(seeds) = crate::strobe::strobe_seeds(index, s, read, opt)
+        {
+            let regs = crate::sam::regions_from_seeds(index, read, &seeds, opt);
+            return (!regs.is_empty()).then_some(regs);
+        }
+        r
     })
+}
+
+/// Versuch Strobe-Saat: Reads mit zu nahem Zweitem (ohne gesperrte Randstrobes) bekommen
+/// ihre Seeds aus den Strobe-Treffern statt aus der SMEM-Suche (`GC_STROBE_SAAT=1`).
+fn strobe_seed_mode() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("GC_STROBE_SAAT").is_ok_and(|v| v == "1"))
 }
 
 /// Bereiche aller Reads ([`crate::sam::find_regions`]), auf `threads` Kernen, die Seed-Suche in
@@ -169,6 +184,90 @@ fn regions_of_all(
         out.into_iter().map(Option::unwrap).collect::<Vec<_>>()
     });
     groups.into_iter().flatten().collect()
+}
+
+/// Paar geht den bisherigen Weg (sonst [`crate::paarweg::Kind`] als Zahl).
+const NORMAL: u8 = 255;
+/// Voller Weg, aber ohne Partnersuche.
+const FULL_NO_RESCUE: u8 = 254;
+
+/// Versuch Strobe-Paarweg: erst Schnell- und Strobeweg je Read; fehlt einem Read eines Paares
+/// der Bereich, werden beide aus ihren Strobe-Ankern gemeinsam verortet
+/// ([`crate::paarweg::pair_regions`]). Diese Paare (zweiter Wert `true`) bekommen keine
+/// Partnersuche. Was übrig bleibt, geht den vollen Weg.
+#[allow(clippy::type_complexity)]
+fn regions_by_pairs(
+    index: &FmIndex,
+    reads: &[ReadInput<'_>],
+    opt: &AlignOptions,
+    threads: usize,
+) -> (Vec<(Vec<crate::region::Region>, f32)>, Vec<u8>) {
+    let strobes = opt.strobe_index.as_ref().expect("Strobe-Index");
+    let n_pairs = reads.len() / 2;
+    let per_pair = parallel_map(n_pairs, threads, |i| {
+        let q = [0, 1].map(|k| quick_region(index, reads[2 * i + k].seq, opt));
+        if q[0].is_some() && q[1].is_some() {
+            return (q, NORMAL, [0.0; 2]);
+        }
+        match crate::paarweg::pair_regions(
+            index,
+            strobes,
+            [reads[2 * i].seq, reads[2 * i + 1].seq],
+            [q[0].is_some(), q[1].is_some()],
+            opt,
+        ) {
+            Some((_, crate::paarweg::Kind::Unsure, _)) if crate::paarweg::unsure_full() => {
+                (q, FULL_NO_RESCUE, [0.0; 2])
+            }
+            Some((p, kind, frac)) => {
+                // Ein schon verorteter Read behält seinen Bereich, dazu die Orte seiner Anker
+                // (statt der Partnersuche dort).
+                let mut k = 0;
+                let both = p.map(|mut pk| {
+                    if let Some(qk) = &q[k] {
+                        let mut m = qk.clone();
+                        if crate::paarweg::merge_mode() {
+                            pk.retain(|r| {
+                                !m.iter().any(|o| {
+                                    let ov = o.re.min(r.re) as i64 - o.rb.max(r.rb) as i64;
+                                    ov * 100 >= (o.re - o.rb).min(r.re - r.rb) as i64 * 95
+                                })
+                            });
+                            m.extend(pk);
+                            m.sort_by_key(|r| std::cmp::Reverse(r.score));
+                        }
+                        pk = m;
+                    }
+                    k += 1;
+                    Some(pk)
+                });
+                (both, kind as u8, frac)
+            }
+            None => (q, NORMAL, [0.0; 2]),
+        }
+    });
+    let mut out: Vec<Option<(Vec<crate::region::Region>, f32)>> = Vec::with_capacity(reads.len());
+    let mut no_rescue = Vec::with_capacity(n_pairs);
+    for (q, nr, frac) in per_pair {
+        no_rescue.push(nr);
+        for (r, f) in q.into_iter().zip(frac) {
+            out.push(r.map(|x| (x, f)));
+        }
+    }
+    let rest: Vec<usize> = (0..reads.len()).filter(|&i| out[i].is_none()).collect();
+    let found = parallel_map(rest.len().div_ceil(SEED_GROUP), threads, |g| {
+        let ids = &rest[g * SEED_GROUP..((g + 1) * SEED_GROUP).min(rest.len())];
+        let seqs: Vec<&[u8]> = ids.iter().map(|&i| reads[i].seq).collect();
+        let intervals = collect_intervals_many(index, &seqs, &opt.seed);
+        ids.iter()
+            .zip(&intervals)
+            .map(|(&i, iv)| regions_from_intervals(index, reads[i].seq, iv, opt))
+            .collect::<Vec<_>>()
+    });
+    for (&i, r) in rest.iter().zip(found.into_iter().flatten()) {
+        out[i] = Some(r);
+    }
+    (out.into_iter().map(Option::unwrap).collect(), no_rescue)
 }
 
 /// Die gesammelten Fenster der Partnersuche mit einem Rechenkern: Vorwärtslauf dort, Anfang des
@@ -240,9 +339,23 @@ pub fn align_pairs(
         reads.len().is_multiple_of(2),
         "Paare brauchen eine gerade Zahl von Reads"
     );
-    // Stufe 1: Bereiche je Read.
-    let found = regions_of_all(index, reads, opt, threads);
+    // Stufe 1: Bereiche je Read (im Versuch Strobe-Paarweg teils je Paar, dann ohne
+    // Partnersuche).
+    let (found, no_rescue) = if crate::paarweg::mode() && opt.strobe_index.is_some() {
+        regions_by_pairs(index, reads, opt, threads)
+    } else {
+        (regions_of_all(index, reads, opt, threads), Vec::new())
+    };
     let (regions, frac_rep): (Vec<_>, Vec<_>) = found.into_iter().unzip();
+    use crate::paarweg::Kind;
+    let mut opt_nr = opt.clone();
+    opt_nr.pair.max_matesw = 0;
+    let mut opt_un = opt_nr.clone();
+    opt_un.pair.mapq_cap = crate::paarweg::unsure_cap().unwrap_or(255);
+    let kind = |i: usize| no_rescue.get(i).copied().unwrap_or(NORMAL);
+    let skip = |i: usize| {
+        kind(i) == Kind::Sure as u8 || kind(i) == Kind::Unsure as u8 || kind(i) == FULL_NO_RESCUE
+    };
     // Stufe 2: Insertgröße aus dem ganzen Block.
     let pes = estimate_insert(index, &regions, opt);
     // Stufe 3: je Paar Partnersuche, Paarbewertung, Zeilen. Die lokalen Ausrichtungen der
@@ -262,7 +375,11 @@ pub fn align_pairs(
     let n_pairs = reads.len() / 2;
     let planned = if opt.pair.batch_rescue {
         parallel_map(n_pairs, threads, |i| {
-            planned_rescues(index, &pes, &paired(i), opt)
+            if skip(i) {
+                [Vec::new(), Vec::new()]
+            } else {
+                planned_rescues(index, &pes, &paired(i), opt)
+            }
         })
     } else {
         Vec::new()
@@ -311,7 +428,12 @@ pub fn align_pairs(
         } else {
             [0, 1].map(|k| &results[spans[i][k].0..spans[i][k].1])
         };
-        pair_lines_with(index, &pes, first_pair_id + i as u64, &mut s, opt, done).0
+        let o = match kind(i) {
+            k if k == Kind::Sure as u8 || k == FULL_NO_RESCUE => &opt_nr,
+            k if k == Kind::Unsure as u8 => &opt_un,
+            _ => opt,
+        };
+        pair_lines_with(index, &pes, first_pair_id + i as u64, &mut s, o, done).0
     });
     (lines, pes)
 }

@@ -27,6 +27,8 @@ pub struct PairOptions {
     /// Gesammelte Fenster je zwei auf einmal ausrichten ([`crate::local::local_align_pair`]).
     /// Gleiche Ausgabe; aus rechnet jedes Fenster für sich.
     pub rescue_two: bool,
+    /// Höchste MAPQ der Zeilen (Versuch Strobe-Paarweg: unsichere Paare); 255 = keine Grenze.
+    pub mapq_cap: u8,
 }
 
 impl Default for PairOptions {
@@ -37,6 +39,7 @@ impl Default for PairOptions {
             max_matesw: 50,
             batch_rescue: true,
             rescue_two: true,
+            mapq_cap: 255,
         }
     }
 }
@@ -604,6 +607,11 @@ pub fn pair_lines_with(
     done: RescueDone<'_>,
 ) -> (Vec<Line>, usize) {
     let (mut lines, n) = pair_lines_plain(index, pes, id, s, opt, done);
+    if opt.pair.mapq_cap < 255 {
+        for line in &mut lines {
+            line.mapq = line.mapq.min(opt.pair.mapq_cap);
+        }
+    }
     if let Some(rg) = &opt.sam.read_group {
         for line in &mut lines {
             line.set_read_group(rg);

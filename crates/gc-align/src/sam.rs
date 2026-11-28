@@ -132,6 +132,25 @@ pub fn regions_from_intervals(
     (regions, frac_rep)
 }
 
+/// Wie [`regions_from_intervals`], aber mit fertigen Seeds (Versuch Strobe-Saat).
+pub fn regions_from_seeds(
+    index: &FmIndex,
+    read: &[u8],
+    seeds: &[crate::seed::Seed],
+    opt: &AlignOptions,
+) -> Vec<Region> {
+    crate::region::neuer_read();
+    let l = index.reference().len();
+    let chains = filter_chains(chain_seeds(seeds, l, &opt.chain), &opt.filter);
+    let mut regions = Vec::new();
+    for c in &chains {
+        chain_to_regions(index, read, c, &opt.region, &mut regions);
+    }
+    let sc = &opt.region.scoring;
+    sort_dedup(&mut regions, index, Some(read), sc, &opt.finalize);
+    regions
+}
+
 /// Kopfzeilen: je Contig eine `@SQ`-Zeile, dazu `@PG`.
 pub fn sam_header(
     index: &FmIndex,

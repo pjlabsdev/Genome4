@@ -129,3 +129,60 @@ Simulation über GRCh38, 2 Mio. Paare, 4 Kerne:
 
 Die Zeit steckt fast ganz in Reads aus sehr häufigen Wiederholungen (gesperrte Randstrobes);
 dort fehlen dem Strobeweg Kopien. Ob die MAPQ-0-Variante Varianten kostet, klärt GIAB.
+
+## Versuch: Strobe-Saat (2026-11-28, Vorgabe aus)
+`GC_STROBE_SAAT=1`: Reads mit zu nahem Zweitem und ohne gesperrte Randstrobes bekommen ihre
+Seeds aus den Strobe-Treffern (je Diagonale die Strecken gleicher Basen ab `min_seed_len`)
+statt aus der SMEM-Suche; Ketten und Verlängern laufen wie beim vollen Weg. Simulation wie
+oben: 199 s statt 245 s Ausrichten (der Vergleichslauf war gestört), 93 statt 74 falsch mit
+MAPQ ≥ 20. Nicht weiter verfolgt.
+
+## Versuch: Strobe-Paarweg (2026-11-28, Vorgabe aus)
+`GC_STROBE_PAARWEG=1` (Quelltext `gc-align/src/paarweg.rs`). Erst Schnell- und Strobeweg je
+Read wie bisher. Bleibt bei einem Paar ein Read ohne Bereich, werden beide Reads gemeinsam aus
+ihren Strobe-Ankern verortet:
+
+1. Treffer je Read nach Diagonale bündeln (Anker, mit Zahl der Treffer).
+2. Ankerpaare: ein Anker vorwärts, der des Partners auf dem Gegenstrang dahinter, Abstand bis
+   `GC_STROBE_PAAR_MAX` (1500). Geordnet nach der Summe der Treffer.
+3. Alle Ankerpaare ab der Hälfte der besten Trefferzahl ausrichten, dazu je Read die drei
+   besten Einzelanker (`GC_STROBE_PAAR_EINZELN`). Sind es mehr als `GC_STROBE_PAAR_TOP` (16)
+   Ankerpaare, geht das Paar den bisherigen Weg.
+4. Ausrichten ohne Lücke bei höchstens `GC_STROBE_PAAR_FEHLER` (2) Fehlpaarungen, sonst lokal;
+   abgeschnittene Enden ohne Lücke anhängen wie beim Strobeweg. Fast deckungsgleiche Orte
+   (95 % des kürzeren, wie bwa) zählen einmal; Orte, die sich nur verschoben überlappen
+   (kurze Tandemwiederholungen), bleiben getrennt.
+5. Jeder fast beste Ort (bis `pen_unpaired` unter dem besten) eines Reads braucht einen
+   Partnerort in Paarlage. Fehlt er, könnte dort ein gleich gutes Paar liegen, das nur die
+   Partnersuche fände: bisheriger Weg. Ausnahme: Ist der Partner für sich eindeutig
+   (Strobeweg genommen), entfällt die Prüfung für den anderen Read
+   (`GC_STROBE_PAAR_EINDEUTIG=0` schaltet das ab).
+6. Wiederholungsanteil wie bwa `frac_rep`: Anteil gesperrter Randstrobes
+   (`GC_STROBE_PAAR_WDH=0` setzt ihn auf 0).
+7. Genommene Paare laufen durch die übliche Paarbewertung, aber ohne Partnersuche. Ein schon
+   verorteter Read behält seinen Bereich und bekommt die Orte seiner Anker dazu
+   (`GC_STROBE_PAAR_DAZU=0`).
+
+Weitere Schalter für Versuche: `GC_STROBE_PAAR_UNSICHER=N` nimmt Paare aus Schritt 3 und 5
+selbst, mit MAPQ höchstens N; dazu `GC_STROBE_PAAR_UNSICHER_VOLL=1`: voller Weg ohne
+Partnersuche. `GC_STROBE_PAAR_SUCHE=1`: Partnersuche statt vollem Weg (nur ohne gesperrte
+Randstrobes, `GC_STROBE_PAAR_SUCHE_SAUBER=0` immer).
+
+Simulation über GRCh38, 2 Mio. Paare, 4 Kerne, Vergleich 214 s Ausrichten, 74 falsch mit
+MAPQ ≥ 20, 3.891.169 richtig mit MAPQ ≥ 20:
+
+| Fassung | Ausrichten | falsch, MAPQ ≥ 20 | richtig, MAPQ ≥ 20 |
+|---|---|---|---|
+| erste Fassung (ohne Schritt 3 bis 6) | 75 s | 7.673 | |
+| Schritt 3 und 4 | 153 s | 2.694 | |
+| dazu Schritt 5 (ohne Ausnahme) | 195 s | 286 | |
+| dazu Schritt 6 | 207 s | 202 | 3.892.221 |
+| dazu Ausnahme in Schritt 5 (Vorgabe des Versuchs) | 195 s | 222 | 3.892.218 |
+| `UNSICHER=0` | 80 s | 179 | 3.821.565 |
+| `UNSICHER=0`, `UNSICHER_VOLL=1` | 177 s | 987 | |
+| `SUCHE=1` (ohne Schritt 6) | 155 s | 2.076 | |
+
+Ergebnis: Die Zeit steckt in den etwa 3 % der Paare, bei denen beide Reads in Wiederholungen
+liegen. Sie kosten im vollen Weg rund 0,8 ms je Read (ein Strobe-Read etwa 0,02 ms) und
+brauchen den vollen Weg samt Partnersuche, sonst steigen die Fehler oder es gehen richtige
+sichere Orte verloren.
