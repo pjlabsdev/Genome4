@@ -9,6 +9,7 @@ pub fn on() -> bool {
     *ON.get_or_init(|| std::env::var("GC_ZEITEN").is_ok_and(|v| v == "1"))
 }
 
+#[allow(clippy::declare_interior_mutable_const)] // nur als Anfangswert der Felder unten
 const Z: AtomicU64 = AtomicU64::new(0);
 /// Nanosekunden und Anzahl: schneller Versuch je Read, voller Weg je Read.
 pub static QUICK: [AtomicU64; 2] = [Z, Z];
