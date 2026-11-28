@@ -67,8 +67,9 @@ pub struct Sorter {
     stats: SortStats,
     /// Teil, der gerade im Hintergrund geschrieben wird; liefert seine Größe auf der Platte.
     pending: Option<std::thread::JoinHandle<io::Result<u64>>>,
-    /// Teile beim Zusammenführen in eigenen Threads lesen und entpacken ([`Sorter::set_read_ahead`]).
-    read_ahead: bool,
+    /// Teile beim Zusammenführen in eigenen Threads lesen und entpacken ([`Sorter::set_read_ahead`]);
+    /// `None`: nur bei höchstens [`AHEAD_MAX_RUNS`] Teilen.
+    read_ahead: Option<bool>,
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -85,15 +86,20 @@ impl Sorter {
             runs: Vec::new(),
             stats: SortStats::default(),
             pending: None,
-            read_ahead: !std::env::var_os("GC_SORT_AHEAD").is_some_and(|v| v == "0"),
+            read_ahead: match std::env::var_os("GC_SORT_AHEAD") {
+                Some(v) if v == "0" => Some(false),
+                Some(v) if v == "1" => Some(true),
+                _ => None,
+            },
         }
     }
 
     /// Beim Zusammenführen liest und entpackt je Teil ein eigener Thread vorab, in Stücken von
-    /// ganzen Sätzen (Vorgabe, `GC_SORT_AHEAD=0` schaltet es ab). Der Hauptthread mischt nur noch. Gleiche Sätze in gleicher
-    /// Reihenfolge; aus liest jeder Teil im Hauptthread.
+    /// ganzen Sätzen. Vorgabe: nur bei höchstens [`AHEAD_MAX_RUNS`] Teilen, weil hunderte
+    /// Threads das Mischen bremsen (Mac, 418 Teile: 24,6 s mit, 13,9 s ohne). `GC_SORT_AHEAD=0`
+    /// schaltet es immer ab, `GC_SORT_AHEAD=1` immer an. Gleiche Sätze in gleicher Reihenfolge.
     pub fn set_read_ahead(&mut self, on: bool) {
-        self.read_ahead = on;
+        self.read_ahead = Some(on);
     }
 
     /// Nimmt kodierte Sätze hintereinander, jeden mit seinem Längenfeld. `records` muss mit
@@ -331,10 +337,11 @@ impl Sorter {
         }
         // Quellen in der Reihenfolge der Eingabe: erst die Teile, zuletzt der Speicher. Bei
         // gleichem Schlüssel gewinnt die frühere Quelle, so bleibt die Sortierung stabil.
+        let ahead = self.read_ahead.unwrap_or(self.runs.len() <= AHEAD_MAX_RUNS);
         let mut readers = Vec::with_capacity(self.runs.len());
         for path in &self.runs {
             let r = RunReader::open(path)?;
-            readers.push(if self.read_ahead {
+            readers.push(if ahead {
                 Source::Ahead(AheadReader::start(r))
             } else {
                 Source::Plain(Box::new(r))
@@ -412,6 +419,9 @@ impl Source {
         }
     }
 }
+
+/// Höchstzahl Teile, bis zu der ohne Schalter vorausgelesen wird (je Teil ein Thread).
+pub const AHEAD_MAX_RUNS: usize = 32;
 
 /// Bytes je Stück, das der Lese-Thread weitergibt (ganze Sätze).
 const AHEAD_CHUNK: usize = 1 << 19;
