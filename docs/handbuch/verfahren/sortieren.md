@@ -53,11 +53,15 @@ Die drei Kriterien stehen in einer Zahl von 64 Bit: 31 Bit Contig (ohne Contig d
    rund 512 KB weiter, höchstens zwei Stücke im Voraus (zusätzlicher Speicher je Teil rund
    1,5 MB, bei 115 Teilen rund 170 MB). Der Hauptthread mischt nur noch. Prüfsumme und Zähler
    prüft weiterhin der Lese-Thread; bricht er ab, ohne das Ende gemeldet zu haben, bricht auch
-   das Zusammenführen ab. Seit 2026-11-28 geschieht das nur bei höchstens 32 Teilen: Bei
-   hunderten Teilen bremsen ebenso viele Threads das Mischen (Mac M5, 10 Mio. Paare HG002,
-   418 Teile: Mischen 24,6 s mit Vorauslesen, 13,9 s ohne, 13,7 s ganz ohne Teile; im
-   Ganzgenom-Lauf mit 464 Teilen war es an). `GC_SORT_AHEAD=0` liest immer im Hauptthread,
-   `GC_SORT_AHEAD=1` immer vorab. Gemessen
+   das Zusammenführen ab. Seit 2026-11-28 gilt das nur bei höchstens 32 Teilen. Bei mehr
+   Teilen liest ein Pool von höchstens 8 Threads reihum alle Teile, in Stücken von rund
+   256 KB, je Teil höchstens ein Stück im Voraus; ist ein Teil voll, geht der Thread zum
+   nächsten, er wartet nie auf einen einzelnen Teil. Grund: Hunderte Threads bremsten das
+   Mischen (Mac M5, 10 Mio. Paare HG002, 418 Teile: 24,6 s mit Thread je Teil, 13,9 s ohne
+   Vorauslesen, 13,7 s ganz ohne Teile), und ohne Vorauslesen liest und entpackt der
+   Hauptthread alles selbst (in fq2bam 61 s statt 13,6 s, ein Kern). `GC_SORT_AHEAD=0` liest
+   immer im Hauptthread, `GC_SORT_AHEAD=1` immer mit Thread je Teil, `GC_SORT_AHEAD=2` immer
+   mit dem Pool. Gemessen
    (Simulation über GRCh38, 300.000 Paare, `--speicher-mb 32`, 6 Teile, 4 Kerne): Zusammenführen,
    Markieren und Schreiben 1,35 s bisher, 1,17 s mit Vorauslesen; die BAM ist bytegleich.
 

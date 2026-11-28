@@ -70,6 +70,8 @@ pub struct Sorter {
     /// Teile beim Zusammenführen in eigenen Threads lesen und entpacken ([`Sorter::set_read_ahead`]);
     /// `None`: nur bei höchstens [`AHEAD_MAX_RUNS`] Teilen.
     read_ahead: Option<bool>,
+    /// Immer den Lese-Pool nehmen (`GC_SORT_AHEAD=2`, Tests).
+    force_pool: bool,
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -91,6 +93,7 @@ impl Sorter {
                 Some(v) if v == "1" => Some(true),
                 _ => None,
             },
+            force_pool: std::env::var_os("GC_SORT_AHEAD").is_some_and(|v| v == "2"),
         }
     }
 
@@ -100,6 +103,11 @@ impl Sorter {
     /// schaltet es immer ab, `GC_SORT_AHEAD=1` immer an. Gleiche Sätze in gleicher Reihenfolge.
     pub fn set_read_ahead(&mut self, on: bool) {
         self.read_ahead = Some(on);
+    }
+
+    /// Teile immer über den Lese-Pool lesen (sonst erst ab [`AHEAD_MAX_RUNS`] Teilen).
+    pub fn set_read_pool(&mut self) {
+        self.force_pool = true;
     }
 
     /// Nimmt kodierte Sätze hintereinander, jeden mit seinem Längenfeld. `records` muss mit
@@ -337,15 +345,41 @@ impl Sorter {
         }
         // Quellen in der Reihenfolge der Eingabe: erst die Teile, zuletzt der Speicher. Bei
         // gleichem Schlüssel gewinnt die frühere Quelle, so bleibt die Sortierung stabil.
-        let ahead = self.read_ahead.unwrap_or(self.runs.len() <= AHEAD_MAX_RUNS);
+        let mode = match self.read_ahead {
+            Some(false) => Ahead::Off,
+            Some(true) => Ahead::PerRun,
+            None if self.runs.len() <= AHEAD_MAX_RUNS => Ahead::PerRun,
+            None => Ahead::Pool,
+        };
+        let mode = if self.force_pool { Ahead::Pool } else { mode };
         let mut readers = Vec::with_capacity(self.runs.len());
-        for path in &self.runs {
-            let r = RunReader::open(path)?;
-            readers.push(if ahead {
-                Source::Ahead(AheadReader::start(r))
-            } else {
-                Source::Plain(Box::new(r))
-            });
+        match mode {
+            Ahead::Off | Ahead::PerRun => {
+                for path in &self.runs {
+                    let r = RunReader::open(path)?;
+                    readers.push(if mode == Ahead::PerRun {
+                        Source::Ahead(AheadReader::start(r))
+                    } else {
+                        Source::Plain(Box::new(r))
+                    });
+                }
+            }
+            Ahead::Pool => {
+                let workers = std::thread::available_parallelism()
+                    .map_or(1, |n| n.get())
+                    .clamp(1, POOL_MAX_THREADS);
+                let mut groups: Vec<Vec<(RunReader, ChunkTx)>> =
+                    (0..workers).map(|_| Vec::new()).collect();
+                for (i, path) in self.runs.iter().enumerate() {
+                    let r = RunReader::open(path)?;
+                    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+                    groups[i % workers].push((r, tx));
+                    readers.push(Source::Ahead(AheadReader::from_rx(rx)));
+                }
+                for g in groups {
+                    std::thread::spawn(move || pool_worker(g, POOL_CHUNK));
+                }
+            }
         }
         let memory = readers.len();
         let mut heap = BinaryHeap::new();
@@ -420,8 +454,92 @@ impl Source {
     }
 }
 
-/// Höchstzahl Teile, bis zu der ohne Schalter vorausgelesen wird (je Teil ein Thread).
+/// Höchstzahl Teile, bis zu der je Teil ein eigener Lese-Thread läuft. Bei mehr Teilen liest
+/// ein kleiner Pool reihum ([`pool_worker`]).
 pub const AHEAD_MAX_RUNS: usize = 32;
+
+/// Höchstzahl Threads im Lese-Pool.
+const POOL_MAX_THREADS: usize = 8;
+
+/// Bytes je Stück im Lese-Pool (kleiner als [`AHEAD_CHUNK`], weil hunderte Teile warten).
+const POOL_CHUNK: usize = 1 << 18;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ahead {
+    /// Jeder Teil im Hauptthread.
+    Off,
+    /// Je Teil ein Thread.
+    PerRun,
+    /// Wenige Threads lesen reihum alle Teile.
+    Pool,
+}
+
+type ChunkTx = std::sync::mpsc::SyncSender<io::Result<Vec<u8>>>;
+
+/// Liest bis `size` Bytes ganzer Sätze aus `r`. Leer heißt: Ende, Prüfung bestanden.
+fn read_chunk(r: &mut RunReader, record: &mut Vec<u8>, size: usize) -> io::Result<Vec<u8>> {
+    let mut chunk = Vec::with_capacity(size + 4096);
+    while chunk.len() < size {
+        if !r.next(record)? {
+            break;
+        }
+        chunk.extend_from_slice(record);
+    }
+    Ok(chunk)
+}
+
+/// Ein Thread des Lese-Pools: liest und entpackt seine Teile reihum. Jeder Teil hat höchstens
+/// ein wartendes Stück im Kanal und eines hier; ist ein Kanal voll, geht es mit dem nächsten
+/// Teil weiter (nie blockierend, sonst könnte der Hauptthread auf einen Teil warten, dessen
+/// Thread an einem anderen hängt). Stücke enden immer an Satzgrenzen; ein leeres Stück meldet
+/// das geprüfte Ende, ein Fehler beendet den Teil.
+fn pool_worker(mut parts: Vec<(RunReader, ChunkTx)>, size: usize) {
+    use std::sync::mpsc::TrySendError;
+    let n = parts.len();
+    let mut pending: Vec<Option<io::Result<Vec<u8>>>> = (0..n).map(|_| None).collect();
+    let mut finished = vec![false; n];
+    let mut ended = vec![false; n];
+    let mut record = Vec::new();
+    loop {
+        let mut progress = false;
+        let mut alive = false;
+        for i in 0..n {
+            if finished[i] {
+                continue;
+            }
+            alive = true;
+            let item = match pending[i].take() {
+                Some(item) => item,
+                None if ended[i] => Ok(Vec::new()),
+                None => {
+                    let c = read_chunk(&mut parts[i].0, &mut record, size);
+                    if matches!(&c, Ok(v) if v.len() < size) {
+                        ended[i] = true;
+                    }
+                    c
+                }
+            };
+            let last = match &item {
+                Ok(v) => v.is_empty(),
+                Err(_) => true,
+            };
+            match parts[i].1.try_send(item) {
+                Ok(()) => {
+                    progress = true;
+                    finished[i] = last;
+                }
+                Err(TrySendError::Full(item)) => pending[i] = Some(item),
+                Err(TrySendError::Disconnected(_)) => finished[i] = true,
+            }
+        }
+        if !alive {
+            return;
+        }
+        if !progress {
+            std::thread::sleep(std::time::Duration::from_micros(200));
+        }
+    }
+}
 
 /// Bytes je Stück, das der Lese-Thread weitergibt (ganze Sätze).
 const AHEAD_CHUNK: usize = 1 << 19;
@@ -466,6 +584,10 @@ impl AheadReader {
                 }
             }
         });
+        AheadReader::from_rx(rx)
+    }
+
+    fn from_rx(rx: std::sync::mpsc::Receiver<io::Result<Vec<u8>>>) -> Self {
         AheadReader {
             rx,
             chunk: Vec::new(),
@@ -645,10 +767,12 @@ mod tests {
     }
 
     fn run(records: &[Vec<u8>], memory_bytes: usize, tag: &str) -> (Vec<Vec<u8>>, SortStats) {
-        let ahead = run_with(records, memory_bytes, tag, true);
-        let plain = run_with(records, memory_bytes, &format!("{tag}-ohne"), false);
-        // Vorauslesen ändert nichts am Ergebnis
+        let ahead = run_with(records, memory_bytes, tag, Some(true));
+        let plain = run_with(records, memory_bytes, &format!("{tag}-ohne"), Some(false));
+        let pool = run_with(records, memory_bytes, &format!("{tag}-pool"), None);
+        // Vorauslesen (je Teil ein Thread oder im Pool) ändert nichts am Ergebnis
         assert_eq!(ahead, plain);
+        assert_eq!(pool.0, plain.0);
         ahead
     }
 
@@ -656,7 +780,7 @@ mod tests {
         records: &[Vec<u8>],
         memory_bytes: usize,
         tag: &str,
-        read_ahead: bool,
+        read_ahead: Option<bool>,
     ) -> (Vec<Vec<u8>>, SortStats) {
         let temp_dir = std::env::temp_dir().join(format!("gcbam-{tag}-{}", std::process::id()));
         std::fs::create_dir_all(&temp_dir).unwrap();
@@ -664,7 +788,10 @@ mod tests {
             memory_bytes,
             temp_dir: temp_dir.clone(),
         });
-        sorter.set_read_ahead(read_ahead);
+        match read_ahead {
+            Some(on) => sorter.set_read_ahead(on),
+            None => sorter.set_read_pool(),
+        }
         // in ungleichen Stücken hineingeben
         for chunk in records.chunks(7) {
             sorter.push(&chunk.concat()).unwrap();
@@ -738,13 +865,17 @@ mod tests {
     #[test]
     fn damaged_run_is_detected() {
         let temp_dir = std::env::temp_dir().join(format!("gcbam-schaden-{}", std::process::id()));
-        for case in 0..6 {
+        for case in 0..9 {
             std::fs::create_dir_all(&temp_dir).unwrap();
             let mut sorter = Sorter::new(SortOptions {
                 memory_bytes: 3000,
                 temp_dir: temp_dir.clone(),
             });
-            sorter.set_read_ahead(case < 3);
+            match case / 3 {
+                0 => sorter.set_read_ahead(true),
+                1 => sorter.set_read_ahead(false),
+                _ => sorter.set_read_pool(),
+            }
             for r in random_records(400, 99) {
                 sorter.push(&r).unwrap();
             }
