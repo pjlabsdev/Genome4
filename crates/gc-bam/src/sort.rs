@@ -467,9 +467,9 @@ impl Source {
 pub const AHEAD_MAX_RUNS: usize = 32;
 
 /// Lesepuffer aller Teile zusammen beim Zusammenführen.
-const READ_BUFFER_TOTAL: usize = 1 << 30;
+const READ_BUFFER_TOTAL: usize = 2 << 30;
 
-/// Lesepuffer je Teil: 1 GiB geteilt durch die Zahl der Teile, mindestens 256 KB, höchstens
+/// Lesepuffer je Teil: 2 GiB geteilt durch die Zahl der Teile, mindestens 256 KB, höchstens
 /// 8 MB (`GC_SORT_LESEPUFFER_KB` setzt ihn fest). Mac M5, USB-SSD, 418 Teile mit 256 KB:
 /// die Lese-Threads hingen zu 70–89 % im Lesen, ~45 MB/s statt ~390 MB/s.
 fn read_buffer_bytes(runs: usize) -> usize {
@@ -484,7 +484,7 @@ fn read_buffer_bytes(runs: usize) -> usize {
 }
 
 /// Höchstzahl Threads im Lese-Pool.
-const POOL_MAX_THREADS: usize = 8;
+const POOL_MAX_THREADS: usize = 4;
 
 /// Bytes je Stück im Lese-Pool (kleiner als [`AHEAD_CHUNK`], weil hunderte Teile warten).
 const POOL_CHUNK: usize = 1 << 18;
