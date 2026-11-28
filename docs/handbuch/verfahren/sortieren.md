@@ -61,7 +61,10 @@ Die drei Kriterien stehen in einer Zahl von 64 Bit: 31 Bit Contig (ohne Contig d
    Vorauslesen, 13,7 s ganz ohne Teile), und ohne Vorauslesen liest und entpackt der
    Hauptthread alles selbst (in fq2bam 61 s statt 13,6 s, ein Kern). `GC_SORT_AHEAD=0` liest
    immer im Hauptthread, `GC_SORT_AHEAD=1` immer mit Thread je Teil, `GC_SORT_AHEAD=2` immer
-   mit dem Pool. Gemessen
+   mit dem Pool. Jeder Teil wird mit großem Puffer gelesen: 1 GiB geteilt durch die Zahl
+   der Teile, mindestens 256 KB, höchstens 8 MB (`GC_SORT_LESEPUFFER_KB` setzt ihn fest).
+   Mit 256 KB hingen die Pool-Threads auf der USB-SSD des Macs zu 70–89 % im Lesen
+   (418 Teile, ~45 MB/s statt ~390 MB/s sequentiell). Gemessen
    (Simulation über GRCh38, 300.000 Paare, `--speicher-mb 32`, 6 Teile, 4 Kerne): Zusammenführen,
    Markieren und Schreiben 1,35 s bisher, 1,17 s mit Vorauslesen; die BAM ist bytegleich.
 

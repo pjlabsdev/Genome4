@@ -352,11 +352,12 @@ impl Sorter {
             None => Ahead::Pool,
         };
         let mode = if self.force_pool { Ahead::Pool } else { mode };
+        let read_buffer = read_buffer_bytes(self.runs.len());
         let mut readers = Vec::with_capacity(self.runs.len());
         match mode {
             Ahead::Off | Ahead::PerRun => {
                 for path in &self.runs {
-                    let r = RunReader::open(path)?;
+                    let r = RunReader::open(path, read_buffer)?;
                     readers.push(if mode == Ahead::PerRun {
                         Source::Ahead(AheadReader::start(r))
                     } else {
@@ -371,7 +372,7 @@ impl Sorter {
                 let mut groups: Vec<Vec<(RunReader, ChunkTx)>> =
                     (0..workers).map(|_| Vec::new()).collect();
                 for (i, path) in self.runs.iter().enumerate() {
-                    let r = RunReader::open(path)?;
+                    let r = RunReader::open(path, read_buffer)?;
                     let (tx, rx) = std::sync::mpsc::sync_channel(1);
                     groups[i % workers].push((r, tx));
                     readers.push(Source::Ahead(AheadReader::from_rx(rx)));
@@ -457,6 +458,23 @@ impl Source {
 /// Höchstzahl Teile, bis zu der je Teil ein eigener Lese-Thread läuft. Bei mehr Teilen liest
 /// ein kleiner Pool reihum ([`pool_worker`]).
 pub const AHEAD_MAX_RUNS: usize = 32;
+
+/// Lesepuffer aller Teile zusammen beim Zusammenführen.
+const READ_BUFFER_TOTAL: usize = 1 << 30;
+
+/// Lesepuffer je Teil: 1 GiB geteilt durch die Zahl der Teile, mindestens 256 KB, höchstens
+/// 8 MB (`GC_SORT_LESEPUFFER_KB` setzt ihn fest). Mac M5, USB-SSD, 418 Teile mit 256 KB:
+/// die Lese-Threads hingen zu 70–89 % im Lesen, ~45 MB/s statt ~390 MB/s.
+fn read_buffer_bytes(runs: usize) -> usize {
+    if let Some(kb) = std::env::var("GC_SORT_LESEPUFFER_KB")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&kb| kb > 0)
+    {
+        return kb << 10;
+    }
+    (READ_BUFFER_TOTAL / runs.max(1)).clamp(1 << 18, 8 << 20)
+}
 
 /// Höchstzahl Threads im Lese-Pool.
 const POOL_MAX_THREADS: usize = 8;
@@ -634,8 +652,10 @@ struct RunReader {
 }
 
 impl RunReader {
-    fn open(path: &Path) -> io::Result<Self> {
-        let mut file = BufReader::with_capacity(1 << 18, File::open(path)?);
+    /// `buffer`: Bytes je Lesezugriff. Große Zugriffe halten eine USB-SSD bei hunderten
+    /// abwechselnd gelesenen Teilen schnell.
+    fn open(path: &Path, buffer: usize) -> io::Result<Self> {
+        let mut file = BufReader::with_capacity(buffer, File::open(path)?);
         let mut magic = [0u8; 8];
         file.read_exact(&mut magic)
             .map_err(|_| invalid(format!("{}: Teil ist abgeschnitten", path.display())))?;
