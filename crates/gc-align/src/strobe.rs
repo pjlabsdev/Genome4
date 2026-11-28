@@ -42,6 +42,11 @@ pub struct StrobeOptions {
     /// Ohne Lücke nur, wenn keine kurze Lücke besser passt (Schalter zurück:
     /// `GC_STROBE_LUECKENPRUEFUNG=0`).
     pub gap_check: bool,
+    /// Versuch: Reads mit zu nahem Zweitem selbst nehmen (Zweiter als `sub` und `csub`)
+    /// statt den vollen Weg (`GC_STROBE_NAH_NEHMEN=1`).
+    pub take_close: bool,
+    /// Dazu alle fast gleich guten Orte zurückgeben (`GC_STROBE_NAH_NEHMEN=2`).
+    pub take_close_multi: bool,
 }
 
 impl Default for StrobeOptions {
@@ -62,6 +67,8 @@ impl Default for StrobeOptions {
             ungapped_first: std::env::var("GC_STROBE_HAMMING").map_or(true, |v| v != "0"),
             stop_early: std::env::var("GC_STROBE_FRUEH").map_or(true, |v| v != "0"),
             gap_check: std::env::var("GC_STROBE_LUECKENPRUEFUNG").map_or(true, |v| v != "0"),
+            take_close: std::env::var("GC_STROBE_NAH_NEHMEN").is_ok_and(|v| v == "1" || v == "2"),
+            take_close_multi: std::env::var("GC_STROBE_NAH_NEHMEN").is_ok_and(|v| v == "2"),
         }
     }
 }
@@ -246,6 +253,17 @@ pub fn strobe_region(
     read: &[u8],
     opt: &AlignOptions,
 ) -> Option<Region> {
+    strobe_regions(index, strobes, read, opt).map(|mut v| v.swap_remove(0))
+}
+
+/// Wie [`strobe_region`], im Versuch `GC_STROBE_NAH_NEHMEN=2` bei nahem Zweitem aber alle
+/// fast gleich guten Orte (der beste zuerst), damit die Paarung unter ihnen wählen kann.
+pub fn strobe_regions(
+    index: &FmIndex,
+    strobes: &StrobeIndex,
+    read: &[u8],
+    opt: &AlignOptions,
+) -> Option<Vec<Region>> {
     bump(&COUNTS.tried);
     let so = &opt.strobe;
     let len = read.len();
@@ -308,6 +326,7 @@ pub fn strobe_region(
         let bound_ok = crate::fast::kmer_bound_holds(sc);
         // (Score, Textanfang, Textende, Read-Anfang, Read-Ende)
         let mut best: Option<(i32, u64, u64, i32, i32)> = None;
+        let mut all: Vec<(i32, u64, u64, i32, i32)> = Vec::new();
         let mut second = 0i32;
         for &(_, g) in s.groups.iter().take(so.candidates) {
             let strand = g >> 63;
@@ -415,6 +434,9 @@ pub fn strobe_region(
                     r.qe + 1,
                 )
             };
+            if so.take_close_multi {
+                all.push(cand);
+            }
             match best {
                 Some(b) if cand.0 <= b.0 => {
                     // dieselbe Stelle (überlappend) zählt nicht als zweiter Ort
@@ -435,6 +457,7 @@ pub fn strobe_region(
             // statt weitere Kandidaten auszurichten (vorsichtig, ein später klar Bester ginge
             // dadurch nur den vollen Weg).
             if so.stop_early
+                && !so.take_close
                 && let Some((b, ..)) = best
                 && b - second < so.min_gap
             {
@@ -519,7 +542,25 @@ pub fn strobe_region(
             bump(&COUNTS.too_weak);
             return None;
         }
-        if score - second < so.min_gap {
+        let close = score - second < so.min_gap;
+        // Versuch mehrere Orte: Nur wenn der Strobeweg alle Kopien sehen konnte (nichts
+        // gesperrt, nicht mehr Gruppen als Kandidaten), sonst der volle Weg.
+        let unseen = so.take_close_multi
+            && match std::env::var("GC_STROBE_NAH_VORSICHT").as_deref() {
+                Ok("0") => false,
+                Ok("gesperrt") => blocked > 0,
+                Ok("gruppen") => s.groups.get(so.candidates).is_some_and(|g| g.0 >= 2),
+                Ok("gruppen3") => s.groups.get(so.candidates).is_some_and(|g| g.0 >= 3),
+                _ => blocked > 0 || s.groups.len() > so.candidates,
+            };
+        // Variante: Reads mit gesperrten Randstrobes trotzdem nehmen, aber ohne Sicherheit
+        // (`csub` = Score: MAPQ 0, und ein Partner darauf stützt das Paar nicht).
+        let zero = so.take_close_multi
+            && close
+            && blocked > 0
+            && std::env::var("GC_STROBE_NAH_GESPERRT_NULL").is_ok_and(|v| v == "1");
+        let unseen = unseen && !zero;
+        if close && (!so.take_close || unseen) {
             bump(&COUNTS.second_close);
             return None;
         }
@@ -527,7 +568,8 @@ pub fn strobe_region(
         let hit = index.hit_at(rb, re - rb)?;
         bump(&COUNTS.taken);
         let min_sub = opt.finalize.min_seed_len * sc.matching;
-        Some(Region {
+        let multi = close && so.take_close_multi;
+        let mut out = vec![Region {
             rb,
             re,
             qb: 0,
@@ -538,12 +580,60 @@ pub fn strobe_region(
             w: sc.band_width,
             seedcov: len as i32,
             seedlen0: len as i32,
-            sub: if second > min_sub { second } else { 0 },
+            sub: if multi {
+                0
+            } else if second > min_sub {
+                second
+            } else {
+                0
+            },
             sub_n: 0,
             secondary: -1,
-            csub: 0,
+            csub: if zero {
+                score
+            } else if close && !multi {
+                if std::env::var("GC_STROBE_NAH_CSUB").is_ok_and(|v| v == "voll") {
+                    score
+                } else {
+                    second
+                }
+            } else {
+                0
+            },
             rescued: false,
-        })
+        }];
+        if multi {
+            all.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+            for &(csc, cb, ce, cqb, cqe) in &all {
+                if csc < score - opt.pair.pen_unpaired || csc < min_sub {
+                    break;
+                }
+                if out.iter().any(|r| cb < r.re && ce > r.rb) {
+                    continue;
+                }
+                let Some(h) = index.hit_at(cb, ce - cb) else {
+                    continue;
+                };
+                out.push(Region {
+                    rb: cb,
+                    re: ce,
+                    qb: cqb,
+                    qe: cqe,
+                    contig: h.contig,
+                    score: csc,
+                    truesc: csc,
+                    w: sc.band_width,
+                    seedcov: cqe - cqb,
+                    seedlen0: cqe - cqb,
+                    sub: 0,
+                    sub_n: 0,
+                    secondary: -1,
+                    csub: if zero { csc } else { 0 },
+                    rescued: false,
+                });
+            }
+        }
+        Some(out)
     })
 }
 

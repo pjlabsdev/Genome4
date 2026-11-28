@@ -703,6 +703,14 @@ fn pair_lines_plain(
                 // Wiederholungen).
                 let c = &s[i].regions[z[i]];
                 q_se[i] = q_se[i].min(raw_mapq(c.score - c.csub, sc.matching));
+                // Versuch Strobeweg mit nahem Zweitem: Liegt der Partner auf so einem Ort,
+                // stützt er dieses Paar nicht (die anderen Kopien fehlen in der Liste).
+                if opt.strobe.take_close {
+                    let m = &s[1 - i].regions[z[1 - i]];
+                    if m.csub >= m.score {
+                        q_se[i] = 0;
+                    }
+                }
             }
             extra_flag |= 2;
         } else {

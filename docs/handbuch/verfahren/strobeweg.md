@@ -107,3 +107,25 @@ lokale Ausrichtung), `lokal` (Kandidaten mit lokaler Ausrichtung).
 ## Literatur
 Sahlin K. Strobealign: flexible seed size enables ultra-fast and accurate read alignment.
 Genome Biology 23, 260 (2022).
+
+## Versuch: Wiederholungs-Reads ohne vollen Weg (2026-11-28, Vorgabe aus)
+Reads mit zu nahem Zweitem gehen heute den vollen Weg. Der Versuch `GC_STROBE_NAH_NEHMEN=2`
+gibt stattdessen alle fast gleich guten Strobe-Orte (bis `pen_unpaired` unter dem besten) an
+die Paarung. `GC_STROBE_NAH_VORSICHT` legt fest, wann doch der volle Weg geht (`gesperrt`,
+`gruppen`, `0`, sonst beides). `GC_STROBE_NAH_GESPERRT_NULL=1` nimmt Reads mit gesperrten
+Randstrobes trotzdem, aber mit MAPQ 0, und ein Partner auf so einem Ort stützt das Paar nicht.
+`GC_STROBE_NAH_NEHMEN=1` (ein Ort, `GC_STROBE_NAH_CSUB=voll`) ist die erste, verworfene Form.
+Simulation über GRCh38, 2 Mio. Paare, 4 Kerne:
+
+| Variante | Ausrichten | falsch mit MAPQ ≥ 20 | MAPQ 0 |
+|---|---|---|---|
+| Vorgabe (voller Weg) | 200 s | 74 | 94.708 |
+| `NAH_NEHMEN=1` | 114 s | 10.928 | 99.054 |
+| `NAH_NEHMEN=2`, `VORSICHT=0` | 140 s | 557 | 93.534 |
+| `NAH_NEHMEN=2` (Vorsicht beides) | 205 s | 79 | 94.596 |
+| `NAH_NEHMEN=2`, `VORSICHT=gesperrt` | 182 s | 149 | 94.210 |
+| dazu `GESPERRT_NULL=1` | 130 s | 189 | 158.377 |
+| `VORSICHT=gruppen`, `GESPERRT_NULL=1` | 150 s | 139 | 158.602 |
+
+Die Zeit steckt fast ganz in Reads aus sehr häufigen Wiederholungen (gesperrte Randstrobes);
+dort fehlen dem Strobeweg Kopien. Ob die MAPQ-0-Variante Varianten kostet, klärt GIAB.
