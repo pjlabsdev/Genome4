@@ -38,6 +38,23 @@ pub struct Packed {
 }
 
 impl Packed {
+    /// Holt die Wörter der Basen `from..to` vorab in den Cache. Ändert kein Ergebnis.
+    #[inline]
+    pub fn prefetch_range(&self, from: u64, to: u64) {
+        let (a, b) = (
+            (from / 32) as usize,
+            (to.div_ceil(32) as usize).min(self.words.len()),
+        );
+        let mut i = a;
+        while i < b {
+            gc_sys::prefetch(&self.words[i]);
+            i += 8;
+        }
+        if b > a {
+            gc_sys::prefetch(&self.words[b - 1]);
+        }
+    }
+
     pub fn push(&mut self, code: u8) {
         let i = self.len;
         if i.is_multiple_of(32) {

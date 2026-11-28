@@ -375,6 +375,16 @@ pub fn strobe_regions(
             .sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         let sc = &opt.region.scoring;
         let l = index.reference().len();
+        // Die Fenster der Kandidaten vorab in den Cache holen (gleiche Rechnung wie unten, im
+        // Vorwärtsstrang). Schalter zurück: `GC_STROBE_VORAB=0`.
+        if pre {
+            for &(_, g) in s.groups.iter().take(so.candidates) {
+                let diag = (g & !(1 << 63)) as i64 - (1 << 32);
+                let fb = (diag - so.margin as i64).max(0) as u64;
+                let fe = ((diag + len as i64 + so.margin as i64).max(0) as u64).min(l);
+                index.reference().forward.prefetch_range(fb, fe);
+            }
+        }
         let byte = len as i32 * sc.matching < 250;
         let bound_ok = crate::fast::kmer_bound_holds(sc);
         // (Score, Textanfang, Textende, Read-Anfang, Read-Ende)
