@@ -638,6 +638,10 @@ fn align_into(
                     .into_iter()
                     .map(|(k, v)| (k.to_string(), json!(v)))
                     .collect::<serde_json::Map<_, _>>(),
+                "zeiten": gc_align::zeiten::counts()
+                    .into_iter()
+                    .map(|(k, v)| (k, json!(v)))
+                    .collect::<serde_json::Map<_, _>>(),
             }),
         );
         Ok((n_reads, n_lines, trim_counts))

@@ -149,19 +149,40 @@ fn regions_of_all(
     }
     if opt.seed.regroup {
         // Erst der Schnellweg für alle Reads, dann die übrigen in vollen Gruppen.
+        let timed = crate::zeiten::on();
         let mut out: Vec<Option<(Vec<crate::region::Region>, f32)>> =
             parallel_map(reads.len(), threads, |i| {
-                quick_region(index, reads[i].seq, opt).map(|x| (x, 0.0))
+                let t = timed.then(std::time::Instant::now);
+                let r = quick_region(index, reads[i].seq, opt).map(|x| (x, 0.0));
+                if let Some(t) = t {
+                    crate::zeiten::add(&crate::zeiten::QUICK, t.elapsed().as_nanos() as u64, 1);
+                }
+                r
             });
         let rest: Vec<usize> = (0..reads.len()).filter(|&i| out[i].is_none()).collect();
+        if timed {
+            let mut q = QUICK_FLAGS.lock().unwrap();
+            q.clear();
+            q.extend(out.iter().map(Option::is_some));
+        }
         let found = parallel_map(rest.len().div_ceil(SEED_GROUP), threads, |g| {
+            let t = timed.then(std::time::Instant::now);
             let ids = &rest[g * SEED_GROUP..((g + 1) * SEED_GROUP).min(rest.len())];
             let seqs: Vec<&[u8]> = ids.iter().map(|&i| reads[i].seq).collect();
             let intervals = collect_intervals_many(index, &seqs, &opt.seed);
-            ids.iter()
+            let r = ids
+                .iter()
                 .zip(&intervals)
                 .map(|(&i, iv)| regions_from_intervals(index, reads[i].seq, iv, opt))
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            if let Some(t) = t {
+                crate::zeiten::add(
+                    &crate::zeiten::FULL,
+                    t.elapsed().as_nanos() as u64,
+                    ids.len() as u64,
+                );
+            }
+            r
         });
         for (&i, r) in rest.iter().zip(found.into_iter().flatten()) {
             out[i] = Some(r);
@@ -185,6 +206,9 @@ fn regions_of_all(
     });
     groups.into_iter().flatten().collect()
 }
+
+/// Nur für [`crate::zeiten`]: je Read des letzten Blocks, ob der schnelle Versuch reichte.
+static QUICK_FLAGS: std::sync::Mutex<Vec<bool>> = std::sync::Mutex::new(Vec::new());
 
 /// Paar geht den bisherigen Weg (sonst [`crate::paarweg::Kind`] als Zahl).
 const NORMAL: u8 = 255;
@@ -418,26 +442,57 @@ pub fn align_pairs(
         .enumerate()
         .flat_map(|(i, p)| (0..2).flat_map(move |k| p[k].iter().map(move |w| (i, k, *w))))
         .collect();
+    // Nur für die Zeitmessung: Art je Paar (0, 1 oder 2 Reads über den vollen Weg).
+    let kinds_t: Option<Vec<u8>> = crate::zeiten::on().then(|| {
+        let q = QUICK_FLAGS.lock().unwrap();
+        (0..n_pairs)
+            .map(|i| {
+                let k = u8::from(!q.get(2 * i).copied().unwrap_or(false))
+                    + u8::from(!q.get(2 * i + 1).copied().unwrap_or(false));
+                crate::zeiten::PAIRS[k as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                k
+            })
+            .collect()
+    });
     let results = match &opt.rescue_kernel {
         Some(kernel) => rescue_with_kernel(index, reads, &jobs, opt, threads, kernel.as_ref()),
         None if opt.pair.rescue_two => {
             let two = parallel_map(jobs.len().div_ceil(2), threads, |g| {
+                let t = kinds_t.is_some().then(std::time::Instant::now);
                 let (i, k, w) = jobs[2 * g];
                 let a = reads[2 * i + k].seq;
-                match jobs.get(2 * g + 1) {
+                let r = match jobs.get(2 * g + 1) {
                     Some(&(i2, k2, w2)) => {
                         let b = reads[2 * i2 + k2].seq;
                         let (ra, rb) = rescue_align_two(index, (a, &w), (b, &w2), opt);
                         vec![(w, ra), (w2, rb)]
                     }
                     None => vec![(w, rescue_align(index, a, &w, opt))],
+                };
+                if let (Some(t), Some(c)) = (t, &kinds_t) {
+                    // Die Zeit des Doppels zählt zur Art des ersten Fensters.
+                    crate::zeiten::add(
+                        &crate::zeiten::RESCUE[c[i] as usize],
+                        t.elapsed().as_nanos() as u64,
+                        r.len() as u64,
+                    );
                 }
+                r
             });
             two.into_iter().flatten().collect()
         }
         None => parallel_map(jobs.len(), threads, |j| {
             let (i, k, w) = jobs[j];
-            (w, rescue_align(index, reads[2 * i + k].seq, &w, opt))
+            let t = kinds_t.is_some().then(std::time::Instant::now);
+            let r = (w, rescue_align(index, reads[2 * i + k].seq, &w, opt));
+            if let (Some(t), Some(c)) = (t, &kinds_t) {
+                crate::zeiten::add(
+                    &crate::zeiten::RESCUE[c[i] as usize],
+                    t.elapsed().as_nanos() as u64,
+                    1,
+                );
+            }
+            r
         }),
     };
     // Je Paar und Read der Abschnitt seiner Ergebnisse.
@@ -461,7 +516,16 @@ pub fn align_pairs(
             k if k == Kind::Unsure as u8 => &opt_un,
             _ => opt,
         };
-        pair_lines_with(index, &pes, first_pair_id + i as u64, &mut s, o, done).0
+        let t = kinds_t.is_some().then(std::time::Instant::now);
+        let r = pair_lines_with(index, &pes, first_pair_id + i as u64, &mut s, o, done).0;
+        if let (Some(t), Some(c)) = (t, &kinds_t) {
+            crate::zeiten::add(
+                &crate::zeiten::LINES[c[i] as usize],
+                t.elapsed().as_nanos() as u64,
+                1,
+            );
+        }
+        r
     });
     (lines, pes)
 }

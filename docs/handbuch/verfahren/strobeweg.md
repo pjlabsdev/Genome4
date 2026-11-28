@@ -195,3 +195,22 @@ Ergebnis: Die Zeit steckt in den etwa 3 % der Paare, bei denen beide Reads in Wi
 liegen. Sie kosten im vollen Weg rund 0,8 ms je Read (ein Strobe-Read etwa 0,02 ms) und
 brauchen den vollen Weg samt Partnersuche, sonst steigen die Fehler oder es gehen richtige
 sichere Orte verloren.
+
+## Zeitmessung je Paarart (`GC_ZEITEN=1`)
+
+Für die Arbeit am Tempo misst `GC_ZEITEN=1` die Rechenzeit je Teil und je Paarart und schreibt sie
+unter `zeiten` in `ALIGN.FERTIG`: schneller Versuch je Read, voller Weg je Read, Partnersuche und
+Zeilen je Paarart (0 = beide Reads über den Strobeweg, 1 = einer über den vollen Weg, 2 = beide).
+Ohne Schalter misst sie nichts; die Sätze bleiben in jedem Fall gleich. Cloud, 2 Mio.
+Simulationspaare (Rechenzeit aller Kerne):
+
+| Teil | Reads oder Paare | Zeit | je Stück |
+|---|---|---|---|
+| Strobeweg-Versuch | 4.000.000 Reads | 115 s | 29 µs |
+| Voller Weg | 278.372 Reads (7 %) | 415 s | 1,49 ms |
+| Partnersuche, Art 2 | 108.743 Paare | 40 s | 371 µs |
+| Partnersuche, Art 1 | 60.886 Paare | 7,8 s | 127 µs |
+| Zeilen, Art 0 | 1.830.371 Paare | 5,3 s | 2,9 µs |
+| Zeilen, Art 2 | 108.743 Paare | 16,4 s | 151 µs |
+
+Der volle Weg für 7 % der Reads kostet zwei Drittel der Zeit.
