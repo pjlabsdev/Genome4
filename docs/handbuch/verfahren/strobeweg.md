@@ -40,6 +40,11 @@ Kernen: bauen 117 s, laden 6,1 s; die BAM ist in beiden Fällen dieselbe.
    1000 Orten gilt als gesperrt. Sind mehr als 25 % gesperrt, geht der Read den vollen Weg
    (`GC_STROBE_GESPERRT` setzt den Anteil): Sonst könnte ein gleich guter Ort in der Wiederholung
    verborgen sein. Bei höchstens 25 % findet der übrige Read jede nahe Kopie mit.
+   Die Randstrobes beider Stränge werden zuerst alle berechnet, dann ihre Fächer in zwei Stufen
+   vorab in den Cache geholt (erst der Fachanfang, dann Schlüssel und Positionen). Die Abfragen
+   hängen nicht voneinander ab, der Prozessor wartet so auf viele Speicherzeilen gleichzeitig.
+   Dieselben Treffer, auf 400.000 leichten Simulationspaaren 5,7 % weniger Ausrichtezeit
+   (Cloud, zwei Läufe je Fassung, Sätze gleich). Schalter zurück: `GC_STROBE_VORAB=0`.
 2. Treffer nach Diagonale gruppieren (±10), die 16 größten Gruppen nehmen.
 3. Je Gruppe zuerst ohne Lücke entlang der Diagonale vergleichen (bester Abschnitt, Kadane).
    Liegt er höchstens 30 unter dem vollen Score, lassen sich beide Enden außerhalb ohne Lücke für

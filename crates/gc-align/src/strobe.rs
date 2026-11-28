@@ -152,6 +152,7 @@ struct Scratch {
     sy: Vec<(u32, u64)>,
     sc: Vec<u64>,
     st: Vec<(u64, u32)>,
+    st2: Vec<(u64, u32)>,
     rc: Vec<u8>,
     hits: Vec<u64>,
     groups: Vec<(u32, u64)>,
@@ -272,6 +273,11 @@ fn best_one_gap(
     Some(best)
 }
 
+fn prefetch_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("GC_STROBE_VORAB").map_or(true, |v| v != "0"))
+}
+
 /// Ein Bereich für den Read oder `None` (dann der volle Weg).
 pub fn strobe_region(
     index: &FmIndex,
@@ -304,12 +310,32 @@ pub fn strobe_regions(
         s.rc.extend(read.iter().rev().map(|&c| 3 - c));
         s.hits.clear();
         let (mut blocked, mut usable) = (0usize, 0usize);
+        // Erst die Randstrobes beider Stränge, dann ihre Fächer in zwei Stufen vorab laden: Die
+        // Abfragen hängen nicht voneinander ab, der Prozessor wartet so auf viele Speicherzeilen
+        // gleichzeitig statt nacheinander. Dieselben Treffer (Schalter zurück:
+        // `GC_STROBE_VORAB=0`).
+        let pre = prefetch_on();
+        if pre {
+            syncmers(read, &mut s.sy, &mut s.sc);
+            randstrobes(&s.sy, &mut s.st);
+            syncmers(&s.rc, &mut s.sy, &mut s.sc);
+            randstrobes(&s.sy, &mut s.st2);
+            for &(h, _) in s.st.iter().chain(&s.st2) {
+                strobes.prefetch_bucket(h);
+            }
+            for &(h, _) in s.st.iter().chain(&s.st2) {
+                strobes.prefetch_entries(h);
+            }
+        }
         // Treffer: Strang (Bit 63) | Diagonale + 2^32 (Ort im Vorwärtsstrang minus Ort im Read)
         for strand in 0..2u64 {
-            let q: &[u8] = if strand == 0 { read } else { &s.rc };
-            syncmers(q, &mut s.sy, &mut s.sc);
-            randstrobes(&s.sy, &mut s.st);
-            for &(h, qp) in &s.st {
+            if !pre {
+                let q: &[u8] = if strand == 0 { read } else { &s.rc };
+                syncmers(q, &mut s.sy, &mut s.sc);
+                randstrobes(&s.sy, &mut s.st);
+            }
+            let st = if pre && strand == 1 { &s.st2 } else { &s.st };
+            for &(h, qp) in st {
                 match strobes.lookup(h, so.max_occ) {
                     None => {
                         blocked += 1;

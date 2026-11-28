@@ -455,6 +455,24 @@ impl StrobeIndex {
         self.keys.len() * 6 + self.buckets.len() * 4 + self.blocked.len() * 8
     }
 
+    /// Erste Stufe des Vorabladens für [`StrobeIndex::lookup`]: holt den Fachanfang in den
+    /// Cache. Ändert kein Ergebnis.
+    #[inline]
+    pub fn prefetch_bucket(&self, h: u64) {
+        gc_sys::prefetch(&self.buckets[bucket_of(h)]);
+    }
+
+    /// Zweite Stufe: holt Schlüssel und Positionen des Fachs in den Cache (liest den Fachanfang,
+    /// der nach [`StrobeIndex::prefetch_bucket`] schon da sein sollte). Ändert kein Ergebnis.
+    #[inline]
+    pub fn prefetch_entries(&self, h: u64) {
+        let lo = self.buckets[bucket_of(h)] as usize;
+        if lo < self.keys.len() {
+            gc_sys::prefetch(&self.keys[lo]);
+            gc_sys::prefetch(&self.pos[lo]);
+        }
+    }
+
     /// Positionen (Vorwärtsstrang, Anfang des ersten Strobes) eines Randstrobe-Hashes.
     /// `None`, wenn es mehr als `max` gibt (oder mehr als [`KEEP_MAX`]).
     pub fn lookup(&self, h: u64, max: usize) -> Option<impl Iterator<Item = u64> + '_> {
