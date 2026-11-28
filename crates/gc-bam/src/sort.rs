@@ -366,9 +366,15 @@ impl Sorter {
                 }
             }
             Ahead::Pool => {
-                let workers = std::thread::available_parallelism()
-                    .map_or(1, |n| n.get())
-                    .clamp(1, POOL_MAX_THREADS);
+                let workers = std::env::var("GC_SORT_POOL_THREADS")
+                    .ok()
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .filter(|&n| n > 0)
+                    .unwrap_or_else(|| {
+                        std::thread::available_parallelism()
+                            .map_or(1, |n| n.get())
+                            .clamp(1, POOL_MAX_THREADS)
+                    });
                 // Geöffnet wird im Pool: Das erste Füllen der großen Puffer (bei 418 Teilen
                 // und 8 MB über 3 GB) soll nicht nacheinander im Hauptthread geschehen.
                 let mut groups: Vec<Vec<(PathBuf, ChunkTx)>> =
