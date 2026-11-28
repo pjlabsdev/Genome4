@@ -1311,14 +1311,74 @@ fn fq2bam(run: &Fq2bamRun<'_>) -> Result<(serde_json::Value, Option<gc_bam::BamQ
             optical: run.optical,
         });
         let mut flags = gc_bam::FlagStats::default();
-        let mut sink = |rec: &[u8]| {
-            flags.add(&rec[4..]);
-            gc_io::bam::write_encoded(&mut writer, rec)
+        let (sort_stats, dup_stats) = if merge_pipeline() {
+            // Mischen im Hauptthread, Markieren, Zählen und Schreiben in einem zweiten Thread;
+            // die Sätze gehen in Stücken von rund 1 MB hinüber, höchstens vier warten.
+            // Gleiche Sätze in gleicher Reihenfolge wie im Hauptthread allein.
+            std::thread::scope(|scope| -> Result<(gc_bam::SortStats, gc_bam::DupStats)> {
+                let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(4);
+                let (back_tx, back_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+                let mut marker = marker;
+                let flags = &mut flags;
+                let writer = &mut writer;
+                let worker = scope.spawn(move || -> std::io::Result<gc_bam::DupStats> {
+                    let mut sink = |rec: &[u8]| {
+                        flags.add(&rec[4..]);
+                        gc_io::bam::write_encoded(writer, rec)
+                    };
+                    for mut batch in rx {
+                        let mut at = 0;
+                        while at < batch.len() {
+                            let b = &batch[at..];
+                            let len = u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize;
+                            marker.push(&b[..4 + len], &mut sink)?;
+                            at += 4 + len;
+                        }
+                        batch.clear();
+                        let _ = back_tx.send(batch);
+                    }
+                    marker.finish(&mut sink)
+                });
+                let mut batch: Vec<u8> = Vec::with_capacity(MERGE_BATCH + (1 << 16));
+                let mut send_err = false;
+                let sorted = sorter.finish(|rec| {
+                    batch.extend_from_slice(rec);
+                    if batch.len() >= MERGE_BATCH {
+                        let next = back_rx
+                            .try_recv()
+                            .unwrap_or_else(|_| Vec::with_capacity(MERGE_BATCH + (1 << 16)));
+                        let full = std::mem::replace(&mut batch, next);
+                        if tx.send(full).is_err() {
+                            send_err = true;
+                            return Err(std::io::Error::other("Markier-Thread beendet"));
+                        }
+                    }
+                    Ok(())
+                });
+                if sorted.is_ok() && !batch.is_empty() {
+                    send_err |= tx.send(std::mem::take(&mut batch)).is_err();
+                }
+                drop(tx);
+                let dup = worker
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("Markier-Thread abgestürzt"))?;
+                // Ein Fehler beim Markieren oder Schreiben geht vor dem Folgefehler beim Senden.
+                let dup = dup.context("Duplikate markieren und schreiben")?;
+                let sorted = sorted.context("Teile zusammenführen")?;
+                anyhow::ensure!(!send_err, "Markier-Thread beendet");
+                Ok((sorted, dup))
+            })?
+        } else {
+            let mut sink = |rec: &[u8]| {
+                flags.add(&rec[4..]);
+                gc_io::bam::write_encoded(&mut writer, rec)
+            };
+            let sort_stats = sorter
+                .finish(|rec| marker.push(rec, &mut sink))
+                .context("Teile zusammenführen und Duplikate markieren")?;
+            let dup_stats = marker.finish(&mut sink)?;
+            (sort_stats, dup_stats)
         };
-        let sort_stats = sorter
-            .finish(|rec| marker.push(rec, &mut sink))
-            .context("Teile zusammenführen und Duplikate markieren")?;
-        let dup_stats = marker.finish(&mut sink)?;
         gc_io::bam::finish(writer).with_context(|| format!("{} abschließen", part.display()))?;
         std::fs::rename(&part, run.dst)
             .with_context(|| format!("{} umbenennen", part.display()))?;
@@ -2126,6 +2186,15 @@ fn choose_strobe(mode: &str) -> bool {
                 "mindestens_bytes": STROBE_MIN_RAM }),
     );
     on
+}
+
+/// Bytes je Stück, das das Mischen an den Markier-Thread gibt.
+const MERGE_BATCH: usize = 1 << 20;
+
+/// Mischen und Markieren in zwei Threads (Vorgabe); `GC_FQ2BAM_MARKIERFADEN=0` macht alles im
+/// Hauptthread wie bisher.
+fn merge_pipeline() -> bool {
+    !std::env::var_os("GC_FQ2BAM_MARKIERFADEN").is_some_and(|v| v == "0")
 }
 
 /// `--speicher-mb 0`: 2048 MB, mit Strobemer-Weg unter 24 GiB Arbeitsspeicher 512 MB. Auf dem

@@ -65,7 +65,10 @@ genome fq2bam <index.gcfm> --fastq R1.fq[.gz] [--fastq2 R2.fq[.gz]] --aus probe.
    auch mit Stückgrenzen mitten in einem Block (Test).
 3. Zusammenführen der Teile. Der sortierte Strom läuft durch das Markieren der Duplikate
    ([Duplikate](../verfahren/duplikate-markieren.md)) und die Zählung nach Flags
-   ([flagstat](flagstat.md)) und wird als BAM geschrieben.
+   ([flagstat](flagstat.md)) und wird als BAM geschrieben. Seit 2026-11-28 mischt der
+   Hauptthread nur noch; Markieren, Zählen und Schreiben laufen in einem zweiten Thread, die
+   Sätze gehen in Stücken von rund 1 MB hinüber (höchstens vier warten). Die Sätze sind
+   dieselben in derselben Reihenfolge. `GC_FQ2BAM_MARKIERFADEN=0` macht alles im Hauptthread.
 4. Index `.bai` in einem eigenen Durchlauf über die fertige BAM ([BAM-Index](../verfahren/bam-index.md)).
    Im selben Durchlauf entstehen die Zahlen für den Überblick
    ([Überblick über eine BAM](../verfahren/bam-ueberblick.md)); danach schreibt `fq2bam` die
